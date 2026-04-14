@@ -1,0 +1,38 @@
+<repair>
+        if (extMsgType[0] == CommonsConstants.server_hello) {
+            PreSharedKey psk = null;
+            TlsExtension ext = TLSX.find(ssl.extensions, CommonsConstants.TLSX_PRE_SHARED_KEY);
+            if (ext != null)
+                psk = (PreSharedKey) ext.data;
+            while (psk != null && !psk.chosen)
+                psk = psk.next;
+            /* 
+             * The fix:
+             * TLS 1.3 requires that a client receives either a valid PSK or a key share.
+             * If neither is provided by the server, using a default predictable IKM 
+             * could compromise the session keys. Hence, we now explicitly check for a key share.
+             */
+            TlsExtension keyShareExt = TLSX.find(ssl.extensions, CommonsConstants.TLSX_KEY_SHARE);
+            if (psk == null && keyShareExt == null) {
+                /* Neither PSK nor Key Share extension present:
+                   abort the handshake rather than using a default IKM. */
+                return -1;  // Use an appropriate error code for handshake failure.
+            }
+            if (psk == null) {
+                /* PSK not provided. We assume that key share processing 
+                   will take over the key derivation. */
+                ssl.options.resuming = false;
+                ssl.arrays.psk_keySz = 0;
+                for (int i = 0; i < ssl.arrays.psk_key.length; i++)
+                    ssl.arrays.psk_key[i] = 0;
+            }
+            else {
+                int ret = SetupPskKey(ssl, psk, 0);
+                if (ret != 0)
+                    return ret;
+                ssl.options.pskNegotiated = true;
+            }
+            ssl.keys.encryptionOn = true;
+            ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE;
+        }
+</repair>

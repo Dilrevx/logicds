@@ -1,0 +1,17 @@
+The repair adds a critical safeguard for TLS 1.3 sessions by checking that at least one of the two important sources of key material—a valid PSK (pre-shared key) or a valid key share—is present before proceeding with session encryption.
+
+Here’s the walk-through:
+
+1. The initial portion of the code still handles the PSK extension coming in the Server Hello message. It looks for the PSK extension, iterates through the linked list (if provided) until it finds a PSK marked as “chosen,” and then either uses that PSK (via SetupPskKey) or clears out the PSK-related values if no valid PSK exists.
+
+2. After handling the PSK, the repair adds a conditional section specifically for TLS 1.3. This is done using a preprocessor directive (if HAVE_TLS1_3 is defined) so that the check only applies when TLS 1.3 is in use.
+
+3. In this newly added section, the code checks two conditions:
+   - It verifies whether a PSK was negotiated by testing the flag ssl->options.pskNegotiated.
+   - It then checks if the key share is available by examining the “namedGroup” field in the session structure. In TLS 1.3, the key share extension is crucial for generating secure key material, and a non-zero value for namedGroup indicates that a valid key share was provided.
+
+4. If both conditions indicate that neither a PSK nor a valid key share is present (i.e., the PSK has not been negotiated and namedGroup remains zero), the code returns an error (EXT_MISSING). This immediate return stops the handshake process from continuing. Preventing the handshake at this point stops the process from falling back to a default, predictable buffer for the input keying material (IKM) – which was the core of the reported vulnerability.
+
+5. By ensuring that the handshake does not proceed unless at least one valid source of randomness (either via the PSK or the key share) is present, the patch prevents the scenario where insecure, predictable key material might be used to generate the session master secret.
+
+In summary, the repair reinforces TLS 1.3 security by adding a robust check right after the PSK handling code. It ensures that if both the PSK and key share are missing, the function will exit with an error rather than allow the session to proceed with a predictable key. This validation is crucial in preventing an attacker from exploiting the fallback state that otherwise might have resulted in a compromised session master secret, thereby greatly reducing the risk of eavesdropping or tampering with the session.

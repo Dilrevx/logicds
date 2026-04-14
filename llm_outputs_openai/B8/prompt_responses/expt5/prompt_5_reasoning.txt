@@ -1,0 +1,17 @@
+The repair modifies the code to add a critical check after processing the PSK (pre-shared key) extension. Here’s what happens step by step:
+
+1. Initially, the code searches for the PSK extension in the incoming Server Hello. If found, it iterates over the PSK entries until it identifies a “chosen” one (the accepted PSK). If no acceptable PSK is found, it clears out the PSK key buffer and sets a flag indicating that this session is not resuming.
+
+2. In the case where a valid PSK is negotiated, the SetupPskKey function is called to establish the key material, and a flag (pskNegotiated) is set to indicate a successful negotiation.
+
+3. The repair introduces a new safety check immediately after the PSK processing. This check evaluates two conditions simultaneously:
+   - It checks whether a PSK was negotiated (i.e., ssl->options.pskNegotiated is not set); and
+   - It inspects the key share information by verifying whether the namedGroup field in the session data is zero.
+
+4. If both conditions are met (meaning neither a valid PSK was negotiated nor a proper key share provided by a non-zero namedGroup exists), the function will immediately return an error code (EXT_MISSING). This halts the handshake process.
+
+5. By doing so, the repair effectively prevents the handshake from continuing with default (predictable) key material, which poses a security threat. Without this check, the code might fall back to using a zeroed-out PSK key buffer for generating the session master secret. An attacker could potentially exploit this to derive the key material and compromise the session.
+
+6. If at least one secure element (either a valid PSK or a valid key share) is available, the processing continues normally—the encryption is activated and the server state is updated to indicate that the Server Hello phase is complete.
+
+In summary, the added check makes sure that if the session is missing both a PSK and a key share, the handshake fails rather than proceeding insecurely. It directly stops the handshake from using a fallback predictable key derived from a zeroed-out buffer. This safety measure mitigates the risk of attackers reconstructing the session master secret by ensuring that unpredictable and secure key material is used for encryption, thereby addressing the vulnerability.

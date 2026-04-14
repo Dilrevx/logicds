@@ -1,0 +1,64 @@
+The provided repair addresses a significant security vulnerability within the TLS v1.3 implementation, specifically related to the validation of the signature algorithm used in the `certificate_verify` message against the public key type presented in the server's certificate. This vulnerability could potentially allow an attacker to exploit a mismatch between the signature algorithm and the public key, leading to a variety of security issues including man-in-the-middle attacks.
+
+### Vulnerability Analysis
+
+In the original code snippet, there were multiple conditional checks for different signature algorithms (such as ED25519, ED448, ECC DSA, Falcon Level 1, Falcon Level 5, RSA PKCS#1.5, and RSA PSS). Each check verified whether the signature algorithm specified in the `certificate_verify` message matched the presence of a corresponding public key in the server's certificate. However, the logic was fragmented and did not ensure that if no valid match was found, the process would terminate with an appropriate error. This gap could be exploited by an attacker to use a certificate with a different signature algorithm than what was actually used to sign the `certificate_verify` message.
+
+### Repair Strategy
+
+The repair strategy involves introducing a new variable, `validSigAlgo`, which acts as a flag to determine whether the signature algorithm specified in the `certificate_verify` message corresponds to the public key type presented in the server's certificate. This flag is initialized to `0` (indicating `false`), ensuring that if none of the conditions are met, the signature algorithm will be considered invalid by default.
+
+#### Initialization of `validSigAlgo`
+
+```c
+int validSigAlgo = 0;
+```
+
+This initialization step is crucial because it sets a default state indicating that the signature algorithm has not been validated against any known public key types. By starting with this default, we ensure that any failure to find a match will result in an error condition.
+
+#### Conditional Checks for Each Signature Algorithm
+
+For each supported signature algorithm, the repair checks if the `sigAlgo` in the `args` structure matches the corresponding constant. When a match is found, it logs a message indicating that the peer sent a specific signature algorithm. It then sets `validSigAlgo` to the value of the corresponding key presence flag in the `ssl` structure.
+
+```c
+#ifdef HAVE_ED25519
+    if (args->sigAlgo == ed25519_sa_algo) {
+        WOLFSSL_MSG("Peer sent ED25519 sig");
+        validSigAlgo = ssl->peerEd25519KeyPresent;
+    }
+#endif
+```
+
+This pattern is repeated for each supported algorithm, ensuring that the correct public key presence flag is checked and assigned to `validSigAlgo`.
+
+#### Handling RSA PKCS#1.5 Algorithm
+
+The RSA PKCS#1.5 algorithm is explicitly handled by logging a message stating that this algorithm is not valid for TLS 1.3 and immediately terminating the process with an error using `ERROR_OUT`. This step ensures that RSA PKCS#1.5 cannot be used in TLS 1.3, aligning with the protocol specifications.
+
+```c
+#ifndef NO_RSA
+    if (args->sigAlgo == rsa_sa_algo) {
+        WOLFSSL_MSG("Peer sent PKCS#1.5 algo but not in certificate");
+        ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+    }
+```
+
+By explicitly handling RSA PKCS#1.5 and terminating the process when this algorithm is detected, the repair ensures compliance with TLS v1.3 standards, which require the use of more secure signature schemes like RSA-PSS or ECDSA.
+
+#### Final Check for `validSigAlgo`
+
+After all the conditional checks, the repair performs a final check to see if `validSigAlgo` is still `0`. If it is, this indicates that the signature algorithm does not match any of the expected public keys in the certificate. In this case, the repair logs a message indicating that the signature algorithm does not correspond to the certificate and sets the return value `ret` to `SIG_VERIFY_E`. The function then exits via `goto exit_dcv;`, terminating the certificate verification process and signaling an error.
+
+```c
+if (!validSigAlgo) {
+    WOLFSSL_MSG("Signature algorithm does not correspond to the certificate");
+    ret = SIG_VERIFY_E;
+    goto exit_dcv;
+}
+```
+
+This final check ensures that any mismatch between the signature algorithm and the certificate's public key is caught and handled appropriately, preventing potential security breaches.
+
+### Conclusion
+
+By implementing these steps, the repair ensures that the signature algorithm used in the `certificate_verify` message strictly corresponds to the public key type present in the server's certificate. This prevents an attacker from exploiting mismatches between the signature algorithm and the certificate's public key, thereby enhancing the security of the TLS v1.3 handshake process. The use of the `validSigAlgo` flag provides a clear and efficient mechanism for validating the signature algorithm against the available public keys, making the code more robust and secure.

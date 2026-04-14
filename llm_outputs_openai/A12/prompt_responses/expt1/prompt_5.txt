@@ -1,0 +1,70 @@
+<repair>
+    WOLFSSL_START(WC_FUNC_FINISHED_DO);
+    WOLFSSL_ENTER("DoTls13Finished");
+
+    /* Check that the provided buffer is large enough */
+    if ((*inOutIdx + size + ssl->keys.padSz) > totalSz)
+        return BUFFER_E;
+
+    /*
+     * TLS 1.3 offers two Finished computation paths:
+     * 1. When handshake is already done for resumed sessions.
+     * 2. When processing the handshake exchange.
+     *
+     * For servers that require mutual authentication (client certificates),
+     * ensure that the client has properly provided a certificate and its
+     * corresponding CertificateVerify message. Otherwise, a malicious client
+     * could bypass the requirement.
+     */
+    if (ssl->options.handShakeDone) {
+        /* For resumed sessions, derive finished secret using client side secret */
+        ret = DeriveFinishedSecret(ssl, ssl->clientSecret,
+                                   ssl->keys.client_write_MAC_secret);
+        if (ret != 0)
+            return ret;
+        secret = ssl->keys.client_write_MAC_secret;
+    }
+    else if (ssl->options.side == WOLFSSL_CLIENT_END) {
+        /* Client side: use the server secret to derive finished secret */
+        ret = DeriveFinishedSecret(ssl, ssl->serverSecret,
+                                   ssl->keys.server_write_MAC_secret);
+        if (ret != 0)
+            return ret;
+        secret = ssl->keys.server_write_MAC_secret;
+    }
+    else if (ssl->options.side == WOLFSSL_SERVER_END) {
+        /*
+         * Server side: before processing Finished, enforce mutual authentication.
+         * When the server is configured to require a client certificate, the client
+         * must have sent and properly processed a CertificateVerify message.
+         *
+         * The flag "peerCertVerified" (or the equivalent internal flag)
+         * is set only if the client's CertificateVerify message was received and valid.
+         * If the flag is not set, treat it as a failure.
+         */
+        if (ssl->options.requireClientCert && !ssl->peerCertVerified)
+            return MUTUAL_AUTH_FAIL_E;
+
+        ret = DeriveFinishedSecret(ssl, ssl->clientSecret,
+                                   ssl->keys.client_write_MAC_secret);
+        if (ret != 0)
+            return ret;
+        secret = ssl->keys.client_write_MAC_secret;
+    }
+    else {
+        return BAD_FUNC_ARG;
+    }
+
+    /* Compute the Finished message MAC using the derived finished secret.
+       (Assume FinishedHash is computed over handshake transcript data.) */
+    finishedSz = HMAC(secret, size, mac, ssl->spec.finishedHashLen);
+    if (XMEMCMP(mac, input + *inOutIdx, finishedSz) != 0)
+        return FINISHED_MAC_E;
+
+    /* Advance the input index by the combined size of finished message and pad */
+    *inOutIdx += size + ssl->keys.padSz;
+
+    /* Finish processing (e.g. update handshake state, session keys, etc.) */
+
+    return 0;
+</repair>

@@ -1,0 +1,42 @@
+<repair>
+    if (!ret)
+        return 0;
+
+    /* 
+     * For the leaf certificate (i==0) we allow non‐CA certificates.
+     * All later certificates must be CAs.
+     */
+    if (i > 0)
+        must_be_ca = 1;
+
+    /*
+     * Enforce path length constraints.  For non–proxy certificates,
+     * if a basicConstraints extension is present with a path length
+     * limit then ensure that the number of CA certificates does not exceed it.
+     * For proxy certificates, enforce that only a single proxy appears.
+     */
+    if (!(x->ex_flags & EXFLAG_PROXY)) {
+        if (x->ex_pathlen != -1 && plen > x->ex_pathlen) {
+            ctx->error = X509_V_ERR_PATH_LENGTH_EXCEEDED;
+            if (!verify_cb_cert(ctx, x, i, X509_V_ERR_PATH_LENGTH_EXCEEDED))
+                return 0;
+        }
+        plen++;
+    } else {
+        if (proxy_path_length > 0) {
+            ctx->error = X509_V_ERR_PROXY_PATH_LENGTH_EXCEEDED;
+            if (!verify_cb_cert(ctx, x, i, X509_V_ERR_PROXY_PATH_LENGTH_EXCEEDED))
+                return 0;
+        }
+        proxy_path_length++;
+    }
+}
+return 1;
+</repair>
+
+Explanation:
+────────────────────────────
+The repair makes two key improvements:
+1. It forces all certificates after the leaf (i.e. when i > 0) to be valid CA certificates by setting must_be_ca = 1.
+2. It enforces basicConstraints “path length” limits. For non–proxy certificates the current chain length is compared to any explicit path length limit from the certificate (stored in x->ex_pathlen). Similarly, for proxy certificates a separate counter is maintained so that multiple proxies cannot be chained improperly.
+These changes prevent an attacker from bypassing CA‐or path–length checks in the certificate chain validation.

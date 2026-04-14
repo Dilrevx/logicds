@@ -1,0 +1,30 @@
+<repair>
+    public static void isc__nmhandle_detach(HandleRef handlep) {
+        NmSocket sock = null;
+        NmHandle handle = null;
+        Require.check(handlep != null);
+        Require.check(HandleRef.valid(handlep));
+        handle = handlep.handle;
+        handlep.handle = null;
+        sock = handle.sock;
+        
+        // If we are on the correct thread and no close-handle callback is already pending,
+        // then mark the callback as in progress and perform the immediate detach.
+        //
+        // Otherwise, schedule the detach operation via an asynchronous event.
+        if (sock.tid == NodeManager.nmTid() && !sock.closeHandleCallbackPending) {
+            sock.closeHandleCallbackPending = true;
+            try {
+                NodeManager.nmhandle_detach_cb(handle);
+            } finally {
+                // Ensure the pending flag is cleared whether or not the callback succeeds.
+                sock.closeHandleCallbackPending = false;
+            }
+        } else {
+            NetiEventDetach event = NodeManager.getNetiEventDetach(sock.mgr, sock);
+            event.handle = handle;
+            EventPasser.passEvent(event);
+            NodeManager.enqueueEvent(sock.mgr.workers[sock.tid], event);
+        }
+    }
+</repair>

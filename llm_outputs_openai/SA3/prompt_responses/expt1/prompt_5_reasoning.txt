@@ -1,0 +1,25 @@
+The repair introduces an additional check for a custom cipher with an undefined NID (NID_undef) before the code takes the legacy path. Here’s a step-by-step walkthrough:
+
+1. Checking for Legacy Engine Conditions:
+   The original condition already verifies if the context is using an engine, if a temporary engine is set (in non-FIPS mode), or if an explicit implementation is provided. This determines if legacy handling should occur.
+
+2. Added Check for Undefined NID:
+   Before invoking the legacy handling function, the repair adds an explicit check to see if the cipher’s NID is NID_undef. A valid custom cipher, created with EVP_CIPHER_meth_new(), should have a defined unique NID. If the cipher's NID is found to be undefined, it implies an incorrect use of the legacy API. In that case, an error is raised and the function returns without proceeding further.
+
+   This stops the situation where the legacy mechanism could mistakenly substitute a NULL cipher (or an equivalent cipher from the provider), thereby avoiding a scenario where plaintext might be incorrectly processed as ciphertext.
+
+3. Context Cleanup:
+   If there's already a fetched cipher from the context (and it’s being reused), the repair ensures that the current cipher is set to null, and the previously fetched cipher is freed and cleared. This cleanup is essential to prevent reusing or mismanaging cipher instances.
+
+4. Handling the Legacy Flow:
+   With the added validation for NID, if all engine conditions meet and the cipher has a valid, defined NID, the function proceeds into the legacy handling branch by calling legacyHandling. This branch deals with the legacy custom ciphers correctly using the custom engine, preventing the vulnerability where a custom cipher with a bad NID could lead to unintended provider-based matching.
+
+5. Provider-Based Initialization:
+   When the code does not enter the legacy branch (i.e., non-legacy scenario), it falls back to setting the cipher in the context and continues with provider-based initialization. This standard encryption process is unaffected by the changes and remains secure.
+
+By adding this check, the repair directly addresses the vulnerability cited:
+- It prevents the incorrect fetching of a provider cipher based on an undefined (NID_undef) legacy cipher.
+- This stops the possibility of using the NULL (or unintended) cipher, ensuring the integrity of the encryption/decryption process.
+- Essentially, the fix forces proper error handling in the case of custom cipher misconfiguration, preserving both the security expectations and integrity of the OpenSSL API.
+
+Overall, this repair mitigates the risk that arises when a legacy custom cipher with an undefined NID is inadvertently handled, which otherwise could lead to leaking plaintext by using an unintended cipher mechanism.

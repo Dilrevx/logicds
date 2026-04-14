@@ -1,0 +1,47 @@
+Below is an example of how you might patch the client-side SSH code to enforce a stricter check on trivial (less secure) authentication methods. In this example, before marking the authentication process as complete, the code now verifies whether trivial authentication is disallowed in the client’s configuration and whether the current session is using such a method. If both conditions hold, the session is terminated with an error. Otherwise, the authentication continues as normal.
+
+Assume that the variables and helper functions (such as logging and connection teardown routines) already exist in the larger code base. For instance:
+
+• client_opts.allow_trivial_auth – a Boolean flag set based on the client configuration.
+• auth_method – an enumerated (or equivalent) value that identifies the current authentication method (TRIVIAL_AUTH for a less secure/trivial method).
+• log_error(…) – a logging function.
+• disconnect_session(…) – a function that terminates the session.
+• complete_authentication(…) – a function that marks the authentication process as finished, updates state, etc.
+
+Below is an illustrative C snippet demonstrating the patch:
+
+-----------------------------------------------------------
+/* Example snippet from the authentication success handler */
+
+/* Assume these definitions somewhere in the codebase */
+#define TRIVIAL_AUTH 0           /* Example constant for trivial authentication */
+#define SECURE_AUTH  1           /* Example constant for a secure authentication method */
+
+/* Called upon receiving authentication success message from the server */
+void process_auth_success(int auth_method) {
+    /* New check: if trivial authentication is disallowed
+       and the current method is trivial, then abort the login. */
+    if (!client_opts.allow_trivial_auth && auth_method == TRIVIAL_AUTH) {
+        log_error("Authentication aborted: trivial authentication method is disallowed by client configuration.");
+        disconnect_session("Disallowed trivial authentication method");
+        return;
+    }
+    
+    /* If the check passes, proceed with normal authentication completion */
+    complete_authentication();
+    
+    /* Reset any temporary authentication state if applicable */
+    clear_last_auth_method();
+    
+    log_info("Authentication succeeded using %s method.",
+             (auth_method == TRIVIAL_AUTH) ? "trivial" : "secure");
+}
+
+-----------------------------------------------------------
+
+Explanation of the Key Changes:
+1. Immediately after receiving the success message, the function checks if the client options disallow trivial authentication and if the current authentication method is indeed trivial.
+2. If both conditions are met, an error is logged and the session is terminated using disconnect_session(…), thus preventing an insecure login from proceeding.
+3. Only if the authentication method is secure (or trivial authentication is allowed) does the authentication process complete normally.
+
+This update ensures that even if the server attempts to manipulate the authentication flow by using a non-RFC-compliant method check, any attempt to complete authentication using a trivial method (when disallowed by configuration) is aborted. Such a patch reinforces the SSH client’s security, ensuring that only authentication methods compliant with the client’s policy are permitted to complete a login.

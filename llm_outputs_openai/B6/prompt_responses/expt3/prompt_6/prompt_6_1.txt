@@ -1,0 +1,103 @@
+Below is an example patch in C that shows how to fix the vulnerability. In the buggy code the SAN extension was iterated over indiscriminately, allowing any type (including IP addresses) to be matched against the expected name. In this repair the code first calls a helper function (verify_san_entry) that only considers DNS‑type names (or whatever types you choose as permitted) when comparing against the expected hostname. Only if that check fails does the code then fall back to checking the subject’s common name. (Note that you may need to adjust definitions and helper calls to match your actual code base.)
+
+–––––––––––
+/* Helper function: Only verify SAN entries that are of the allowed type.
+ * For example, if we only allow DNS names, then ignore any other entry type.
+ * Returns 0 on match, non‑zero on no match.
+ */
+static int verify_san_entry( const mbedtls_x509_crt *crt,
+                             const char *expected_name )
+{
+    const mbedtls_x509_sequence *san = &crt->subject_alt_names;
+
+    while( san != NULL )
+    {
+        /*
+         * Assume san->buf.p points to the entry value, san->buf.len gives its length,
+         * and san->buf.tag indicates the ASN.1 type. For instance, an IA5String is used for DNS.
+         * (In mbedTLS the tag for an IA5 string is typically MBEDTLS_ASN1_IA5_STRING.)
+         */
+        if( san->buf.tag == MBEDTLS_ASN1_IA5_STRING )
+        {
+            /* Compare lengths first, then do a case-insensitive comparison if needed. */
+            if( strlen( expected_name ) == (size_t) san->buf.len &&
+                memcmp( expected_name, san->buf.p, san->buf.len ) == 0 )
+            {
+                /* Found matching DNS name in SAN. */
+                return 0;
+            }
+        }
+        san = san->next;
+    }
+
+    return -1; /* No valid match found in SAN */
+}
+
+/* Helper function: Fallback verification that checks the subject (common name) entries.
+ * Returns 0 if a matching common name is found, or non-zero otherwise.
+ */
+static int verify_subject_cn( const mbedtls_x509_name *subject,
+                              const char *expected_name )
+{
+    while( subject != NULL )
+    {
+        /* Only check for common name entries.
+         * The Object Identifier for Common Name is defined by MBEDTLS_OID_AT_CN.
+         */
+        if( MBEDTLS_OID_CMP( &subject->oid, MBEDTLS_OID_AT_CN ) == 0 )
+        {
+            /*
+             * Use the same comparison logic as in our SAN helper.
+             * Here subject->val.p points to the CN string and subject->val.len to its length.
+             */
+            if( strlen( expected_name ) == (size_t) subject->val.len &&
+                memcmp( expected_name, subject->val.p, subject->val.len ) == 0 )
+            {
+                return 0;
+            }
+        }
+        subject = subject->next;
+    }
+
+    return -1; /* No matching common name found */
+}
+
+/* Main certificate name verification routine.
+ * It first attempts a precise SAN check using allowed types.
+ * If no valid SAN is found, it then checks the subject field for a Common Name.
+ */
+int verify_certificate_name( const mbedtls_x509_crt *crt, const char *expected_name )
+{
+    int ret = 0;
+
+    /*
+     * Check if the certificate includes a Subject Alternative Name extension.
+     * You might have a flag or bit field (crt->ext_types) that indicates that.
+     * For our example, assume that if the SAN chain is not empty, the extension is present.
+     */
+    if( crt->subject_alt_names.next != NULL )
+    {
+        if( verify_san_entry( crt, expected_name ) == 0 )
+        {
+            /* Successfully matched a valid SAN entry (e.g. a proper DNS name). */
+            return 0;
+        }
+    }
+
+    /* Fallback to checking the subject’s common name, if no SAN entry yielded a match */
+    ret = verify_subject_cn( &crt->subject, expected_name );
+    if( ret == 0 )
+        return 0;
+
+    /* Neither SAN nor CN yielded an acceptable match. Mark the certificate accordingly. */
+    return MBEDTLS_ERR_X509_CERT_VERIFY_FAILED;
+}
+–––––––––––
+
+Explanation of key changes:
+1. The helper function verify_san_entry loops only through the SAN entries and checks only for allowed types (here, entries with tag MBEDTLS_ASN1_IA5_STRING assumed to be DNS names).
+2. If a valid matching entry is found, the function immediately returns success.
+3. Only if the SAN verification fails does the routine fall back to scanning the subject field for the common name (using verify_subject_cn).
+4. If neither method yields a match, the certificate is rejected (an error code is returned).
+
+This dual‐path approach prevents an attacker from bypassing hostname validation by exploiting non‑DNS SAN entries such as IP addresses. Adjust the tag and OID constants to suit your actual implementation details.

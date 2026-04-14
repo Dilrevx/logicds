@@ -1,0 +1,24 @@
+The repair adds a validation step right before encryption initialization to verify that any provided encryption parameters—specifically, the key length and initialization vector (IV) length—are valid. Here’s a breakdown of the changes and how they fix the vulnerability:
+
+1. Preservation of Padding Configuration:  
+   The repair keeps the original check for padding (if no padding is indicated, it sets the padding to zero). This ensures that the context’s padding configuration remains intact and unaffected by the changes, so that cryptographic operations will continue using the intended padding or lack thereof.
+
+2. Additional Conditional for Parameter Validation:  
+   Before starting the encryption (enc == 1), the repair checks two conditions:  
+   - The system must not be operating in FIPS mode.  
+   - Additional parameters (indicated by "params") must be provided.  
+   This selective check ensures that the extra validation logic does not interfere with FIPS-approved configurations or when no extra parameters are present.
+
+3. Extraction and Temporary Storage of Critical Values:  
+   Within the conditional, the code looks for two parameters, "keyLength" and "ivLength", in the provided params object. If either of these is found, their values are stored in temporary variables (providedKeyLength and providedIvLength). This process isolates these length parameters, which are critical to ensuring that the key and IV are of expected sizes.
+
+4. Context Update and Validation:  
+   If one or both of these parameters have been set (i.e., not equal to -1), the code calls ctx.setEncryptionParams with those values. The underlying assumption is that setEncryptionParams performs a rigorous check to ensure that the lengths are valid for the cipher and context.  
+   - If the context's internal validation fails (for example, if an invalid key length or IV length is provided), setEncryptionParams returns false.  
+   - The repair then throws an exception immediately, preventing further progression into encryption initialization.  
+   This check blocks an attacker from exploiting misconfiguration possibilities that might result in skipping necessary encryption steps (similar to bypassing Phase 2 of PEAP).
+
+5. Proceeding to Encryption Initialization:  
+   Only after this extra validation is successfully completed does the flow proceed to check if the cipher supports encryption initialization (cipher.hasEncryptInit()). If the cipher does not support it, an exception is thrown, which is the original intended behavior. If all checks pass, the cipher.encryptInit method is called with safe parameters.
+
+By isolating, validating, and enforcing the integrity of key length and IV length parameters, the patch addresses the core vulnerability where an attacker could manipulate these values, potentially bypassing crucial authentication steps. Ensuring that these parameters are correctly set protects against the abuse that was previously exploited to impersonate Enterprise Wi-Fi networks.

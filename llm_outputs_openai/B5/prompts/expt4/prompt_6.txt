@@ -1,0 +1,141 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+Does not validate that the signature algorithms match when importing a certificate.
+</vulnerability_description>
+Here is the buggy source code:
+<buggy_code>
+int
+gnutls_x509_crt_import(gnutls_x509_crt_t cert,
+		       const gnutls_datum_t * data,
+		       gnutls_x509_crt_fmt_t format)
+{
+	int result = 0;
+	int version;
+
+	if (cert == NULL) {
+		gnutls_assert();
+		return GNUTLS_E_INVALID_REQUEST;
+	}
+
+	if (cert->der.data) {
+		gnutls_free(cert->der.data);
+		cert->der.data = NULL;
+	}
+
+	/* If the Certificate is in PEM format then decode it
+	 */
+	if (format == GNUTLS_X509_FMT_PEM) {
+		/* Try the first header */
+		result =
+		    _gnutls_fbase64_decode(PEM_X509_CERT2, data->data,
+					   data->size, &cert->der);
+
+		if (result <= 0) {
+			/* try for the second header */
+			result =
+			    _gnutls_fbase64_decode(PEM_X509_CERT,
+						   data->data, data->size,
+						   &cert->der);
+
+			if (result < 0) {
+				gnutls_assert();
+				return result;
+			}
+		}
+	} else {
+		result = _gnutls_set_datum(&cert->der, data->data, data->size);
+		if (result < 0) {
+			gnutls_assert();
+			return result;
+		}
+	}
+
+	if (cert->expanded) {
+		/* Any earlier asn1_der_decoding will modify the ASN.1
+		   structure, so we need to replace it with a fresh
+		   structure. */
+		result = crt_reinit(cert);
+		if (result < 0) {
+			gnutls_assert();
+			goto cleanup;
+		}
+	}
+
+	cert->expanded = 1;
+
+	result =
+	    asn1_der_decoding(&cert->cert, cert->der.data, cert->der.size, NULL);
+	if (result != ASN1_SUCCESS) {
+		result = _gnutls_asn2err(result);
+		gnutls_assert();
+		goto cleanup;
+	}
+
+	result = _gnutls_x509_get_raw_field2(cert->cert, &cert->der,
+					  "tbsCertificate.issuer.rdnSequence",
+					  &cert->raw_issuer_dn);
+	if (result < 0) {
+		gnutls_assert();
+		goto cleanup;
+	}
+
+	result = _gnutls_x509_get_raw_field2(cert->cert, &cert->der,
+					  "tbsCertificate.subject.rdnSequence",
+					  &cert->raw_dn);
+	if (result < 0) {
+		gnutls_assert();
+		goto cleanup;
+	}
+
+	result = _gnutls_x509_get_raw_field2(cert->cert, &cert->der,
+					  "tbsCertificate.subjectPublicKeyInfo",
+					  &cert->raw_spki);
+	if (result < 0) {
+		gnutls_assert();
+		goto cleanup;
+	}
+
+	/* enforce the rule that only version 3 certificates carry extensions */
+	version = gnutls_x509_crt_get_version(cert);
+	if (version < 3) {
+		gnutls_datum_t exts;
+		result = _gnutls_x509_get_raw_field2(cert->cert, &cert->der,
+			"tbsCertificate.extensions", &exts);
+		if (result >= 0 && exts.size > 0) {
+			gnutls_assert();
+			_gnutls_debug_log("error: extensions present in certificate with version %d\n", version);
+			result = GNUTLS_E_X509_CERTIFICATE_ERROR;
+			goto cleanup;
+		}
+	}
+
+	/* Since we do not want to disable any extension
+	 */
+	cert->use_extensions = 1;
+
+	return 0;
+
+      cleanup:
+	_gnutls_free_datum(&cert->der);
+	return result;
+}
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair introduces a series of validation steps that ensure the integrity of the signature algorithms within the certificate. Initially, the certificate is decoded as before; the DER data is parsed and converted into an internal certificate structure. This step confirms that the certificate data is well-formed and can be processed correctly.
+
+Once the certificate has been successfully decoded, the repair adds a crucial step to retrieve the signature algorithm used at two different locations within the certificate structure. One retrieval gets the signature algorithm from the outer certificate field, which indicates the algorithm used to sign the certificate. The other retrieval extracts the signature algorithm from the "to-be-signed" (TBS) portion of the certificate, which specifies the algorithm intended to be used for signing the certificate data itself.
+
+After obtaining both signature algorithm values, the repair compares them to ensure consistency. This is important because, under the security model, the algorithm indicated in the outer signature section should match the one specified inside the TBS section. A mismatch between these values could indicate a potential tampering or misconfiguration, where the certificate might have been manipulated or incorrectly constructed, thus possibly exposing a security vulnerability.
+
+If the two values do not match, the repair procedure logs a debug message that includes details of the differing algorithm names. This logging step provides useful diagnostic information for developers or system administrators who might be troubleshooting certificate issues. Immediately after logging, the code triggers an assertion failure to flag the error condition and then returns an error code. This immediate error response prevents further processing of what may be an untrustworthy certificate, thereby halting any operations that rely on the certificate's authenticity.
+
+Following this newly inserted signature validation, the code continues with its original flow by retrieving additional certificate information. Specifically, it gathers the raw issuer field data from the certificate. This extraction is necessary for later verification steps or for constructing further certificate-related operations.
+
+In summary, the repair enhances certificate security by ensuring that the signature algorithm defined at two critical locations within the certificate are identical. The new logic acts as a safeguard against certificate tampering by catching inconsistencies early, logging them, and aborting processing when a mismatch occurs. This approach mitigates the vulnerability of not verifying that the signature algorithms match, thus strengthening the certificate validation process as a whole.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

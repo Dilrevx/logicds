@@ -1,0 +1,57 @@
+Below is one way to patch the code. The CCS injection (CVE‑2014‑0224) issue arose because the ChangeCipherSpec record was accepted even when it was out‐of‐sequence (and hence unexpected) in the handshake. To fix the vulnerability you must add an additional check to reject a CCS received when the handshake is not in the proper state. For example, you can verify that the CCS is received only when the handshake is expecting it. One common repair (as implemented by the OpenSSL project) is to add a state check before processing the CCS. In pseudocode, this looks like:
+
+------------------------------------------------------
+	if (rr->type == SSL3_RT_CHANGE_CIPHER_SPEC)
+	{
+		/* 'Change Cipher Spec' is just a single byte, so we know
+		 * exactly what the record payload has to look like */
+		if ((rr->length != 1) || (rr->off != 0) ||
+		    (rr->data[0] != SSL3_MT_CCS))
+		{
+			al = SSL_AD_ILLEGAL_PARAMETER;
+			SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_BAD_CHANGE_CIPHER_SPEC);
+			goto f_err;
+		}
+
+		/* 
+		 * Only accept a CCS if we are in the expected state.
+		 * For example, if we are not resuming a session (i.e. !s->hit)
+		 * then the handshake state must be that we are waiting for a CCS.
+		 * (The expected state used here, SSL3_ST_SR_CCS, is an example:
+		 *  your actual expected state constant could vary based on your handshake state machine.)
+		 */
+		if (!s->hit && s->state != SSL3_ST_SR_CCS)
+		{
+			al = SSL_AD_UNEXPECTED_MESSAGE;
+			SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+			goto f_err;
+		}
+
+		/* Check we have a cipher to change to */
+		if (s->s3->tmp.new_cipher == NULL)
+		{
+			al = SSL_AD_UNEXPECTED_MESSAGE;
+			SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+			goto f_err;
+		}
+
+		rr->length = 0;
+
+		if (s->msg_callback)
+			s->msg_callback(0, s->version, SSL3_RT_CHANGE_CIPHER_SPEC,
+			                rr->data, 1, s, s->msg_callback_arg);
+
+		s->s3->change_cipher_spec = 1;
+		if (!ssl3_do_change_cipher_spec(s))
+			goto err;
+		else
+			goto start;
+	}
+------------------------------------------------------
+
+Key points in the patch:
+1. Added a check on the handshake state—only allow a CCS message when the state is SSL3_ST_SR_CCS (or whatever state your state machine considers valid for CCS processing). In contexts where the session is not resumed (s->hit is false), any CCS received too early is rejected.
+2. Retained the existing checks for proper CCS formatting and that a new cipher has been negotiated.
+3. Continuing with the regular procedure (notifying the callback, setting change_cipher_spec flag, and calling ssl3_do_change_cipher_spec) only after the above conditions are met.
+
+This repair ensures that unintended or malicious injection of a CCS message cannot force the switch to a zero-length master secret and thus fixes the vulnerability.

@@ -1,0 +1,31 @@
+The vulnerability described pertains to a flaw in the implementation of Protected Extensible Authentication Protocol (PEAP) within the `wpa_supplicant` software. Specifically, it involves a situation where an attacker could bypass the second phase of authentication by sending an EAP-TLV Success packet prematurely, before the expected Phase 2 authentication has commenced. This bypass is possible when `wpa_supplicant` is configured not to verify the network's TLS certificate during the initial (Phase 1) authentication, making it susceptible to man-in-the-middle attacks.
+
+To understand the repair, we need to delve into the provided code snippet and the context in which it operates. The code processes Type-Length-Value (TLV) messages, which are used in the PEAP protocol to encapsulate various types of data, including authentication results. The critical part of the vulnerability lies in how the code handles an EAP-TLV Success message (`EAP_TLV_RESULT_SUCCESS`). If such a message is received, the code currently sets the response status to success and decides unconditionally that the authentication has succeeded (`DECISION_UNCOND_SUCC`), even if the Phase 2 authentication has not yet been initiated.
+
+This behavior allows an attacker to send a fake EAP-TLV Success message, effectively skipping the necessary Phase 2 authentication steps. To mitigate this vulnerability, the repair introduces a check to ensure that the Phase 2 authentication has indeed started before accepting an EAP-TLV Success message as valid.
+
+In the repaired code snippet, the following changes are made:
+
+```c
+if (status == EAP_TLV_RESULT_SUCCESS) {
+    wpa_printf(MSG_INFO, "EAP-TLV: TLV Result - Success "
+               "- EAP-TLV/Phase2 Completed");
+    if (force_failure) {
+        wpa_printf(MSG_INFO, "EAP-TLV: Earlier failure"
+                   " - force failed Phase 2");
+        resp_status = EAP_TLV_RESULT_FAILURE;
+        ret->decision = DECISION_FAIL;
+    } else if (!data->phase2_eap_started) {
+        wpa_printf(MSG_INFO, "EAP-TLV: Phase 2 not started - ignoring EAP-TLV Success");
+        resp_status = EAP_TLV_RESULT_FAILURE;
+        ret->decision = DECISION_FAIL;
+    } else {
+        resp_status = EAP_TLV_RESULT_SUCCESS;
+        ret->decision = DECISION_UNCOND_SUCC;
+    }
+} else if (status == EAP_TLV_RESULT_FAILURE) {
+```
+
+The key addition here is the `else if (!data->phase2_eap_started)` condition. This checks whether the Phase 2 authentication has been initiated by examining the `phase2_eap_started` flag in the `eap_peap_data` structure. If this flag is not set, indicating that Phase 2 has not started, the code logs a message and treats the EAP-TLV Success message as invalid. It sets the response status to failure and makes the decision to fail the authentication process (`DECISION_FAIL`). This ensures that the system does not accept a premature or fraudulent EAP-TLV Success message, thereby preventing the authentication bypass.
+
+This repair effectively enforces the correct sequence of operations in the PEAP protocol by ensuring that the second phase of authentication must be initiated and successfully completed before accepting any authentication success messages from the first phase. It maintains the integrity of the authentication process and prevents unauthorized access to enterprise Wi-Fi networks through the described attack vector. By adding this conditional check, the software becomes more robust against attempts to bypass the intended security measures.

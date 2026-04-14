@@ -1,0 +1,17 @@
+The provided repair is designed to fix a vulnerability in the OpenSSL library, specifically in the way it handles the return value of the `X509_verify_cert` function. This function is used to verify a certificate supplied by a server, and it may return a negative value to indicate an internal error, such as an out-of-memory condition.
+
+The vulnerability arises because the OpenSSL library mishandles this negative return value, causing an IO function (such as `SSL_connect` or `SSL_do_handshake`) to not indicate success and a subsequent call to `SSL_get_error` to return the value `SSL_ERROR_WANT_RETRY_VERIFY`. This return value is only supposed to be returned by OpenSSL if the application has previously called `SSL_CTX_set_cert_verify_callback`, which is not typically done by most applications.
+
+The repair addresses this vulnerability by modifying the code to handle the return value of `X509_verify_cert` correctly. Here's a breakdown of the reasoning behind the repair:
+
+1. **Check for the existence of an application verify callback**: The first step is to check if an application verify callback function has been set by the application. This is done by checking if the `app_verify_callback` pointer is not null. If it is not null, the application verify callback function is called, and its return value is stored in the `ret` variable.
+
+2. **Call X509_verify_cert if no application verify callback exists**: If no application verify callback exists, the `X509_verify_cert` function is called to verify the certificate. This function may return a negative value to indicate an internal error.
+
+3. **Handle the return value of X509_verify_cert**: The critical step in the repair is to handle the return value of `X509_verify_cert` correctly. If the return value is negative, it indicates an internal error, and this should be treated in the same way as a failure to verify the certificate. To achieve this, the repair sets the return value to 0 if `X509_verify_cert` returns a negative value. This ensures that the error is not propagated to the application as an unexpected `SSL_ERROR_WANT_RETRY_VERIFY` error.
+
+4. **Return the final verification result**: The final step is to return the verification result, which is either the result of the application verify callback or the result of `X509_verify_cert`, with errors handled correctly. The `i` variable is assigned the value of `ret`, which is then returned by the function.
+
+The reasoning behind setting the return value to 0 when `X509_verify_cert` returns a negative value is to ensure that the error is not misinterpreted by the application. By treating the internal error as a failure to verify the certificate, the repair ensures that the application behaves correctly and does not attempt to retry the verification process unnecessarily.
+
+In summary, the repair addresses the OpenSSL vulnerability by correctly handling the return value of `X509_verify_cert` and ensuring that internal errors are treated as verification failures. This prevents the application from misinterpreting the error and attempting to retry the verification process, which could lead to unexpected behavior.

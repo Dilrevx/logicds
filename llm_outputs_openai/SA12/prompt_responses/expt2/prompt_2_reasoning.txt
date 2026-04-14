@@ -1,0 +1,22 @@
+The repair adds an early conditional check at the beginning of the TLS v1.3 "Finished" routine to ensure that, when operating in server mode with mandatory client authentication, the client’s certificate is properly verified before the handshake continues. Here’s a step-by-step walk-through of the changes and their significance:
+
+1. The code now begins with a comment that explains the purpose of the added check: to validate the client certificate if the server is configured to require mutual authentication. This makes the code’s intent clearer for future maintainers.
+
+2. The first conditional block checks two essential conditions:
+   - It verifies that the current connection is in server mode (using something like ssl.isServer()). This ensures that the validation is only applied when the server expects and requires a client certificate.
+   - It then checks whether the server configuration demands mutual authentication. This is typically done by comparing the current verification mode against a constant (e.g., Constants.VERIFY_REQUIRED).
+
+3. Inside this block, another condition checks for two important flags:
+   - ssl.isResumed: This flag indicates if the session is using session resumption. For resumed sessions, the certificate might have been verified in a previous handshake, so the check can be bypassed.
+   - ssl.peerCertVerified: This flag indicates whether the client's certificate has already been successfully verified.
+   
+   If the connection is not a resumed session and the peer certificate has not been verified, it means that the client did not provide a proper certificate or omitted the certificate_verify message that should accompany it in TLS v1.3.
+
+4. When the malicious or non-compliant client is detected (i.e., no verified certificate for a server that mandates it), the server sends a fatal alert using ssl.alertSend(Constants.ALERT_BAD_CERT, "Client certificate missing or not verified") to notify both locally and remotely that the authentication failed. This alert prevents potential exploitation of the vulnerability by immediately terminating the handshake and disallowing access.
+
+5. An error code (Constants.BAD_CERT_ALERT) is then returned so that any higher level error handling can take appropriate actions (logging, connection termination, etc.). This change ensures that the handshake process is halted as soon as the problem is detected, stopping any further processing that might otherwise allow the client to bypass mutual authentication.
+
+6. Finally, if the mutual authentication check passes (either because the client provided a valid certificate, the session is resumed, or mutual authentication isn’t required), the code proceeds to the original safety check related to buffer size:
+   - It verifies that the sum of current data offset (inOutIdx[0]), size, and additional padding (ssl.keys.padSz) does not exceed the total available buffer space. If it does, an error code is returned (Constants.BUFFER_E) to prevent potential buffer overflow issues.
+
+In summary, the repair secures the TLS handshake by enforcing that clients must provide a verified certificate when the server requires mutual authentication. This action directly mitigates the vulnerability where a malicious client could bypass certificate verification by skipping the certificate_verify message, ensuring that only properly authenticated clients are allowed to complete the handshake.

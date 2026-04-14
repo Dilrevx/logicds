@@ -1,0 +1,13 @@
+The repaired code explicitly checks a new flag (msg->tsig_verified) to ensure that the TSIG signature has been properly verified. In the original snippet, only the TSIG status (msg->tsigstatus) and an error code (tsig.error) were inspected. This meant that even if these fields indicated no errors, there was no explicit confirmation that the cryptographic TSIG signature had been verified. An attacker could potentially craft a packet where these fields are manipulated to appear correct while the signature flag isn’t set, bypassing the intended security checks.
+
+Here’s how the repair fixes the vulnerability:
+
+1. First, the code calls dns_rdata_tostruct to parse the TSIG data into a usable structure and insists on success by asserting (INSIST(result == ISC_R_SUCCESS)). This part remains unchanged and ensures the basic parsing is valid.
+
+2. Next, before evaluating the TSIG status or error, the code introduces a new condition that checks if the message’s TSIG signature was explicitly verified. This is done by testing the msg->tsig_verified flag. If this flag is not set or if msg->tsigstatus indicates an error (i.e., it doesn’t equal dns_rcode_noerror), then the result is immediately set to DNS_R_TSIGVERIFYFAILURE. This means that if the cryptographic signature check did not occur (or failed indirectly through the tsigstatus), no further processing happens.
+
+3. If the signature is verified and the TSIG status is clear, then the code examines the tsig.error field. If tsig.error is not dns_rcode_noerror, the code then asserts that this condition must be true (INSIST(tsig.error != dns_rcode_noerror)) and sets the result to DNS_R_TSIGERRORSET. This extra branch enforces that any unexpected non-zero error in the tsig.error field (even after successful signature verification) is handled by flagging a distinct error state.
+
+4. Finally, if all conditions are met—that is, the signature is verified, the tsig flag is set, and both the tsig status and error are clear—the result is set to ISC_R_SUCCESS, signaling that the TSIG authentication checks have passed completely.
+
+The repair enhances security by adding a more layered validation. By confirming that the cryptographic signature verification has explicitly occurred (via the new flag), the code mitigates the risk of potential TSIG bypasses where an attacker might manipulate status or error values. Moreover, the clear separation of conditions ensures that every facet of the TSIG check (signature, status, and error) is independently validated before allowing the process to proceed.

@@ -1,0 +1,19 @@
+The provided buggy code snippet is a part of the OpenSSL library, specifically the `ssl3_get_cert_verify` function. This function is responsible for handling the CertificateVerify message in the TLS handshake protocol. The vulnerability in the code allows remote attackers to obtain access without knowledge of a private key via crafted TLS Handshake Protocol traffic to a server that recognizes a Certification Authority with Diffie-Hellman (DH) support.
+
+The issue arises when the server receives a Certificate message with a DH certificate but does not receive a corresponding CertificateVerify message. In this case, the server should terminate the handshake with an "unexpected message" alert. However, the buggy code only checks if the message type is not `SSL3_MT_CERTIFICATE_VERIFY` and if the peer is not null and the type is a signed packet. If these conditions are met, it sends an alert and returns. However, it does not properly handle the case where the peer's public key is a DH key.
+
+The repair addresses this issue by adding an additional check to see if the peer's public key is a DH key (either RSA or DSA) before sending the alert. If the peer's public key is a DH key, it means that the server is using a DH certificate, and the CertificateVerify message is required. In this case, if the message type is not `SSL3_MT_CERTIFICATE_VERIFY`, the server should send an "unexpected message" alert and terminate the handshake.
+
+Here's a step-by-step explanation of the repair:
+
+1. The first condition `s.s3.tmp.message_type!= Constants.SSL3_MT_CERTIFICATE_VERIFY` checks if the received message is not a CertificateVerify message.
+
+2. The second condition `peer!= null && (type & Constants.EVP_PKT_SIGN)!= 0` checks if the peer is not null and the type is a signed packet.
+
+3. The additional check `s.session->peer->pkeys[SSL_PKEY_DHE_RSA].rsa == null && s.session->peer->pkeys[SSL_PKEY_DHE_DSA].dsa == null` verifies if the peer's public key is not a DH key (either RSA or DSA). If this condition is true, it means that the server is not using a DH certificate, and the CertificateVerify message is not required.
+
+4. If the peer's public key is a DH key and the message type is not `SSL3_MT_CERTIFICATE_VERIFY`, the server sends an "unexpected message" alert (`al = Constants.SSL_AD_UNEXPECTED_MESSAGE;`) and terminates the handshake (`Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);`).
+
+5. If the peer's public key is not a DH key or the message type is `SSL3_MT_CERTIFICATE_VERIFY`, the server sets `s.s3.tmp.reuse_message = 1` and returns 1, allowing the handshake to continue.
+
+In summary, the repair adds an additional check to ensure that the server properly handles the case where the peer's public key is a DH key and requires a CertificateVerify message. This fix prevents remote attackers from obtaining access without knowledge of a private key via crafted TLS Handshake Protocol traffic to a server that recognizes a Certification Authority with DH support.

@@ -1,0 +1,12 @@
+The repair first locates the AEAD TLS 1.0/1.1 AAD parameter using the existing call to OSSL_PARAM_locate_const just like the original code. Then it adds a conditional check: if the retrieved parameter (p) is not NULL and the cipher context indicates that the currently used cipher is RC4-MD5 (by checking that EVP_CIPHER_CTX_nid(ctx) equals NID_rc4_md5), the code triggers an error via EVPerr and immediately returns 0 to indicate failure.
+
+This fixes the vulnerability by detecting when the RC4-MD5 cipher is in use with its AAD parameter. The vulnerability arises because OpenSSL 3.0’s RC4-MD5 ciphersuite mistakenly utilizes the AAD data as the MAC key, making it predictable and susceptible to man-in-the-middle attacks where an attacker could modify the data while still passing the MAC integrity check. By identifying this specific scenario, the repair prevents the use of the vulnerable cipher with its AAD-based MAC key derivation, effectively blocking any potential exploitation.
+
+Here’s how the repair prevents the problem:
+
+1. It performs the same parameter lookup as before, so the design intent is maintained—retrieving necessary parameters for AEAD operations.
+2. It adds a robust check for the RC4-MD5 cipher. If the AAD parameter is present and the cipher being used is RC4-MD5, the code does not proceed with potentially dangerous key derivation.
+3. Calling EVPerr with appropriate function and reason codes logs the issue, alerting developers or systems about the unsupported cipher configuration. Returning 0 signals an error, halting further cryptographic operations involving the vulnerable configuration.
+4. This proactive check ensures that the specific vulnerability does not get exploited in production. Any application attempting to use RC4-MD5 with AAD will immediately encounter an error rather than an insecure operation mode.
+
+Overall, the patch fortifies the code by preventing the insecure use of the RC4-MD5 ciphersuite. It ensures that if the risky scenario is detected, the operation is aborted and a proper error is flagged. This prevents attackers from being able to manipulate the data stream under the false security of passing MAC checks with a weak (predictable) key.

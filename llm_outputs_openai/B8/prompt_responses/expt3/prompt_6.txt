@@ -1,0 +1,42 @@
+<repair>
+    if (*extMsgType == server_hello) {
+#if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
+        PreSharedKey* psk = NULL;
+        TLSX* ext = TLSX_Find(ssl->extensions, TLSX_PRE_SHARED_KEY);
+        if (ext != NULL)
+            psk = (PreSharedKey*)ext->data;
+        /* Safeguard against a maliciously crafted PSK list that could
+         * create a cycle and lead to an infinite loop.
+         * Use a maximum iteration count as an upper bound.
+         */
+        int psk_count = 0;
+        const int MAX_PSK_CHAIN = 256; /* Arbitrary upper limit */
+        while (psk != NULL && !psk->chosen) {
+            psk = psk->next;
+            if (++psk_count >= MAX_PSK_CHAIN) {
+                /* Break out if the chain appears too long */
+                psk = NULL;
+                break;
+            }
+        }
+        if (psk == NULL) {
+            ssl->options.resuming = 0;
+            ssl->arrays->psk_keySz = 0;
+            XMEMSET(ssl->arrays->psk_key, 0, MAX_PSK_KEY_LEN);
+        }
+        else {
+            if ((ret = SetupPskKey(ssl, psk, 0)) != 0)
+                return ret;
+            ssl->options.pskNegotiated = 1;
+        }
+#endif
+
+        ssl->keys.encryptionOn = 1;
+        ssl->options.serverState = SERVER_HELLO_COMPLETE;
+    }
+    else {
+        ssl->options.tls1_3 = 1;
+        ssl->options.serverState = SERVER_HELLO_RETRY_REQUEST_COMPLETE;
+        ret = RestartHandshakeHash(ssl);
+    }
+</repair>

@@ -1,0 +1,18 @@
+The repair reintroduces the checks for the public key type that corresponds to the signature algorithm indicated in the CertificateVerify message. In the original (buggy) code these checks were commented out. This created a vulnerability because a client could be tricked into bypassing certificate validation if the signature algorithm did not match a certificate containing the respective public key. Here’s how the repair addresses the issue:
+
+1. Signature data bounds are rechecked:  
+   Before verifying the public key, the code first ensures that the signature data does not exceed the allowed buffer size (by checking that the computed index plus the signature length does not go beyond the total size, and that the signature length is within a valid limit). This is important for overall memory safety.
+
+2. Public key type validations:  
+   The repair re-adds several conditional blocks (guarded by compile-time macros like HAVE_ED25519, HAVE_ED448, HAVE_ECC, etc.) that verify if the signature algorithm (sigAlgo) specified in the message has a corresponding valid certificate present in the SSL structure. For example:  
+   • For an ED25519 signature (when HAVE_ED25519 is defined), the code checks if ssl->peerEd25519KeyPresent is set. If not, it logs an error message and returns a signature verification error.  
+   • Similar checks are performed for ED448, ECC, and Post-Quantum Cryptography (PQC) algorithms like Falcon.  
+   • For RSA (both PKCS#1.5 and RSA-PSS), there are checks that compare the ssl’s state with the expected RSA key details.
+
+3. Enforcing consistency between the CertificateVerify message and the certificate:  
+   By ensuring that only a signature algorithm that matches a corresponding public key certificate is acceptable, the repair prevents an attack where a TLS v1.3 client might otherwise accept an invalid certificate or bypass certificate verification entirely if an unexpected signature algorithm was used. This explicitly ties the authentication of the certificate to the presence of a corresponding key, closing the vulnerability that allowed misrepresentation.
+
+4. Final pointer setup and index update:  
+   After the key validation, the code safely sets the signature pointer and updates the index for further processing. This ensures no residual corruption in the control flow or data length calculations.
+
+In summary, the repair fixes the vulnerability by reintroducing the critical checks that verify the certificate contains a public key matching the signature algorithm used in the CertificateVerify message. Without these checks, an attacker might successfully authenticate using a signature that does not actually correspond to the certificate, hence bypassing certificate validation. The repair reinforces certificate integrity and secures the TLS handshake against such mismatch-based exploits.

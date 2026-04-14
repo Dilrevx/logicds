@@ -1,0 +1,20 @@
+The repair restructures the certificate verification code so that each signature algorithm is explicitly matched with a corresponding key from the certificate. Here’s a walk-through:
+
+1. Signature Algorithm Check:  
+   The code now uses an if–else chain to check exactly which signature algorithm was indicated by the certificate_verify message (e.g., ED25519, ED448, ECC, Falcon, RSA-PSS). For each recognized algorithm, it enters a dedicated branch.
+
+2. Consistency Verification:  
+   Inside each branch, the repair checks if the certificate (stored in the ssl object) indeed contains the expected key type required by the signature algorithm. For instance, for an ED25519 signature, the code ensures that ssl->peerEd25519KeyPresent is set; if not, an error is raised. This prevents a scenario where a mismatch between the signature algorithm and the certificate’s key could lead to bypassing the check.
+
+3. Handling Unsupported Configurations:  
+   If a particular algorithm is signaled (like ED25519, ED448, ECC, or Falcon) but the corresponding support isn’t enabled (checked via preprocessor macros such as HAVE_ED25519, HAVE_ED448, HAVE_ECC, or HAVE_PQC), the code logs an error and aborts the verification process. This ensures that the client doesn’t attempt to process or verify a signature under an unsupported or unexpected configuration.
+
+4. RSA Exception:  
+   The repair also explicitly rejects PKCS#1.5 RSA signatures in the TLS v1.3 context. As TLS v1.3 mandates RSA-PSS for RSA, any detection of rsa_sa_algo causes an immediate failure. For RSA-PSS, it similarly confirms that the RSA key is present and correct; otherwise, it errors out.
+
+5. Handling Unknown Algorithms:  
+   The final else clause catches any unknown or mismatched signature algorithms, ensuring that the verification fails rather than proceeding with potentially inappropriate assumptions. This is crucial in preventing any bypass due to unhandled cases.
+
+By enforcing that the signature algorithm provided in the certificate_verify message exactly matches the key information included in the certificate, the repair prevents attackers from exploiting the vulnerability where a differing signature algorithm could bypass certificate checks. In essence, any discrepancy or absence of the expected key leads to an immediate termination of the verification process, thereby tightening the security and maintaining proper protocol adherence in TLS v1.3.
+
+This precise algorithm-to-certificate matching is what fixes the vulnerability, ensuring that the integrity of the TLS handshake is preserved.

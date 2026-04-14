@@ -1,0 +1,56 @@
+Below is one way to patch the code so that the certificate’s signature algorithm is explicitly validated before proceeding. In this example, after the original fields are successfully processed, we add code to extract the signature algorithm field from the certificate and compare it against allowed or expected values. (You may need to adjust details such as buffer sizes, error codes, or the implementation of the helper validation function to suit your environment.)
+
+Below is the patched code snippet:
+
+--------------------------------------------------
+    // Check that we retrieved the certificate DER successfully.
+    if (result != GnutlsConstants.ASN1_SUCCESS) {
+        result = GnutlsUtils._gnutls_asn2err(result);
+        GnutlsUtils.gnutls_assert();
+        GnutlsUtils._gnutls_free_datum(cert.der);
+        return result;
+    }
+
+    // Retrieve the issuer's Distinguished Name.
+    result = GnutlsUtils._gnutls_x509_get_raw_field2(cert.cert, cert.der,
+                                                      "tbsCertificate.issuer.rdnSequence",
+                                                      cert.rawIssuerDn);
+    if (result != GnutlsConstants.ASN1_SUCCESS) {
+        result = GnutlsUtils._gnutls_asn2err(result);
+        GnutlsUtils._gnutls_free_datum(cert.der);
+        return result;
+    }
+
+    // >>> PATCH: Validate that the signature algorithm used in the certificate is allowed.
+    // First, extract the signature algorithm from the certificate.
+    byte[] sigAlgBuffer = new byte[EXPECTED_SIG_ALG_BUFFER_SIZE];  // Define an appropriate size.
+    result = GnutlsUtils._gnutls_x509_get_raw_field2(cert.cert, cert.der,
+                                                      "tbsCertificate.signatureAlgorithm",
+                                                      sigAlgBuffer);
+    if (result != GnutlsConstants.ASN1_SUCCESS) {
+        result = GnutlsUtils._gnutls_asn2err(result);
+        GnutlsUtils._gnutls_free_datum(cert.der);
+        return result;
+    }
+
+    // Check that the signature algorithm matches the expected/allowed ones.
+    if (!GnutlsUtils.isValidSignatureAlgorithm(sigAlgBuffer)) {
+        // Cleanup any allocated resources.
+        GnutlsUtils._gnutls_free_datum(cert.der);
+        // Return an error code to indicate an invalid signature algorithm.
+        return GnutlsConstants.GNUTLS_E_INVALID_SIGNATURE_ALGORITHM;
+    }
+    // <<< End of patch section.
+
+    // Continue processing as needed...
+--------------------------------------------------
+
+In this patch:
+
+1. After successfully retrieving the issuer’s field, we add a new block that retrieves the signature algorithm field (using an ASN.1 field name such as "tbsCertificate.signatureAlgorithm").
+
+2. We then call a helper (for example, GnutlsUtils.isValidSignatureAlgorithm) to check that the extracted signature algorithm is one of the accepted ones. You must implement this function to perform the appropriate checks based on your security policy.
+
+3. If the signature algorithm is not valid, the function cleans up and returns an error code (here, GNUTLS_E_INVALID_SIGNATURE_ALGORITHM).
+
+This change ensures that the certificate import process now verifies that the signature algorithm used in the certificate is the one expected, thereby fixing the vulnerability.

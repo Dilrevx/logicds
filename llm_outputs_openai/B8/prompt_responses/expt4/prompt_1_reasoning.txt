@@ -1,0 +1,13 @@
+The repair replaces the insecure use of a fixed, zeroed-out PSK key with a call that generates a random key. In the original code, when no valid PreSharedKey (PSK) extension is found, the code sets the PSK key buffer to all zeros. This predictable behavior allows a malicious server—if it controls both ends of the connection—to use this known value to reconstruct the session master secret, compromising the session’s security.
+
+In the fixed code, when psk is NULL (indicating no valid PSK extension was found), instead of simply zeroing out the PSK key, the code immediately generates a random key of length MAX_PSK_KEY_LEN using the function wc_RNG_GenerateBlock. This change means that even if no PSK is negotiated, the key material used for the session’s master secret is not predictable. By introducing cryptographically secure randomness here, the repair prevents an attacker from knowing or reconstructing the IKM (input keying material) value and therefore prevents them from calculating the master secret.
+
+The repair carefully handles the possibility that random number generation might fail. If wc_RNG_GenerateBlock returns a non-zero value, an error code is returned. This ensures that the handshake will not proceed with an insecure or incomplete random value, further increasing the security of the TLS handshake.
+
+In summary, the fix:
+1. Detects the situation where no PSK extension is found (psk == NULL).
+2. Avoids using a zeroed-out key, which is predictable.
+3. Generates cryptographically secure random bytes for the PSK key using wc_RNG_GenerateBlock.
+4. Properly handles potential failures in random number generation by aborting the process with an error code.
+
+This repair directly addresses the vulnerability by ensuring that the IKM used in key derivation is unpredictable. If an attacker were to attempt to intercept or tamper with the handshake, they would not be able to reconstruct the master key from a known, static value.

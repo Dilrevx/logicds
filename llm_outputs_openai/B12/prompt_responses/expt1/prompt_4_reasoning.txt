@@ -1,0 +1,18 @@
+The repair addresses a logical vulnerability where the original code only logged a message if the peer key corresponding to the signature algorithm was missing, rather than actually failing the verification process. This means that a peer could present a key type (e.g., ED25519, ED448, or ECC) without the corresponding verification key being available in the internal state, which could potentially lead to undefined behavior or a security breach. Here’s a breakdown of the changes:
+
+1. Signature Data Check:  
+   Before any processing of the signature data is done, the code confirms that the provided size (args->sz) does not exceed the available buffer space. This continues to ensure that reading beyond the input data does not occur.
+
+2. Public Key Verification:  
+   The revised code now properly checks for the existence of the peer’s public key for each supported signature algorithm:  
+   - For ED25519 (under HAVE_ED25519), if the signature algorithm is ED25519, the code now checks if the corresponding peer key is present (ssl->peerEd25519KeyPresent).  
+   - The same check is applied for ED448 (under HAVE_ED448) and ECC (under HAVE_ECC) signature algorithms.  
+   - In each case, if the required key is missing, an error message is logged, and the function returns an error (INVALID_PARAMETER). This ensures that the verification process does not continue unless the necessary key is available, thus preventing bypass of proper signature verification.
+
+3. RSA Signature Handling:  
+   For RSA, the code distinguishes between two types. For the PKCS#1.5 (rsa_sa_algo) signatures, the code immediately logs an error message and returns an error. For RSA-PSS (rsa_pss_sa_algo) signatures, it checks for the presence of the RSA key; if missing, it also logs an error and fails. This makes RSA handling consistent with the other algorithms by enforcing that a valid public key must be present to proceed.
+
+4. Signature Copy and Update:  
+   After the validations, the signature data is safely copied into the internal buffer, and the index is updated appropriately so that the remaining processing can continue securely.
+
+Overall, by enforcing that the function exits with an error (using ERROR_OUT and INVALID_PARAMETER) whenever the expected peer verification key is missing, the repair ensures that no signature verification is attempted under insecure conditions. This prevents situations in which merely logging an error message—a non-fatal action in the original code—could allow an attacker to exploit the verification process. The repair thereby mitigates the security vulnerability by requiring integrity of all components before proceeding with certificate verification.

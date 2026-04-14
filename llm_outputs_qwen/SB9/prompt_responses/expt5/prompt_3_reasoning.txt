@@ -1,0 +1,64 @@
+The original buggy code snippet contained several issues that could lead to a vulnerability where a TLS v1.3 client might bypass the certificate check on a TLS v1.3 server. Specifically, it did not adequately verify that the signature algorithm used in the `CertificateVerify` message matched the algorithms supported by the client and was compatible with the key in the server's end-entity certificate. Here's a detailed explanation of the changes made to address these issues:
+
+### 1. **Verification of Supported Signature Algorithms**
+
+**Original Issue:** The original code did not check if the signature algorithm (`sigAlgo`) used in the `CertificateVerify` message was one of the algorithms supported by the client. This could allow an attacker to use an unsupported or unexpected signature algorithm, potentially bypassing intended security checks.
+
+**Repair:** 
+```java
+if (!ssl.supportedSignatureAlgorithms.contains(args.sigAlgo)) {
+    Wslib.WOLFSSL_MSG("Peer sent unsupported signature algorithm");
+    return CommonsConstants.SIG_VERIFY_E;
+}
+```
+This line ensures that the signature algorithm used in the `CertificateVerify` message is one of those specified in the `supported_signature_algorithms` extension sent by the client. If the algorithm is not supported, the handshake is terminated with a `SIG_VERIFY_E` error.
+
+### 2. **Enforcement of RSASSA-PSS for RSA Signatures**
+
+**Original Issue:** The original code allowed RSA signatures using the PKCS#1.5 algorithm, which is not compliant with the specification. According to the specification, RSA signatures must use the RSASSA-PSS algorithm, regardless of whether the RSASSA-PKCS1-v1_5 algorithm appears in the `signature_algorithms` extension.
+
+**Repair:**
+```java
+if (args.sigAlgo == CommonsConstants.rsa_sa_algo) {
+    Wslib.WOLFSSL_MSG("RSA signatures must use RSASSA-PSS algorithm");
+    return CommonsConstants.INVALID_PARAMETER;
+}
+```
+This condition checks if the signature algorithm is `rsa_sa_algo` (which presumably corresponds to RSASSA-PKCS1-v1_5). If it is, the handshake is terminated with an `INVALID_PARAMETER` error, enforcing the requirement for RSASSA-PSS.
+
+### 3. **Consistent Key Presence Checks**
+
+**Original Issue:** The original code had separate checks for the presence of keys corresponding to different signature algorithms (e.g., ED25519, ED448, ECC DSA, Falcon, RSA). While these checks were correct, they were not comprehensive enough to ensure that the signature algorithm matched the key type in the certificate.
+
+**Repair:**
+```java
+if (args.sigAlgo == CommonsConstants.ed25519_sa_algo && !ssl.peerEd25519KeyPresent) {
+    Wslib.WOLFSSL_MSG("Peer sent ED25519 sig but not ED25519 cert");
+    return CommonsConstants.SIG_VERIFY_E;
+}
+if (args.sigAlgo == CommonsConstants.ed448_sa_algo && !ssl.peerEd448KeyPresent) {
+    Wslib.WOLFSSL_MSG("Peer sent ED448 sig but not ED448 cert");
+    return CommonsConstants.SIG_VERIFY_E;
+}
+if (args.sigAlgo == CommonsConstants.ecc_dsa_sa_algo && !ssl.peerEccDsaKeyPresent) {
+    Wslib.WOLFSSL_MSG("Peer sent ECC sig but not ECC cert");
+    return CommonsConstants.SIG_VERIFY_E;
+}
+if ((args.sigAlgo == CommonsConstants.falcon_level1_sa_algo || args.sigAlgo == CommonsConstants.falcon_level5_sa_algo) && !ssl.peerFalconKeyPresent) {
+    Wslib.WOLFSSL_MSG("Peer sent Falcon sig but not Falcon cert");
+    return CommonsConstants.SIG_VERIFY_E;
+}
+if (args.sigAlgo == CommonsConstants.rsa_pss_sa_algo && (ssl.peerRsaKey == null || !ssl.peerRsaKeyPresent)) {
+    Wslib.WOLFSSL_MSG("Peer sent RSA sig but not RSA cert");
+    return CommonsConstants.SIG_VERIFY_E;
+}
+```
+These checks ensure that the signature algorithm matches the key type present in the certificate. For example, if the `CertificateVerify` message uses an ED25519 signature algorithm, the code verifies that the server's end-entity certificate contains an ED25519 key. If there is a mismatch, the handshake is terminated with a `SIG_VERIFY_E` error.
+
+### 4. **Combining Checks for Efficiency**
+
+**Original Issue:** The original code had separate checks for each signature algorithm, which could be inefficient and repetitive.
+
+**Repair:** While the repairs introduced above do include separate checks for each algorithm, they are structured to ensure clarity and correctness. The first check for supported algorithms addresses the majority of potential mismatches efficiently, while the subsequent checks ensure compatibility between the signature algorithm and the key type in the certificate.
+
+By implementing these changes, the code now adheres more closely to the TLS v1.3 specification, ensuring that the signature algorithm used in the `CertificateVerify` message is both supported and compatible with the key in the server's end-entity certificate. This significantly reduces the risk of a client bypassing the certificate check, thereby enhancing the security of the TLS handshake process.

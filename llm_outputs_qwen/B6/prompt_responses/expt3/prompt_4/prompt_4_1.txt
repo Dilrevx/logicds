@@ -1,0 +1,49 @@
+To address the vulnerability described, we need to ensure that when checking the `subjectAltName` extension, only names of the correct type (DNS names) are considered. The current code does not differentiate between the types of names in the `subjectAltName` extension, which allows an attacker to use an IP address as a DNS name.
+
+In the context of X.509 certificates, the relevant types for `subjectAltName` are:
+- General Name Type 2: dNSName (Domain Name System name)
+- General Name Type 7: iPAddress (IP Address)
+
+We should modify the code to check the type of each entry in the `subjectAltName` extension and only compare the expected common name (`cn`) against entries of type `dNSName`.
+
+Here's the corrected code:
+
+```c
+#include <mbedtls/x509.h>
+
+if( crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME )
+{
+    for( cur = &crt->subject_alt_names; cur != NULL; cur = cur->next )
+    {
+        // Check if the current entry is of type dNSName (General Name Type 2)
+        if( cur->tag == MBEDTLS_X509_SAN_DNSNAME &&
+            x509_crt_check_cn( &cur->buf, cn, cn_len ) == 0 )
+        {
+            break;
+        }
+    }
+
+    if( cur == NULL )
+        *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+}
+else
+{
+    for( name = &crt->subject; name != NULL; name = name->next )
+    {
+        if( MBEDTLS_OID_CMP( MBEDTLS_OID_AT_CN, &name->oid ) == 0 &&
+            x509_crt_check_cn( &name->val, cn, cn_len ) == 0 )
+        {
+            break;
+        }
+    }
+
+    if( name == NULL )
+        *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+}
+```
+
+### Explanation:
+- **Check for `dNSName`**: The line `if( cur->tag == MBEDTLS_X509_SAN_DNSNAME && ...)` ensures that only entries of type `dNSName` (General Name Type 2) are considered when verifying the common name.
+- **Preserve Existing Logic**: The rest of the logic remains unchanged, ensuring that if the `subjectAltName` extension is not present, the code falls back to checking the `commonName` field in the subject field of the certificate.
+
+This modification prevents the vulnerability by ensuring that only DNS names are considered when verifying the common name, thus mitigating the risk of an attacker using an IP address to impersonate a domain.

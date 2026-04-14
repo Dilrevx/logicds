@@ -1,0 +1,36 @@
+Below is one acceptable repair. In our analysis we noticed that the vulnerability is triggered when a “foreign‐thread” (that is, a socket whose tid does not equal the current thread’s id) doesn’t get its detach callback run soon enough. Because the asynchronous event is enqueued but might be delayed indefinitely (or even never processed under heavy load or maliciously crafted conditions) the socket stays in CLOSE_WAIT for too long. In other words, an attacker can force sockets on BIND to “hang” indefinitely in CLOSE_WAIT simply by “fooling” the system into taking the asynchronous branch.
+
+One safe fix is to avoid deferral altogether when the asynchronous path might not eventually be executed in a timely manner. For example, we can modify the code to use a “forced‐synchronous” callback if the worker thread cannot be relied on to run the detach in a timely fashion. Alternatively, the asynchronous event can be augmented with a timeout so the eventual callback “gives up” and cleans up the handle (i.e. closes the connection) if the detachment isn’t processed within a short period.
+
+Below is one example of a patch that adds a timeout field to the event (and later the callback function would check that timeout) so that even if the event is delayed the connection is eventually closed. (In a full solution you’d also modify the asynchronous callback code to check the expiry time and act accordingly.)
+
+———— Patched Code ————
+   sock = handle->sock;
+   if (sock->tid == isc_nm_tid()) {
+       nmhandle_detach_cb(&handle FLARG_PASS);
+   } else {
+       isc__netievent_detach_t *event =
+           isc__nm_get_netievent_detach(sock->mgr, sock);
+       /*
+        * By adding a timeout we ensure that if the event is not processed by the
+        * worker thread promptly, the event callback itself will force the detach,
+        * preventing the socket from remaining indefinitely in CLOSE_WAIT.
+        */
+       event->handle = handle;
+       event->timeout = ISC_TIME_NOW();  /* Get current time */
+       ISC_TIME_ADD(event->timeout, DETACH_TIMEOUT_INTERVAL); /* e.g., 5 sec */
+       FLARG_IEVENT_PASS(event);
+       isc__nm_enqueue_ievent(&sock->mgr->workers[sock->tid],
+                              (isc__netievent_t *)event);
+   }
+
+———— Explanation ————
+1. We now record a timeout in the asynchronous detach event (here named event->timeout). The event callback (which is already written elsewhere) should check if ISC_TIME_NOW() has passed event->timeout and, if so, force the cleanup. This prevents a connection from being “stuck” in CLOSE_WAIT indefinitely.
+
+2. Alternatively, one might modify the logic to always call nmhandle_detach_cb (i.e. performing a synchronous callback) if one cannot guarantee a prompt asynchronous response. However, the above patch minimizes code changes while mitigating the vulnerability.
+
+3. In a full repair the callback that runs for the asynchronous event must check the timeout field. If the current time exceeds event->timeout then it should ignore any further processing and immediately close the connection (or perform any additional forced cleanup).
+
+This patch forces a bounded lifetime on pending detach events and prevents a malicious attacker from causing a denial‐of‑service by letting off a stream of TCP packets that cause delayed event processing.
+
+By adding the timeout mechanism and performing the forced cleanup if necessary, we repair the vulnerability.

@@ -1,0 +1,20 @@
+The repair consolidates the individual certificate-signature algorithm checks into a single switch statement that maps each supported signature algorithm to its corresponding certificate presence flag. This approach addresses the vulnerability by ensuring that every supported signature method is evaluated uniformly before any further processing occurs.
+
+Here’s how the repair works:
+
+1. A boolean variable "valid_cert" is initialized to false. This variable acts as a flag that will be set to true only if the certificate matches the signature algorithm provided by the peer.
+
+2. A switch statement is used to check the signature algorithm (args.sigAlgo). For each supported algorithm (ED25519, ED448, ECC DSA, Falcon Level 1, Falcon Level 5, and RSA PSS), a log message is produced indicating which algorithm is in use.
+
+3. For each case, the code sets "valid_cert" to true only if the corresponding certificate component is present. For example:
+   - For ED25519, "valid_cert" is set based on whether ssl.peerEd25519KeyPresent is true.
+   - For RSA PSS, it checks that ssl.peerRsaKey is not null and that ssl.peerRsaKeyPresent is true.
+   This precise mapping ensures that the stated signature algorithm is backed by the valid certificate data.
+
+4. The RSA PKCS#1.5 algorithm is handled separately. Since this algorithm is not allowed (especially in contexts like TLS 1.3), the code immediately logs an error message and returns a specific error code (INVALID_PARAMETER). This early exit prevents processing of any legacy or unsupported signature schemes.
+
+5. There is also a default case in the switch statement, which catches any unsupported or unrecognized signature algorithms by returning an error immediately. This ensures that no unexpected value bypasses the security check.
+
+6. After the switch statement, a final check verifies the "valid_cert" flag. If it remains false (meaning either the certificate information did not match the declared algorithm or the supported signature wasn’t present), the code logs an error message and returns a signature verification error (SIG_VERIFY_E). This ensures that even if an attacker manipulates an isolated part of the original logic, the unified validation step catches any mismatch between the algorithm and certificate presence.
+
+Overall, this refactored approach enhances security by ensuring a one-to-one mapping between the signature algorithm used by the peer and the certificate contents. It prevents a potential attack where an attacker could send conflicting values (for example, a valid certificate for one algorithm with a signature for another) to bypass the certificate check. By requiring every valid signature to be preceded by its corresponding certificate data and by consolidating verification into a single, consistent check, the repair eliminates the fragmented logic that could otherwise allow vulnerabilities to slip through.

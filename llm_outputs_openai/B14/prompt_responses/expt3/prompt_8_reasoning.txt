@@ -1,0 +1,9 @@
+The repair adds an extra condition to ensure that the synchronous cleanup (using nmhandle_detach_cb) is performed only if the socket does not have a custom close-handle callback registered. Previously, the code checked whether the current thread (represented by sock->tid) matched the network manager’s thread (isc_nm_tid()). If it did, the cleanup was done immediately, which could bypass important custom cleanup routines. This could lead to connections remaining in the CLOSE_WAIT state if a custom close-handle callback was intended to perform additional cleanup.
+
+By adding the check (sock->closehandle_cb == NULL), the repaired code now requires two conditions for immediate cleanup:
+1. The socket’s thread matches the network manager’s thread.
+2. There is no custom close-handle callback registered.
+
+If both are true, it is safe to perform synchronous cleanup by directly invoking nmhandle_detach_cb. However, if a custom callback exists (i.e. sock->closehandle_cb is not NULL) or if the thread doesn’t match, the repair opts for an asynchronous cleanup path. In this path, a detachment event object is retrieved using isc__nm_get_netievent_detach, the handle is set on this event, and then the event is enqueued to the worker associated with the socket’s thread. This deferral ensures that any additional logic associated with the close-handle callback will be executed in the proper asynchronous context.
+
+In summary, by introducing the additional runtime check for the close-handle callback, the repair prevents premature, synchronous cleanup of the connection when further cleanup actions might be required. This careful control over when and how the detachment is executed helps avoid leaving connections in a lingering CLOSE_WAIT state, thereby mitigating the vulnerability.

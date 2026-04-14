@@ -1,0 +1,13 @@
+The repair adds an explicit check right after decoding the signature algorithm from the CertificateVerify message. Originally, the code would decode the signature algorithm (via DecodeTls13SigAlg) and then continue processing without fully confirming that this algorithm even matches the public key type provided in the Certificate message. This discrepancy could allow an attacker to manipulate the signature algorithm used in the CertificateVerify message, potentially bypassing proper certificate validation.
+
+Here’s a breakdown of the repair:
+
+1. After decoding the signature algorithm inside the TLS_ASYNC_BUILD state, a new block is inserted. This newly added check validates that the decoded signature algorithm (args->sigAlgo) corresponds to an expected public key type that was actually provided by the peer in the Certificate message. For example, if the signature algorithm indicates RSA-PSS, the code ensures that ssl->peerRsaKey is non-NULL and the flag ssl->peerRsaKeyPresent is set. Similar validations are applied to ECC, ED25519, ED448, and Falcon public keys.
+
+2. If the signature algorithm does not match the type of key that was provided (i.e., if none of the expected conditions evaluate to true), the repair causes the function to log a message "CertificateVerify sig algorithm mismatch" and forcibly return an error by using ERROR_OUT with SIG_VERIFY_E. This effectively blocks further processing of the handshake if there is any inconsistency between the certificate and the proof (signature) used.
+
+3. By doing this, the fix prevents a scenario where an attacker could send a CertificateVerify message with a mismatched signature algorithm in order to bypass the certificate check. The certificate (delivered in an earlier message) would never have indicated a different algorithm, so any discrepancy is treated as a sign of tampering or misconfiguration.
+
+4. The rest of the function continues to work as before, processing the signature length, copying the signature data, preparing the signature data for verification, and ultimately performing the cryptographic verification (via RsaVerify, EccVerify, etc.). If the public key doesn’t match the expected type (as confirmed by the new check), the handshake is aborted.
+
+Overall, this repair directly addresses the vulnerability by ensuring that the signature verification process does not accept a mismatch between what’s indicated in the CertificateVerify message and what was delivered in the Certificate message. The added condition enforces consistency between the signature algorithm and the certificate’s key type, thereby preventing a potential bypass in the TLS v1.3 authentication step.

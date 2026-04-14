@@ -1,0 +1,15 @@
+The repair first introduces a check on the incoming NAS message’s sequence number. It compares the message’s sequence number (nas_msg.sequence_number) with the expected sequence number stored in the security context (sec_context.expected_sequence_number). If the incoming message has a lower sequence number, it is immediately rejected as a potential replay attack. This prevents an attacker from resubmitting previously captured NAS messages, which could include commands such as nas_sm_cmd_replay after registration.
+
+Next, the code attempts to unpack the outer NAS header from the protocol data unit (PDU). If this process fails, the code logs an error and terminates processing. Unpacking the header only after verifying the sequence number ensures that resources are not wasted on invalid or replayed messages.
+
+The repair then differentiates processing based on the message’s security header type using a switch statement:
+
+• For plain NAS messages, there is now an additional check to see if a security context is already established. Since plain messages (which are not integrity-protected) should not be accepted once secure communication is in place, the code logs an error and rejects the message if the security context is active. This step further prevents the misuse of plain messages as a means to replay commands once the session has progressed to a secure state.
+
+• For messages that are integrity protected or both integrity protected and ciphered, the code performs an integrity check. If the integrity check fails, it logs an error. For ciphered messages, after successfully passing the integrity check, it proceeds with decryption. This ensures that only messages that have not been tampered with will be processed, protecting both message integrity and confidentiality.
+
+• For messages with a new 5G NAS context, especially the variant that includes both integrity protection and ciphering, the repair decisively rejects them with an error. This conservative approach avoids processing potentially unsupported or insecure context transitions, which could otherwise lead to vulnerabilities or exploitation attempts.
+
+Finally, once the message has successfully passed all these checks, the repair updates the expected_sequence_number in the security context by incrementing it. This state update is crucial because it maintains the correct sequence order for future messages. Any message arriving later with an out-of-sequence number will be caught by the earlier sequence number check. 
+
+In summary, by adding strict sequence checking and validating the security context before accepting plain messages, the repair ensures that replayed or out-of-order messages (like nas_sm_cmd_replay commands after registration completion) are detected and rejected. The enhanced processing for integrity and ciphered messages ensures that unauthorized modifications or decryption failures do not allow an attack to succeed. Together, these changes create multiple layers of defense against replay attacks, preserving the integrity and correct sequencing of NAS messages.

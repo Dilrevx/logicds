@@ -1,0 +1,68 @@
+To address the vulnerability where the User Equipment (UE) accepts `nas_sm_cmd_replay` even after registration is complete, we need to ensure that the UE does not process replay messages after it has successfully completed its registration procedure.
+
+The provided code snippet does not explicitly handle the `nas_sm_cmd_replay` message or check the registration state of the UE. To mitigate this vulnerability, we need to add logic to check whether the UE has completed its registration and then decide whether to process the `nas_sm_cmd_replay` message.
+
+Assuming there is a way to determine if the UE has completed its registration (e.g., a boolean flag `registration_complete`), we can modify the code as follows:
+
+1. Add a check for the `registration_complete` flag before processing any NAS messages.
+2. Specifically, add a condition to drop `nas_sm_cmd_replay` messages if the UE is already registered.
+
+Here is the modified code snippet:
+
+```cpp
+// Assume registration_complete is a boolean flag indicating if the UE has completed registration
+bool registration_complete = check_registration_status(); // This function should be defined elsewhere
+
+if (nas_msg.unpack_outer_hdr(pdu) != SRSRAN_SUCCESS) {
+  logger.error("Unable to unpack outer NAS header");
+  return SRSRAN_ERROR;
+}
+
+switch (nas_msg.hdr.security_header_type) {
+  case nas_5gs_hdr::security_header_type_opts::plain_5gs_nas_message:
+    // Check if the message is a replay command and UE is already registered
+    if (nas_msg.is_replay_command() && registration_complete) {
+      logger.warning("Dropping replay command from already registered UE");
+      return SRSRAN_SUCCESS; // Or SRSRAN_IGNORE if such a status exists
+    }
+    break;
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected:
+    if (integrity_check(pdu.get()) == false) {
+      logger.error("Not handling NAS message with integrity check error");
+      return SRSRAN_ERROR;
+    }
+    // Check if the message is a replay command and UE is already registered
+    if (nas_msg.is_replay_command() && registration_complete) {
+      logger.warning("Dropping replay command from already registered UE");
+      return SRSRAN_SUCCESS; // Or SRSRAN_IGNORE if such a status exists
+    }
+    break;
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered:
+    if (integrity_check(pdu.get()) == false) {
+      logger.error("Not handling NAS message with integrity check error");
+      return SRSRAN_ERROR;
+    } else {
+      cipher_decrypt(pdu.get());
+    }
+    // Check if the message is a replay command and UE is already registered
+    if (nas_msg.is_replay_command() && registration_complete) {
+      logger.warning("Dropping replay command from already registered UE");
+      return SRSRAN_SUCCESS; // Or SRSRAN_IGNORE if such a status exists
+    }
+    break;
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_with_new_5G_nas_context:
+    break;
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered_with_new_5G_nas_context:
+    return SRSRAN_ERROR;
+  default:
+    logger.error("Not handling NAS message with unknown security header");
+    break;
+}
+```
+
+In this modification:
+- We assume the existence of a method `check_registration_status()` that returns a boolean indicating whether the UE has completed registration.
+- We also assume the existence of a method `is_replay_command()` on the `nas_msg` object that determines if the current message is a replay command.
+- If the UE is already registered and the message is a replay command, the message is dropped, and the function returns `SRSRAN_SUCCESS` or an appropriate status indicating the message was ignored.
+
+Make sure to replace `check_registration_status()` and `is_replay_command()` with actual implementations in your codebase.

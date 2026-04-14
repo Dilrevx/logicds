@@ -1,0 +1,57 @@
+<repair>
+    if ((ctx->flags & EVP_CIPH_NO_PADDING) != 0) {
+        /*
+         * If this ctx was already set up for no padding then we need to tell
+         * the new cipher about it.
+         */
+        if (!EVP_CIPHER_CTX_set_padding(ctx, 0))
+            return 0;
+    }
+
+#ifndef FIPS_MODULE
+    /* 
+     * Proactively apply key and IV length parameters (CVE-2023-5363)
+     * to ensure that the lengths are correctly set before key and IV are used.
+     */
+    if (params != NULL) {
+        OSSL_PARAM temp_params[3];
+        size_t count = 0;
+        const OSSL_PARAM *p = NULL;
+
+        /* Look for a parameter specifying the key length */
+        if ((p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_KEYLEN)) != NULL)
+            temp_params[count++] = *p;
+
+        /* Look for a parameter for the IV length.
+         * Note: Some providers may use OSSL_CIPHER_PARAM_AEAD_IVLEN as a synonym.
+         */
+        if ((p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_IVLEN)) == NULL)
+            p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_AEAD_IVLEN);
+        if (p != NULL)
+            temp_params[count++] = *p;
+
+        /* Terminate the parameter array */
+        temp_params[count] = OSSL_PARAM_END;
+
+        /* If any parameters were found, apply them to update the context lengths */
+        if (count > 0 && !ossl_cipher_ctx_apply_lengths(ctx, temp_params)) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_LENGTH);
+            return 0;
+        }
+    }
+#endif
+
+    if (enc) {
+        if (ctx->cipher->einit == NULL) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+
+        return ctx->cipher->einit(ctx->algctx,
+                                  key,
+                                  key == NULL ? 0 : EVP_CIPHER_CTX_get_key_length(ctx),
+                                  iv,
+                                  iv == NULL ? 0 : EVP_CIPHER_CTX_get_iv_length(ctx),
+                                  params);
+    }
+</repair>

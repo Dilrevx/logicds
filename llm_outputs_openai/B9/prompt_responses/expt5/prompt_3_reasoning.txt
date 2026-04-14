@@ -1,0 +1,22 @@
+The repair consolidates the verification checks into a single, unified block that explicitly matches the signature algorithm received (args->sigAlgo) to the type of key provided in the certificate. Here's how the repair works step by step:
+
+1. Unified Check for Key Types:
+  • The code first determines which key type (e.g., ED25519, ED448, ECC, PQC, or RSA) is present in the peer’s certificate by examining flags like ssl->peerEd25519KeyPresent or ssl->peerRsaKeyPresent.
+  • This ensures that only one type of key is active and that the corresponding signature algorithm is expected.
+
+2. Matching Signature Algorithms:
+  • For each supported key type, the code checks that the signature algorithm in the CertificateVerify message exactly matches the one associated with that key type (for example, ed25519_sa_algo for ED25519).
+  • If the signature algorithm does not match the expected algorithm, it logs an error and aborts the handshake. This protects against an attacker mixing keys and signature algorithms (e.g., using an RSA certificate with an inappropriate signature algorithm).
+
+3. Special Handling for RSA:
+  • The repair rejects any RSA signature that is not RSA_PSS (rsa_pss_sa_algo). According to the TLS v1.3 specification, RSA signatures must use RSASSA-PSS, even if other RSA algorithms were previously supported. This directly addresses the vulnerability where a legacy RSA algorithm (like RSA PKCS#1.5) might otherwise be used to bypass certificate checks.
+  • If RSA is present and the wrong algorithm is used, the connection is terminated.
+
+4. Handling Missing or Disabled Algorithms:
+  • If a certificate key is indicated as present but the corresponding support is disabled in the build (using conditional compilation flags), the code also aborts the handshake. This prevents cases where a certificate type is provided but the implementation does not support the matching signature verification.
+
+5. Preventing Certificate Check Bypass:
+  • By strictly enforcing that the signature algorithm matches the key type in the certificate, the repair prevents situations where an attacker might use a mismatched signature algorithm to bypass validation. This aligns with the TLS v1.3 specification, ensuring that a CertificateVerify message is only accepted if the signature algorithm is one that is valid for the provided certificate.
+  • The unified approach ensures comprehensive coverage over all supported algorithms and certificates instead of the previous approach that checked them individually and separately, which could be exploited if one check was bypassed due to a mismatch.
+
+Overall, the repair explicitly ties the signature algorithm to the certificate’s key type. This eliminates the potential for a mismatch-based bypass, ensuring that even if an unsupported signature algorithm appears in the CertificateVerify message, the TLS handshake will be terminated, preserving the security guarantees mandated by the specification.

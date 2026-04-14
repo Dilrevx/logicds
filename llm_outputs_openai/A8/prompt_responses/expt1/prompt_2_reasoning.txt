@@ -1,0 +1,19 @@
+The repair adds an explicit check for the first_kex_packet_follows flag when operating as a server. Previously, even if the flag was set indicating that the client anticipated an immediate key exchange (a “guess”), no explicit instruction was recorded to prevent processing of a premature SSH_MSG_KEXDH_INIT message. This could be exploited or cause unexpected behavior if the client’s guess was wrong. 
+
+Here’s the step‐by‐step breakdown of the repair:
+
+1. After reading the final two fields of the KEXINIT message (which includes the first_kex_packet_follows flag and a reserved 32-bit value), the code checks if the session is in server mode. If it is, it further checks whether first_kex_packet_follows is non-zero.
+    
+2. If the flag is set, a session flag (SSH_SESSION_FLAG_IGNORE_FIRST_KEXDH_INIT) is set. This serves as an internal marker that instructs the session to ignore the next SSH_MSG_KEXDH_INIT message coming from the client. Ignoring this message prevents the server from mistakenly establishing a key exchange based on the client’s incorrect guess.
+    
+3. Conversely, if the flag is not set, the flag in the session is removed (cleared) to ensure that no accidental ignoring of a legitimate SSH_MSG_KEXDH_INIT occurs.
+
+4. The repair also includes proper cleanup code on error. It frees up any allocated strings in the strings[i] array if an error occurs before the function returns. This defensive programming ensures that no memory leaks or dangling pointers persist after encountering an error situation.
+
+By adding these steps, the vulnerability is fixed in two ways:
+
+• Explicit Session State Management: The code now records the state of the "first_kex_packet_follows" flag using a dedicated session flag. This clearly distinguishes between a legitimate key exchange message and one that must be ignored because the client’s guess was wrong. Without this marker, the server could unknowingly process a SSH_MSG_KEXDH_INIT message that should have been ignored, potentially leading to key exchange mismatches or other protocol errors.
+
+• Robust Handling of Protocol Edge Cases: In scenarios where the client has set first_kex_packet_follows but the overall exchange is not proceeding as expected, the server is now able to gracefully handle the situation by ignoring an unexpected key exchange initiation. This better aligns with the expectations of the SSH protocol regarding key re-exchange and key negotiation, reducing the risk of protocol confusion or data corruption during the handshake.
+
+Overall, the repair reinforces proper protocol behavior by ensuring that the server explicitly handles client mispredictions about the key exchange process, thereby mitigating any exploitable logical inconsistencies.

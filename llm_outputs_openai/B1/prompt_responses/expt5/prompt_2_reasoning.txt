@@ -1,0 +1,21 @@
+The repair adds an explicit check on the client's certificate public key to ensure that if it is using a Diffie–Hellman (DH) key—which should not be used for authenticating the CertificateVerify message—the handshake is aborted unless a proper CertificateVerify message is present.
+
+Here’s what happens step by step:
+
+1. The code still checks if the message type isn’t CertificateVerify. If it isn’t, we mark the message for reuse. That’s the same as in the original snippet.
+
+2. When a peer certificate is provided (peer != NULL), the repair retrieves the public key from the certificate using X509_get_pubkey(peer). If obtaining the key fails, it safely sets an internal error alert and aborts.
+
+3. The key point is the conditional check: 
+   - The original code only checked if the key supports signing (using type & EVP_PKT_SIGN) and lacked further validation.
+   - In the repair, after obtaining the key, the code checks two conditions:
+     a. If the certificate’s public key does not support signing (i.e. it isn’t valid for a digital signature).
+     b. Additionally, if the certificate’s public key is of type DH (Diffie–Hellman).
+     
+   If either condition is met, this indicates a vulnerability: either the key doesn’t belong to a signing-capable algorithm or it is a DH key, which is insecure without the output of a CertificateVerify message. In that case, the code frees the public key, triggers an unexpected message alert, logs an error, and redirects flow to the error-handling block.
+
+4. If the public key passes these checks (i.e., it supports signing and isn’t a DH key), then the key resource is properly freed, and execution continues to mark the handshake as acceptable (ret = 1) after jumping to the common end block.
+
+This repair is significant because it prevents an attacker from exploiting the TLS handshake by using a DH certificate to bypass the authentication provided by the CertificateVerify message. Without this check, a DH certificate could be improperly accepted, potentially granting unauthorized access. The repair forces the presence of the CertificateVerify message when dealing with keys that are either restricted in use (non-signing) or inherently vulnerable to this type of attack (DH). By verifying the public key type and capabilities, the updated code adheres to the expectation that signing keys must be used with a corresponding SignatureVerify message.
+
+Overall, the changes tighten the certificate verification process by explicitly rejecting connections where the peer’s certificate is of an insecure or inappropriate type, thereby addressing the vulnerability described in the original scenario.

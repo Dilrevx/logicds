@@ -1,0 +1,22 @@
+The repair refactors the certificate verification logic to ensure that the signature algorithm (sig_algo) used in the CertificateVerify message is always backed by a corresponding certificate. Here’s how the changes address the vulnerability:
+
+1. Initialization and Boundary Checks:
+ • The code begins by setting up initial state and parameters. It checks the boundaries to ensure that reading the signature algorithm and the subsequent signature length does not exceed the total buffer size. This prevents simple buffer overflows.
+
+2. Signature Algorithm Decoding:
+ • The function decodes the TLS 1.3 signature algorithm from the input data. After successful decoding and reading the signature length, it verifies that the corresponding signature data fits within the provided buffer. These checks ensure data integrity during parsing.
+
+3. Consolidated Certificate Verification:
+ • Instead of handling each potential certificate mismatch with separate immediate returns, the repair introduces a unified Boolean flag (validCert). This flag is used to record whether the certificate has a corresponding key for the signature algorithm.
+ • For each supported signature algorithm (ED25519, ED448, ECC DSA, Falcon Level 1, Falcon Level 5, and RSA PSS), the code logs an informational message and sets the flag based on whether the appropriate key is present in the certificate. For example, if the sig_algo is ED25519, then validCert is set to the state of ssl.peerEd25519KeyPresent.
+ • Notably, if the signature algorithm is RSA-PKCS#1.5—which is not allowed in TLS 1.3—the function immediately logs the issue and returns an error. This early exit rules out the possibility of an attacker using an outdated or invalid algorithm to bypass certificate checks.
+
+4. Final Aggregated Check:
+ • After determining the state of the validCert flag based on the signature algorithm, the code performs a final check. If validCert remains false—which means that the certificate does not have the expected key corresponding to the signature algorithm—the function logs an error and returns a signature verification error.
+ • This final check acts as a gatekeeper that prevents any mismatches from slipping through. Even if an attacker attempts to manipulate individual conditionals, the aggregated check guarantees that the signature algorithm must always be accompanied by a valid certificate.
+
+How It Fixes the Vulnerability:
+ • Previously, isolated conditionals could allow an attacker to bypass proper certificate validation by manipulating the flow if some conditions did not correctly match. By unifying the checks into a single variable (validCert) and then enforcing a final verification, the repair ensures that every signature algorithm is thoroughly and consistently verified against the certificate.
+ • This process prevents any mismatches, such as receiving a signature algorithm different from what the certificate supports, from bypassing validation. In other words, the repair ensures that the certificate check is not inadvertently skipped or misaligned, effectively closing the vulnerability that could lead to bypassing certificate validation.
+
+Overall, the refactored approach provides a robust safeguard by logically consolidating verification steps and ensuring that any deviation between the certificate and its used signature algorithm results in an immediate, unified error.

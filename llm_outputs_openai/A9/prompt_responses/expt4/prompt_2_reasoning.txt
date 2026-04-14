@@ -1,0 +1,18 @@
+The repair changes the condition that determines when to generate a new client random value in a DTLS session. Originally, the code mistakenly bypassed the randomness generation for DTLS sessions on the initial connection because it negated a combined check that included whether the session is DTLS and whether it had zero hello verify requests. This allowed the session to fall back to using the default (insecure) 32 '\0' bytes.
+
+In the new code, the condition is rewritten as follows:
+
+ • It first checks if the session is DTLS by using the IS_DTLS(session) macro and simultaneously confirms if no hello verify requests have been received (i.e., session->internals.dtls.hsk_hello_verify_requests == 0). If so, it means this is the first DTLS handshake attempt, and a new client random should be generated.
+
+ • Alternatively, if the session is not in a state where a Hello Retry Request (indicated by HSK_HRR_RECEIVED) has been received, the code still generates a new client random. This ensures that in non-DTLS or in normal TLS cases, the randomness is generated as needed.
+
+By changing the condition to explicitly check that the hello verify request count is zero in DTLS sessions (instead of incorrectly using a negated compound condition), the logic now correctly calls the _gnutls_gen_client_random(session) function when it should. This means that during an initial DTLS handshake (with zero hello verify requests), instead of using a static series of zero bytes, the client gets a properly generated random value. 
+
+This change is crucial because DTLS relies on fresh client random values to ensure that each session has sufficient entropy—key for achieving secure key exchange and for defending against replay or impersonation attacks. The initial code’s flawed condition inadvertently caused the absence of randomness, undermining the protocol’s cryptographic guarantees.
+
+In summary, the repair works by:
+ 1. Correctly identifying DTLS sessions that have not yet received any hello verify requests.
+ 2. Ensuring that when a new DTLS session starts (or when it is safe to do so), a fresh, unpredictable client random is generated.
+ 3. Maintaining the proper check for general handshake states in non-DTLS or normal TLS sessions, where the standard conditions for random generation apply.
+
+This logic fix makes sure that the DTLS client's handshake employs real entropy instead of a predictable default value, thereby restoring the intended security guarantees of the DTLS protocol.

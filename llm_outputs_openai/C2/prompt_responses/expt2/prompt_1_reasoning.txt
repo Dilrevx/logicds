@@ -1,0 +1,13 @@
+The repair adds an extra check before the second error assignment, making sure that it does not overwrite an already set error. Originally, if the first section—which checks for explicit elliptic curve parameters—set an error (for example, X509_V_ERR_EC_KEY_EXPLICIT_PARAMS), the later code would still override that error with X509_V_ERR_INVALID_EXTENSION if the certificate wasn’t marked as a CA. This behavior could allow an invalid certificate to pass strict validation if an application omitted setting a purpose or explicitly overrode it.
+
+In the repaired code, after the first block performs the curve parameter check, we introduce a condition:
+
+  if (ctx->error == X509_V_OK && …)
+
+This ensures that the subsequent check on the certificate’s CA status only executes if no error has already been flagged (i.e., ctx->error is still set to success, represented by X509_V_OK). If the certificate already failed due to an explicit elliptic curve parameter error, ctx->error remains unchanged. It prevents potentially masking or replacing a more relevant error indication with a generic one.
+
+This modification is critical because the vulnerability was partly due to the order of operations: the result from the explicit elliptic curve parameters check could be overwritten by the CA certificate check. By guarding the second error assignment with a check on ctx->error, the repair preserves the error from the first validation as the final result when an error occurs. This ensures that a certificate with an explicit curve parameter error is correctly reported and not improperly downgraded to a generic invalid extension error.
+
+Thus, a certificate chain that violates the intended strict checks (for example, a non-CA certificate attempting to issue certificates or having explicit curve parameters) now accurately returns the first appropriate error without being obscured by subsequent validation steps. Applications that rely on detailed error information and strict checking of certificate properties will benefit from these more precise and reliable error codes, avoiding potential bypasses of strict validation rules.
+
+In summary, by checking that ctx->error is still X509_V_OK before setting the second error, we preserve the proper error information and ensure that the certificate chain validation routines do not inadvertently override a critical CA-related error. This fix addresses the vulnerability by keeping the validation logic robust, particularly in environments where the X509_V_FLAG_X509_STRICT flag is enabled without a predefined purpose.

@@ -1,0 +1,55 @@
+Below is an example repair for the TLS 1.3 client code that fixes the issue. In this patch, after processing the PSK negotiation and key share extraction, the code checks whether a valid PSK has been chosen (indicated by pskFound) or whether the key share is valid (i.e. the named group is nonzero). If neither condition is met, the code aborts the handshake rather than continuing with a default, predictable input key material (IKM).
+
+For example, consider the following snippet:
+
+--------------------------------------------------
+/* (Prior code: process server hello, extract PSK extension, and key share info) */
+
+bool pskFound = false;
+
+/* Process the PSK extension from the server hello */
+if (psk_extension_present) {
+    /* Walk through the list of PSK entries to find the chosen one */
+    for (int i = 0; i < numPSKEntries; i++) {
+        if (pskEntries[i].selected) {
+            pskFound = true;
+            /* Use the selected PSK to set the cryptographic key material */
+            if (setupPSKKey(&pskEntries[i]) != SUCCESS) {
+                wolfSSL_Debug("Error setting up PSK key.");
+                return HANDSHAKE_FAILURE;
+            }
+            break;
+        }
+    }
+    
+    /* If a PSK extension was found but no valid entry was chosen, clear any pre-existing key data */
+    if (!pskFound) {
+        clearKeyData();
+    }
+}
+
+/* Process the Key Share extension and retrieve the named group.
+   Assume that if no key share extension is provided, negotiatedNamedGroup is zero. */
+uint16_t negotiatedNamedGroup = extractKeyShareGroup(serverHello);
+    
+/* ---- NEW SECURITY CHECK ADDED HERE ---- */
+/* If neither a valid PSK nor a valid key share (nonzero named group) is available,
+   abort the handshake rather than using a default, predictable IKM value. */
+if (!pskFound && (negotiatedNamedGroup == 0)) {
+    wolfSSL_Debug("Error: Neither a valid PSK nor a Key Share extension provided. Aborting TLS session.");
+    return HANDSHAKE_FAILURE;
+}
+
+/* Continue with further TLS session setup and key derivation,
+   knowing that either a secure PSK or key share is available. */
+
+/* (Remaining code that performs key derivation and enables encryption) */
+--------------------------------------------------
+
+Explanation:
+1. After handling PSK negotiation, the flag pskFound is used to indicate if a legitimate PSK was selected.
+2. Independently, the key share section sets negotiatedNamedGroup to a nonzero value if a valid key share is provided.
+3. Just before key derivation and encryption activation, the new conditional check ensures that if both pskFound is false and negotiatedNamedGroup is zero (i.e. no secure key material was negotiated), the handshake is terminated with a HANDSHAKE_FAILURE error.
+4. This prevents the TLS session from using a vulnerable default IKM value.
+
+This repair enforces that a TLS session will only be established when there is either valid PSK material or a valid key share, thereby mitigating the vulnerability related to the use of a predictable input key material.

@@ -1,0 +1,19 @@
+The original code snippet in the `ssl3_get_cert_verify` function checks if the received message type is not `SSL3_MT_CERTIFICATE_VERIFY`. If this condition is met, it sets a flag to reuse the message and checks if the peer is not null and if the type includes signing capabilities (`EVP_PKT_SIGN`). If both conditions are true, it sends an alert indicating an unexpected message and missing verify message, then returns an error.
+
+However, the vulnerability arises because the function does not specifically check whether a `CertificateVerify` message is required when the peer's certificate uses a Diffie-Hellman (DH) algorithm. This omission allows an attacker to bypass the requirement for a `CertificateVerify` message by using a DH certificate, thus obtaining unauthorized access without proving possession of the private key.
+
+To address this vulnerability, the repair introduces an additional check to determine if the peer's certificate uses a DH algorithm. This is done by examining `peer.cert.key->type`, which should indicate the type of key used in the certificate. If the key type is `EVP_PKEY_DH`, the function treats the absence of a `CertificateVerify` message as a violation of the protocol, similar to how it would handle other types of keys that require a `CertificateVerify` message.
+
+Here’s a detailed breakdown of the repair:
+
+1. **Condition Check**: The existing condition `if (s.s3.tmp.message_type != Constants.SSL3_MT_CERTIFICATE_VERIFY)` remains unchanged. This ensures that the function only proceeds if the current message is not a `CertificateVerify` message.
+
+2. **Peer and Type Validation**: The subsequent condition `if (peer != null && (type & Constants.EVP_PKT_SIGN) != 0)` also remains intact. This ensures that the function continues to check if the peer is present and capable of signing messages.
+
+3. **Key Type Check**: A new condition `&& peer.cert.key->type == EVP_PKEY_DH` is added. This condition checks if the key type associated with the peer's certificate is DH. By adding this check, the function can differentiate between certificates that use DH and those that do not.
+
+4. **Alert and Error Handling**: If the key type is DH and no `CertificateVerify` message is received, the function sends an alert (`SSL_AD_UNEXPECTED_MESSAGE`) and logs an error (`SSL_R_MISSING_VERIFY_MESSAGE`). It then sends a fatal alert to the peer and returns an error value (`ret`). This ensures that the connection is terminated if the protocol requirements are not met.
+
+5. **Return Value**: If the key type is not DH, or if the message type is `CertificateVerify`, the function returns `1`, indicating successful processing of the message.
+
+By implementing these changes, the function now correctly enforces the requirement for a `CertificateVerify` message when using a DH certificate, thereby mitigating the vulnerability described. This ensures that only clients who prove possession of the private key corresponding to their certificate can establish a secure connection, maintaining the integrity and security of the TLS handshake process.

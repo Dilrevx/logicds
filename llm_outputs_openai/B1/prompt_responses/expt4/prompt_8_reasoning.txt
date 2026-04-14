@@ -1,0 +1,15 @@
+The repair fixes the vulnerability by ensuring that if a client provides a certificate, then a CertificateVerify message must always be present. Previously, if the certificate didn’t include a signing flag, such as in a DH certificate flow, the absence of a CertificateVerify message could be overlooked. That loophole meant an attacker using a DH certificate might bypass proper authentication.
+
+Here’s what changed:
+
+1. In the original code, the check for a missing CertificateVerify message was conditional: if a peer certificate existed and the certificate type indicated signing capability (using a flag check), an error was raised. If the certificate lacked that flag (e.g., a DH certificate), the error wasn’t raised, and the handshake would continue. The repair removes this “exception” by immediately failing if a certificate is present but the CertificateVerify message is missing. In the repaired version, whenever a certificate (peer) exists and the expected message type isn’t CertificateVerify, it directly sets an error for a missing verify message and jumps to the error handling block.
+
+2. This change guarantees that every client presenting a certificate must also provide the CertificateVerify message. It removes the dependency on checking whether the certificate’s type bit (EVP_PKT_SIGN) indicates signing. Thus, for a Diffie-Hellman (or any certificate without the signing flag), the absence of the CertificateVerify message now results in an error, eliminating the possibility for bypassing authentication.
+
+3. After confirming that the CertificateVerify message is present, subsequent verification procedures (e.g., using EVP_Verify or RSA/DSA/ECDSA verification routines) are performed as before to validate the signature. The rest of the code for cryptographic verification remains unchanged, ensuring that if the message is present, its cryptographic integrity is correctly checked.
+
+4. In addition, proper cleanup is ensured by releasing resources like the handshake buffer and freeing the public key. This prevents any potential resource leaks.
+
+By enforcing that a CertificateVerify message must accompany any client certificate, the modifications close the vulnerability window. An attacker can no longer skip this critical step to authenticate without having knowledge of the private key. The repair strictly enforces the TLS protocol’s requirement that the client must prove possession of the private key associated with the certificate—ensuring that even if a DH certificate is used, the secure proof (CertificateVerify) is required and verified.
+
+In summary, the repair adjusts the logic to treat the presence of any client certificate as necessitating a CertificateVerify message. This stricter check effectively eliminates the vulnerability that allowed for bypassing authentication when a DH certificate is used without the CertificateVerify message.

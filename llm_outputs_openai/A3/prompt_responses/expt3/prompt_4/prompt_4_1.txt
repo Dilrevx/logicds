@@ -1,0 +1,41 @@
+Below is one example of a patch that checks for an illegal custom cipher setup – one whose NID is NID_undef – before “falling back” to the provider’s (NULL) cipher. This repair makes sure that if an application accidentally creates a legacy custom cipher using NID_undef, the initialisation fails rather than silently using the NULL cipher (which would “encrypt” data by simply copying plaintext to ciphertext).
+
+For example, the patched snippet might look like this:
+
+------------------------------------------------------------
+/* Example patched code snippet */
+if (ctx->engine != NULL
+#if !defined(OPENSSL_NO_ENGINE) && !defined(FIPS_MODULE)
+        || tmpimpl != NULL
+#endif
+        || impl != NULL) {
+
+    /*
+     * Check if the legacy custom cipher was created with an undefined NID.
+     * This prevents it from matching the provider's NULL cipher when NID_undef is used.
+     */
+    if (EVP_CIPHER_nid(ctx->fetched_cipher) == NID_undef) {
+        EVP_CIPHER_free(ctx->fetched_cipher);
+        ctx->fetched_cipher = NULL;
+        /* Raise an error and abort the initialisation to avoid using the NULL cipher */
+        ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_CIPHER);    /* Use an appropriate error code */
+        return 0;  /* or goto appropriate error-handling label */
+    }
+
+    /* Otherwise, continue cleanup as before */
+    if (ctx->cipher == ctx->fetched_cipher)
+        ctx->cipher = NULL;
+    EVP_CIPHER_free(ctx->fetched_cipher);
+    ctx->fetched_cipher = NULL;
+    goto legacy;
+}
+------------------------------------------------------------
+
+Explanation of the changes:
+1. Before doing any cleanup or falling back to legacy mode, the patch calls EVP_CIPHER_nid() on the fetched cipher.
+2. If the fetched cipher’s NID is NID_undef (which signals that the custom cipher was created using an undefined identifier), then the routine immediately frees the fetched cipher and raises an error.
+3. By returning (or branching to an error-handling routine) when a custom cipher with NID_undef is detected, the code avoids mistakenly matching against the provider’s NULL cipher – averting the scenario where plaintext is output as “ciphertext.”
+
+This patch thereby mitigates the vulnerability described by ensuring that legacy ciphers with NID_undef are detected early and not inadvertently replaced by the NULL cipher from the provider.
+
+(Adjust error-handling and return codes as needed to integrate with the rest of your code base.)

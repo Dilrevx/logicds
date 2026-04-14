@@ -1,0 +1,21 @@
+The main point of the repair is to correctly differentiate between DTLS and non-DTLS sessions when determining whether to call the generateClientRandom function. Here’s what happened in the faulty logic and how the fix resolves it:
+
+1. Original Vulnerability:
+ • The original condition used an AND (&&) operator which forced both sides to be true for the generateClientRandom to be executed. In that code, the second part of the condition was (session.isDTLS() && session.getInternals().getDtls().getHskHelloVerifyRequests() == 0).
+ • This means that if the session was not using DTLS, the condition session.isDTLS() would return false, preventing the entire compound condition from being true. Consequently, generateClientRandom wouldn’t be called for non-DTLS sessions. 
+ • This is a vulnerability because it overlooked the need to call generateClientRandom in non-DTLS scenarios, potentially leaving the session without a required random value, which might affect the security and proper progression of the handshake.
+
+2. The Fix:
+ • The repair changes the logic to: 
+  if ((session.getInternals().getHskFlags() & Constants.HSK_HRR_RECEIVED) == 0 &&
+    (!session.isDTLS() || session.getInternals().getDtls().getHskHelloVerifyRequests() == 0))
+ • In this revised condition, the OR (||) operator is used along with a negation for non-DTLS sessions.
+ • Here’s how the new conditional works:
+  – For non-DTLS sessions (i.e., session.isDTLS() returns false), the left part of the OR condition (!session.isDTLS()) is true, regardless of the second part. This means generateClientRandom will now be executed as intended for non-DTLS sessions.
+  – For DTLS sessions (i.e., session.isDTLS() returns true), the condition requires that session.getInternals().getDtls().getHskHelloVerifyRequests() equals 0. So, if there are existing Hello Verify requests, generateClientRandom won’t be called, maintaining the proper flow of the DTLS handshake.
+ 
+3. Security Impact:
+ • By correctly accounting for non-DTLS sessions, the repair ensures that the handshake process isn’t prematurely terminated or bypassed. Generating a client random value is a critical step in establishing a secure session; failure to do so could weaken the cryptographic strength or lead to handshake state inconsistencies, creating exploitable conditions.
+ • The new logic also avoids incorrectly skipping the step in DTLS sessions that actually have received a Hello Verify Request, hence preserving the intended security control measures.
+
+In summary, the repair fixes the vulnerability by correcting the logical condition used to decide when to generate the client random value. This ensures both DTLS and non-DTLS sessions handle the handshake correctly, thereby preventing potential security issues related to improper handling of session random generation.

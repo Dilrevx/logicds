@@ -1,0 +1,17 @@
+The repair primarily focuses on properly reading and validating the reserved field at the end of the KEXINIT message. In the original code, the reserved field was always assumed to be zero without explicitly reading it from the packet. This omission could allow attackers to manipulate the reserved field or bypass integrity checks during negotiation.
+
+Here’s what was changed and why it matters:
+
+1. Reading the Reserved Field:  
+   The repaired code now calls ssh_buffer_get_u32(packet, &kexinit_reserved) to explicitly extract the reserved 32-bit value from the packet. This ensures that any value transmitted by a malicious actor isn’t ignored. By verifying that the reserved field is present (i.e., rc returns 4, the proper number of bytes), the code prevents situations where a packet might omit this part of the protocol.
+
+2. Validating the Reserved Field’s Value:  
+   After reading the reserved field, the repair verifies that its value is exactly zero. If it isn’t (i.e., kexinit_reserved != 0), the code sets an error and aborts processing. This check is critical because the protocol specification requires this field to be 0. An attacker might try to set this field to a non-zero value to interfere with the handshake integrity or bypass certain checks. By enforcing the correct value, the repair ensures that any deviation is treated as a protocol error.
+
+3. Incorporating the Reserved Field into the Hash:  
+   The reserved field is also added into the hash buffer (ssh_buffer_add_u32(session->in_hashbuf, kexinit_reserved)). Including this field in the hash calculation maintains the integrity of the KEXINIT message. This is important because if an attacker were to manipulate parts of the message (for instance, omitting or modifying certain bytes), it could potentially lead to a mismatch in the session identification process, which is a step in the Terrapin attack. Hashing the reserved field along with the rest of the message ensures that any tampering is detected.
+
+4. Preventing Bypass of Integrity Checks:  
+   By strictly adhering to the protocol specification (i.e., reading and confirming that the reserved field is zero), the new code prevents a remote attacker from exploiting the handshake process. Previously, the mishandling of sequence numbers and the omission of packet fields could allow an attacker to manipulate the state and bypass cryptographic integrity checks. The repair forces the client or server to process the entire message correctly, ensuring that security features such as authentication and cryptographic verification are not downgraded or disabled.
+
+In summary, the repair mitigates the vulnerability by ensuring that every field defined by the protocol (including the reserved field) is both present and correctly valued. This additional check and proper inclusion in the session hash strengthens the overall integrity of the key exchange process, making it much harder for an attacker to exploit protocol weaknesses like those identified in the Terrapin attack.

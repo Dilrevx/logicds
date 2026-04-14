@@ -1,0 +1,27 @@
+The provided repair addresses the "CCS Injection" vulnerability, which is a critical flaw in the handling of ChangeCipherSpec (CCS) messages within the OpenSSL library. This vulnerability can allow an attacker to hijack a TLS session or obtain sensitive information by injecting a malicious CCS message during the TLS handshake process.
+
+### Understanding the Vulnerability
+
+In a typical TLS handshake, the ChangeCipherSpec (CCS) message is used to indicate that subsequent messages from one party will be encrypted using the newly negotiated encryption parameters. The CCS message is a single byte with the value `SSL3_MT_CCS` (which is 1). In the buggy code snippet, OpenSSL checks if the CCS message meets these criteria, but it fails to ensure that the CCS message is received at the correct time in the handshake sequence. Specifically, it does not verify that the CCS message follows the `ServerHelloDone` message from the server, which is the proper point in the handshake where the client should receive the CCS message.
+
+An attacker can exploit this by injecting a CCS message before the `ServerHelloDone`, causing the client to prematurely change its encryption state. This can lead to the use of a zero-length master key, effectively bypassing encryption, and allowing the attacker to intercept or tamper with the session data.
+
+### Explanation of the Repair
+
+The repair introduces a new check to ensure that the CCS message is received only when expected, specifically after the `ServerHelloDone` message. This is achieved by adding a flag, `TLS1_FLAGS_EXPECT_CCS`, which indicates whether the client is expecting a CCS message at that point in the handshake.
+
+Here’s a detailed breakdown of the changes made:
+
+1. **Introduce a Flag**: A new flag `TLS1_FLAGS_EXPECT_CCS` is introduced in the `s->s3->flags` bitmask. This flag is set when the client expects to receive a CCS message, typically after receiving the `ServerHelloDone`.
+
+2. **Check the Flag Before Processing CCS**: Before processing the CCS message, the code now checks if the `TLS1_FLAGS_EXPECT_CCS` flag is set. If the flag is not set, indicating that the CCS message was received at an unexpected time, an error is raised (`SSL_AD_UNEXPECTED_MESSAGE`), and the handshake is terminated.
+
+3. **Clear the Flag After Receiving CCS**: Once the CCS message is successfully processed, the `TLS1_FLAGS_EXPECT_CCS` flag is cleared to prevent further CCS messages from being processed incorrectly.
+
+By implementing these changes, the OpenSSL library ensures that the CCS message is handled only at the correct stage of the TLS handshake, preventing attackers from injecting malicious CCS messages that could disrupt the security of the session.
+
+### Impact of the Repair
+
+This repair significantly enhances the security of TLS handshakes by ensuring that the CCS message is processed only when it is expected. It mitigates the risk of CCS injection attacks, which could otherwise allow an attacker to intercept or manipulate encrypted data. The addition of the `TLS1_FLAGS_EXPECT_CCS` flag provides a robust mechanism to track the expected state of the handshake, making it more difficult for an attacker to inject messages at inappropriate times.
+
+In summary, the repair addresses a critical vulnerability in the OpenSSL library by enforcing the correct timing of the CCS message during the TLS handshake, thereby maintaining the integrity and confidentiality of encrypted communications.

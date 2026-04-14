@@ -1,0 +1,25 @@
+The repair adds an extra safeguard right after the PSK processing block. Here’s a walk-through of the changes and how they address the vulnerability:
+
+1. PSK Processing:  
+   The code first checks for the presence of the PSK extension in the Server Hello message. If found, it walks through the list of PSKs until it finds one that was “chosen.” If no valid PSK is found, it resets the PSK key buffer to a zeroed state. In the original code, even after zeroing out the PSK key, the handshake could proceed, which meant that key derivation might end up using a default, predictable IKM (input keying material) value.
+
+2. Added Safeguard:  
+   Immediately following the PSK handling, the patch introduces a new check:
+   
+       if (!ssl->options.pskNegotiated && (ssl->session.namedGroup == 0)) {
+           return EXT_MISSING;
+       }
+   
+   This line verifies two critical conditions:
+   - Whether a PSK was successfully negotiated (indicated by the flag ssl->options.pskNegotiated).  
+   - Whether a key share is present, as indicated by a non-zero namedGroup (which would typically be populated if a key share extension was correctly received).
+   
+   If both conditions fail—meaning no PSK was negotiated and no valid key share exists—the function returns an error immediately (EXT_MISSING). This return value prevents the handshake from continuing on with insecure parameters.
+
+3. Impact on Security:  
+   By enforcing that at least one of the two secure key derivation inputs (a negotiated PSK or a valid key share from a non-zero namedGroup) must be present, the patch effectively prevents the system from falling back on the default, zeroed PSK buffer. The original vulnerability involved situations where an attacker could force the client to use this predictable keying material if both PSK and key share data were absent. With the check in place, the handshake will be aborted instead of inadvertently generating a session master secret from insecure input data.
+
+4. Overall Effect:  
+   This repair ensures that a TLS 1.3 session will only proceed if secure, unpredictable key material is available for key derivation. It removes the possibility for an attacker to exploit a scenario where fallback mechanisms would otherwise lead to the generation of a compromised session key. Essentially, the handshake process now requires a valid input (either from a PSK or a key share), avoiding the use of a default buffer that can be predicted by an adversary.
+
+In summary, the repair fixes the vulnerability by stopping the handshake when neither a PSK is negotiated nor a key share extension is provided, thereby preventing the use of insecure and predictable key input material for session key generation.

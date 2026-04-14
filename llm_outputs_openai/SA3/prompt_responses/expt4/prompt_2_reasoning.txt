@@ -1,0 +1,14 @@
+The repair adds an extra condition to the if-statement to ensure that the legacy-handling branch is only executed when a legacy cipher is definitely in use.
+
+Originally, the decision for legacy handling was made based on environment properties—if an engine was attached, certain engine-specific flags were set, or if special implementations were provided (tmpImpl or impl). However, these conditions alone were insufficient because they didn’t check if the cipher itself was meant to be processed using a legacy method. This left a loophole: if an application mis-supplied a custom cipher (for example, one with NID_undef that could be misinterpreted as the NULL cipher), then the system might mistakenly fetch and use an insecure cipher from the default provider.
+
+The repair remedies this by including a further check on the origin of the cipher. Specifically, it performs the following verifications before invoking legacy handling:
+1. It first confirms that one of the original conditions is met (engine attached, engine-specific flags active, or a non-null tmpImpl/impl). These conditions imply that there’s an unusual state that might require special handling.
+2. It then checks whether the provided cipher (if it exists) is a legacy cipher (using the method isLegacy()). If a cipher isn’t provided, it falls back to checking if the cipher already stored in the context (ctx.getCipher()) is a legacy cipher.
+
+By using these combined conditions, the code precisely distinguishes between a custom legacy cipher and a provider-supplied cipher. This prevents the system from inadvertently substituting the custom cipher with one fetched from the providers—such as the insecure NULL cipher. Essentially, only when it’s clear that a legacy cipher is in use does the code trigger legacy handling, which does the following:
+- It clears the cipher if it matches a previously fetched equivalent.
+- It frees any fetched cipher and resets its state in the context.
+- Finally, it calls the legacyHandling() function so that the custom logic for the legacy cipher is executed.
+
+This repair bypasses the vulnerability by ensuring that if a custom cipher is being used (even indirectly through a legacy mechanism), there is no opportunity for a misinterpretation that would default to using an insecure provider's cipher. The additional explicit checks make sure that legacy handling only occurs when a legacy cipher is explicitly involved, thereby blocking the insecure fallback behavior observed in vulnerable OpenSSL versions.

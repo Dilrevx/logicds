@@ -1,0 +1,11 @@
+The original vulnerability was that an attacker could craft a TCP stream that would leave the connection in a CLOSE_WAIT state indefinitely because the socket wasn’t closed immediately when the detachment was deferred to an asynchronous event. The repair addresses this issue by forcing an immediate socket close on the affected thread.
+
+1. In the else branch (when the current thread isn’t the same as the socket’s designated thread), before queuing the asynchronous detach event, the repair calls setsockopt to set the SO_LINGER option on the socket. 
+
+2. This is done with a linger structure that has l_onoff set to 1 and l_linger set to 0. This configuration means that when the socket is closed, the operating system will discard any unsent data and close the connection immediately. By doing so, the socket is forced to transitioning out of the CLOSE_WAIT state, even if the TCP stream is crafted to delay the normal shutdown process.
+
+3. After setting SO_LINGER, the code proceeds with fetching a detach event (similar to the original code) and enqueues it for asynchronous processing. This pattern ensures that the socket cleanup is handled properly regardless of whether the current thread is the designated thread for the socket.
+
+4. The key change is the addition of the SO_LINGER option configuration. This directly addresses the vulnerability by preventing the scenario where a socket remains in a CLOSE_WAIT state due to delayed or hanging operations. It ensures that once the asynchronous detach is scheduled, any pending data or connection-specific state causing the close delay is bypassed by enforcing an immediate shutdown.
+
+In summary, the repair forces a definitive termination of the TCP connection by configuring the socket to close immediately via SO_LINGER, which is critical in scenarios where asynchronous detachment might otherwise allow a maliciously crafted TCP stream to indefinitely keep the connection open in CLOSE_WAIT.

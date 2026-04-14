@@ -1,0 +1,15 @@
+The repair starts by wrapping the processing of ChangeCipherSpec (CCS) messages with an additional validation check that enforces a policy flag. This flag—SSL3_FLAGS_CCS_OK—is set only when CCS messages are allowed. If the flag is not set, meaning that CCS messages should not be processed at this point (for example, during parts of the handshake when their usage could cause a vulnerability), the code raises an unexpected message error and jumps to error handling. This prevents attackers from injecting CCS messages when they are not supposed to be accepted.
+
+Here’s how the repair works in detail:
+
+1. The first conditional checks if the record type is SSL3_RT_CHANGE_CIPHER_SPEC. If so, the code further checks if the flag SSL3_FLAGS_CCS_OK is present in s->s3->flags. If the flag isn’t set, an error condition is triggered by setting the alert level to SSL_AD_UNEXPECTED_MESSAGE and calling SSLerr with the SSL_R_CCS_RECEIVED_EARLY error code. This stops any further processing of a CCS message when it is unexpected, stopping the potential injection attack that might lead to using an insecure, zero-length master key.
+
+2. Next, if the flag is set (meaning CCS messages are allowed at that point), the code verifies the actual payload of the record. Since a valid CCS message is exactly one byte long, the code ensures that rr->length equals 1, that the read offset (rr->off) is zero, and that the data byte equals SSL3_MT_CCS. This confirms that the record content is exactly what is expected for a CCS message.
+
+3. The repair then checks that a new cipher (s->s3->tmp.new_cipher) has been negotiated. If this is null, it means that a CCS message was received too early in the handshake (before a new cipher was established), so the code again raises an error. This prevents the scenario where a CCS message might prematurely trigger a change of cipher state, which can lead to session hijacking.
+
+4. If all checks pass, the record’s length is set to zero to mark that it has been fully processed. If a message callback function is registered, it is invoked to log or further process the CCS message. Then the change_cipher_spec flag in the SSL state is set to indicate that a CCS message has been received. The function ssl3_do_change_cipher_spec is called to effect the actual cipher change. If this call fails, the code goes to error handling; otherwise, the function jumps back to the start label to process further records from the stream.
+
+By adding this extra layer of validation (checking for the SSL3_FLAGS_CCS_OK flag) and by rigorously verifying the exact payload and conditions under which a CCS message is accepted, the repair directly addresses the vulnerability. It prevents man-in-the-middle attackers from injecting a CCS message at improper times during the handshake, which was the root of the CCS injection vulnerability.
+
+This repair ensures that CCS messages are only accepted when the protocol state explicitly permits it, thereby maintaining the integrity of the session’s keying material.

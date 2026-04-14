@@ -1,0 +1,11 @@
+The repair introduces an extra condition to ensure that an immediate, synchronous detachment is performed only when it is both safe and appropriate. Originally, the code only checked whether the current thread identifier (sock->tid) matched the expected thread (returned by isc_nm_tid()). However, if a close-handle callback was already registered—that is, if the pointer indicating an ongoing asynchronous detachment (sock->closecb) was not NULL—the immediate detachment could conflict with the pending asynchronous operation. This conflict could potentially leave TCP connections in a lingering CLOSE_WAIT state.
+
+In the repaired version, the condition now verifies two things before invoking the immediate detachment callback:
+1. The current thread identifier must match the expected thread.
+2. There must be no pending close-handle callback (i.e., sock->closecb must be NULL).
+
+These two checks ensure that an immediate detachment is attempted only when the socket is in a state that is safe for synchronous handling. If the thread matches but a close-handle callback is already set, it indicates that the socket is already scheduled for asynchronous cleanup, and performing an immediate action could interfere with that process.
+
+When both conditions are met, the code calls the immediate detachment function, ensuring that the cleanup is handled promptly and consistently. On the other hand, if either the thread identity does not match or a close-handle callback is already active, the code falls back to preparing an asynchronous event. The event is then enqueued to be processed later on the designated worker thread. This deferred cleanup ensures that no two detachment processes overlap, thereby preventing potential mishandling or resource leaks.
+
+In summary, this repair eliminates a vulnerability where overlapping detachment operations could cause improper socket cleanup and eventually leave connections in an undesirable state. By adding the extra check for the absence of a registered close-handle callback, the code now safely distinguishes between when to perform immediate detachment versus scheduling an asynchronous detachment task. This careful coordination maintains the integrity of the resource management logic, ensuring that TCP connections are cleanly and reliably closed without risk of them lingering indefinitely in the CLOSE_WAIT state.

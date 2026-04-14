@@ -1,0 +1,15 @@
+The repair adds explicit checks to ensure that the Common Name (CN) provided by the caller exactly matches what’s in the certificate, rather than accepting a partial match that could lead to security issues. Here’s a breakdown of the changes and their rationale:
+
+1. Checking for a NULL value:  
+   The code now verifies that the CN pointer is not NULL. If it’s NULL, the function immediately flags the certificate as invalid by OR-ing a specific error flag. This is important because a NULL CN would lead to undefined behavior when performing string operations like strlen and memcmp.
+
+2. Exact length matching for Subject Alternative Names (SANs):  
+   When iterating through the SAN entries, the repair ensures that both the length of the certificate’s SAN entry and the provided CN match exactly (by comparing the lengths and then using memcmp). This prevents a vulnerability where a certificate containing additional characters would be accepted if only the initial segment matched. The exact match requirement ensures that only a perfect match clears the error flag.
+
+3. Exact matching for the Common Name from the certificate subject:  
+   In the loop that iterates over the subject’s list of names, the repair explicitly selects only entries corresponding to the Common Name OID. For these entries, the code again checks if the certificate’s CN length exactly equals the CN provided by the caller. The memcmp then strictly compares these two byte sequences. This adjustment ensures that a certificate with a name longer than expected—even if it starts with the provided string—is not mistakenly validated. Such a scenario could otherwise allow an attacker to craft a certificate that only partially matches the expected CN.
+
+4. Flag management:  
+   The function clears the mismatch flag (i.e., removes MBEDTLS_X509_BADCERT_CN_MISMATCH from flags) only when an exact match is found. If no SAN or subject CN exactly matches the provided CN, then the flag is set. This clear, binary decision based on exact matching reduces the risk of incorrectly validating an invalid certificate.
+
+Overall, the vulnerability was due to possible partial matches of the provided name against certificates, which could have allowed an attacker to supply a name that merely begins with the expected value. By enforcing that the length of the certificate’s CN or SAN must be exactly equal to the length of the provided CN, the repair prevents attackers from exploiting a substring matching flaw—thus enhancing security by ensuring strict identity verification.

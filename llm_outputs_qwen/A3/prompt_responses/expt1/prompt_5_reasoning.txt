@@ -1,0 +1,25 @@
+The provided code snippet is part of a cryptographic library function responsible for initializing a cipher context in OpenSSL, a widely-used open-source implementation of the Transport Layer Security (TLS) and Secure Sockets Layer (SSL) protocols. The function `evp_cipher_init_internal` is crucial for setting up the encryption or decryption process, where it prepares the context with the necessary parameters such as the cipher type, key, initialization vector (IV), and whether the operation is for encryption or decryption.
+
+### Identifying the Vulnerability
+
+The identified vulnerability lies in how OpenSSL handles custom ciphers created using the legacy `EVP_CIPHER_meth_new()` function and its related methods. Specifically, the issue arises when a custom cipher is created with `NID_undef` as its NID (Numerical Identifier). In OpenSSL, NIDs are unique identifiers for various cryptographic objects like algorithms and ciphers. When `NID_undef` is mistakenly used, it can lead to the selection of the NULL cipher, which essentially does no encryption or decryption, effectively nullifying the security of the intended cryptographic operations.
+
+### The Bug
+
+The bug stems from the fact that OpenSSL's initialization functions, including `EVP_EncryptInit_ex2()`, `EVP_DecryptInit_ex2()`, and `EVP_CipherInit_ex2()`, incorrectly handle custom ciphers with `NID_undef`. Instead of using the custom cipher directly, these functions attempt to fetch an equivalent cipher from the available providers based on the NID. Since `NID_undef` does not correspond to any valid cipher, OpenSSL defaults to the NULL cipher, which results in plaintext being output as ciphertext, thus bypassing encryption.
+
+### The Repair
+
+To address this vulnerability, the repair involves adding a check to ensure that the cipher's NID is not `NID_undef` before proceeding with the initialization. This check is crucial because it prevents the function from using a cipher that could lead to insecure behavior. Here’s a detailed breakdown of the repair:
+
+1. **Check for `NID_undef`:** Before initializing the cipher context, the function checks if the cipher's NID is `NID_undef`. This is done with the condition `if (cipher != NULL && cipher->nid == NID_undef)`.
+
+2. **Error Handling:** If the NID is indeed `NID_undef`, the function raises an error using `ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_CIPHER)`. This error indicates that an invalid cipher was specified, which helps in debugging and ensures that the calling application is aware of the issue.
+
+3. **Return Error Status:** After raising the error, the function returns `0`, indicating failure. This stops the execution of the function and prevents any further operations that could lead to the use of the NULL cipher.
+
+4. **Preserve Legacy Functionality:** The rest of the function remains unchanged, ensuring that the existing logic for handling engines and providers continues to work as intended. This includes checking if an ENGINE is reserved for the job, freeing the fetched cipher if necessary, and jumping to the legacy handling if required.
+
+### Conclusion
+
+By implementing this repair, OpenSSL can prevent the accidental use of the NULL cipher, which would otherwise compromise the security of encrypted data. The added check ensures that only valid ciphers with proper NIDs are used, maintaining the integrity and security of cryptographic operations. This repair is particularly important in environments where custom ciphers might be used, as it adds an additional layer of validation to ensure that these ciphers are correctly configured and do not inadvertently introduce security vulnerabilities.

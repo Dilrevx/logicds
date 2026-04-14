@@ -1,0 +1,13 @@
+The repair adds a critical check right after reading in the signature data. Originally, the code only verified that the signature size followed buffer bounds, using conditions like confirming that (args->idx – args->begin) plus the signature length would not exceed the total size. However, that check was insufficient because it did not ensure that the certificate’s public key was of the correct type to match the signature algorithm that was negotiated. This opened a logical vulnerability where an attacker could potentially force a mismatch between the certificate’s public key and the signature algorithm, possibly leading to an insecure validation process.
+
+The repair introduces these modifications:
+
+1. Immediately after ensuring that the signature data length is within bounds, the code now validates the public key. It checks if the certificate (ssl->buffers.cert) is present and then calls a helper function, ValidPubKeyForSigAlg, passing the certificate and the negotiated signature algorithm (args->sigAlgo) as arguments. If the certificate is missing or the public key does not match the algorithm, the repair sets the return value to SIG_ALGO_MISMATCH and jumps to exit.
+
+2. This additional check enforces that only certificates with a valid public key type can be used for the CertificateVerify message. By doing so, it prevents an attacker from using a certificate that might be accepted by the record layer but would be incompatible with the intended cryptographic operations. This mismatch, if unchecked, could lead to erroneous behavior or even bypass of necessary cryptographic checks.
+
+3. After this verification, the repair code saves the pointer to the signature data and adjusts the index accordingly. It then calls Tls13VerifyCertSignature to perform the actual cryptographic verification using the provided hash algorithm, signature algorithm, the certificate’s public key, and the signature data.
+
+This repair effectively combines buffer-bound validations with a semantic check of the certificate’s public key compatibility. By ensuring that the public key not only exists but also meets the requirements for the selected signature algorithm, the repair addresses the vulnerability. It prevents the scenario where a mismatched or invalid public key would lead to undefined behavior or potential security breaches in the TLS 1.3 handshake process.
+
+In summary, the repair improves program security by adding a necessary validation step, ensuring that the certificate used in the process truly supports the signature algorithm being employed. This tightens the certificate verification process and prevents an attacker from exploiting a situation where an improper key type might be accepted, thereby fixing the identified vulnerability.

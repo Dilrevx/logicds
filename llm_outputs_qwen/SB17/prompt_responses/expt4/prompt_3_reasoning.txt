@@ -1,0 +1,33 @@
+The vulnerability described in the `tls_verify_crl` function pertains to an incorrect assumption about which field should be used to retrieve the Certificate Revocation List (CRL) entries. Specifically, the original code incorrectly checks for the `subject` field twice instead of checking once for the `subject` and once for the `issuer`. This oversight can lead to a situation where valid CRLs that use the `issuer` field to identify the relevant certificates are ignored. As a result, clients whose certificates have been revoked might still be able to establish a connection to the server, thereby compromising the security of the TLS connection.
+
+In a Public Key Infrastructure (PKI), CRLs are used to list certificates that have been revoked by their issuers before their natural expiration dates. When a client presents a certificate to a server during a TLS handshake, the server must verify that the certificate has not been revoked. This verification process involves checking the presented certificate against the CRLs issued by the same Certificate Authority (CA) that issued the certificate. The correct way to match a certificate to its corresponding CRL is by comparing the `issuer` field of the certificate with the `issuer` field of the CRL entries.
+
+The original buggy code snippet is as follows:
+
+```java
+if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 && !Commons.HAVE_LIBRESSL) {
+    crls = storeCtx.get1_crls(subject);
+}
+else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 && !Commons.HAVE_LIBRESSL) {
+    crls = Commons.get1_crls(storeCtx, subject);
+}
+```
+
+This code attempts to retrieve CRLs using the `subject` field of the certificate. However, this is incorrect because CRLs are associated with the `issuer` of the certificates they revoke, not the `subject`. The `subject` field typically refers to the entity to which the certificate was issued, whereas the `issuer` field identifies the CA that issued the certificate.
+
+To fix this vulnerability, the code needs to be modified to use the `issuer` field instead of the `subject` field when retrieving CRLs. The corrected code is as follows:
+
+```java
+if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 && !Commons.HAVE_LIBRESSL) {
+    crls = storeCtx.get1_crls(issuer); // Changed subject to issuer
+}
+else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 && !Commons.HAVE_LIBRESSL) {
+    crls = Commons.get1_crls(storeCtx, issuer); // Changed subject to issuer
+}
+```
+
+By making this change, the code now correctly retrieves the CRLs based on the `issuer` field, which is the appropriate field for matching CRLs to the certificates they revoke. This ensures that all valid CRLs are considered during the certificate revocation check, preventing revoked certificates from being accepted during the TLS handshake process.
+
+Furthermore, it's important to note that the context of the code suggests that `issuer` is already defined elsewhere in the `TlsCrlVerifier` class, as it is used in the corrected lines without any additional declaration or assignment. This implies that the `issuer` variable holds the correct value representing the issuer of the certificate being verified.
+
+In summary, the repair addresses the vulnerability by ensuring that CRLs are retrieved using the correct field (`issuer` instead of `subject`). This modification aligns with the standard practices in PKI for certificate revocation checks, enhancing the security of the TLS implementation by preventing connections from clients with revoked certificates.

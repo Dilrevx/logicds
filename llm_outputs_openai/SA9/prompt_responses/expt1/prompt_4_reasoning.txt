@@ -1,0 +1,23 @@
+The original code’s vulnerability stemmed from an incorrect logical condition that determined when to generate a client random value. In the buggy version, the conditional statement checked:
+
+  if (not received HRR) AND (DTLS with no HelloVerifyRequests)
+
+This meant that for non-DTLS sessions, the second part (DTLS-specific condition) would fail (because session.isDTLS() would be false), unexpectedly skipping the generation of a client random even when the handshake hadn’t received a Hello Retry Request (HRR). In contrast, for DTLS sessions missing HelloVerifyRequests, the condition would work as intended. This inconsistency could lead to an insecure handshake where the client random is never generated, which might cause unexpected behavior or weaker randomness.
+
+The repair fixed the vulnerability by reorganizing the condition to correctly handle both TLS (non-DTLS) and DTLS scenarios. The new logic is as follows:
+
+  if (HRR has not been received) AND (either the session is not DTLS OR, if it is DTLS, then there have been no HelloVerifyRequests) then generate the client random.
+
+Breaking this down:
+1. The first part ensures that the client random generation is only considered if a Hello Retry Request (HRR) has not already been received. This is common to both TLS and DTLS since after an HRR the handshake might follow a different path.
+2. The second part correctly distinguishes between TLS and DTLS:
+  • For non-DTLS sessions, since session.isDTLS() returns false, the negation (!session.isDTLS()) is true. This implies that regardless of the HelloVerifyRequests count, the overall second condition is satisfied, and the client random will be generated.
+  • For DTLS sessions, when session.isDTLS() returns true, we then require that getHskHelloVerifyRequests() equals 0. This ensures that in DTLS, the client random is only generated if no Hello Verify Requests have been received. 
+
+Thus, the logical operator has been correctly set up as an OR within the DTLS condition part, ensuring the intended behavior: generate the client random for all non-DTLS sessions, and for DTLS sessions, only when no HelloVerifyRequests are present.
+
+This change is critical because generating the client random is a key part of securing the handshake. Without it, the handshake might proceed without proper randomness, compromising cryptographic strength or even allowing adversaries to infer predictable values. By ensuring the correct conditions trigger client random generation across all protocols (TLS and DTLS), the vulnerability is effectively fixed.
+
+Additionally, immediately after the generation call, the code checks the return value. If there’s an error during client random generation, the handshake buffer (extdata) is cleared, and the error is returned. This control flow ensures that subsequent handshake steps aren’t performed on an inconsistent state, further securing the process.
+
+In summary, the repair addresses the logical flaw in the condition so that client random generation occurs appropriately for both TLS and DTLS, thereby closing a potential security gap in the handshake process.

@@ -1,0 +1,60 @@
+The repair addresses a vulnerability related to the handling of zone transfer requests for writable Dynamic Loadable Zone (DLZ) zones. In the original code, the `allowzonexfr` method, which is crucial for controlling zone transfers, was not being called for DLZ zones when they were writable. This oversight could lead to unauthorized zone transfers, compromising the security and integrity of the DNS data.
+
+### Analysis of the Vulnerability
+
+In the original code, the `allowzonexfr` method is called only when the zone is not found in the normal zone table and the system attempts to find a match in the DLZ databases. However, once a DLZ zone is identified, the code does not call `allowzonexfr` again to check if the zone transfer should be permitted. Instead, it proceeds directly to set up the transfer without performing the necessary authorization checks for writable DLZ zones.
+
+### The Repair
+
+The repair involves modifying the code to ensure that `allowzonexfr` is called for all DLZ zones, regardless of whether they are writable or not. This ensures that the zone transfer control mechanisms are consistently applied across all types of zones.
+
+#### Key Changes Made
+
+1. **Conditional Check for DLZ Zones**:
+   - Before proceeding with setting up the zone transfer, the code now checks if the zone is a DLZ zone (`if (is_dlz)`).
+   - If the zone is a DLZ zone, the code calls `dns_dlzallowzonexfr` to determine if the zone transfer should be allowed.
+
+2. **Handling Authorization Results**:
+   - If `dns_dlzallowzonexfr` returns `ISC_R_NOPERM`, indicating that the zone transfer is not permitted, the code logs an error message and denies the transfer.
+   - If `dns_dlzallowzonexfr` returns any other result that is not `ISC_R_SUCCESS`, the code treats it as a non-authoritative zone and denies the transfer.
+
+3. **Maintaining Consistent Transfer Setup**:
+   - After ensuring that the zone transfer is authorized, the code proceeds to set up the transfer in the same manner as it does for non-DLZ zones.
+
+#### Code Snippet Highlighting the Change
+
+```c
+/*
+ * Decide whether to allow this transfer.
+ */
+if (is_dlz) {
+    result = dns_dlzallowzonexfr(client->view, question_name, &client->peeraddr, &db);
+    if (result == ISC_R_NOPERM) {
+        char _buf1[DNS_NAME_FORMATSIZE];
+        char _buf2[DNS_RDATACLASS_FORMATSIZE];
+
+        result = DNS_R_REFUSED;
+        dns_name_format(question_name, _buf1, sizeof(_buf1));
+        dns_rdataclass_format(question_class, _buf2, sizeof(_buf2));
+        ns_client_log(client, DNS_LOGCATEGORY_SECURITY,
+                      NS_LOGMODULE_XFER_OUT,
+                      ISC_LOG_ERROR,
+                      "zone transfer '%s/%s' denied",
+                      _buf1, _buf2);
+        goto failure;
+    }
+    if (result != ISC_R_SUCCESS)
+        FAILQ(DNS_R_NOTAUTH, "non-authoritative zone",
+              question_name, question_class);
+} else {
+    ns_client_aclmsg("zone transfer", question_name, reqtype,
+                     client->view->rdclass, msg, sizeof(msg));
+    CHECK(ns_client_checkacl(client, NULL, msg,
+                             dns_zone_getxfracl(zone),
+                             true, ISC_LOG_ERROR));
+}
+```
+
+### Conclusion
+
+By ensuring that the `allowzonexfr` method is called for all DLZ zones, the repair enhances the security of the DNS server by preventing unauthorized zone transfers. This modification aligns the handling of DLZ zones with the standard zones, ensuring consistent application of access control policies. The repair maintains the integrity and security of the DNS data, protecting it from potential misuse or unauthorized access.

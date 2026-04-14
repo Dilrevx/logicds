@@ -1,0 +1,17 @@
+The repair addresses the logical vulnerability in the CRL verification process. In the original code, when verifying the CRL’s signature, the public key was obtained from the current certificate (xs) rather than using the public key from the corresponding issuer certificate. This can be problematic because the CRL is actually signed by the issuing CA, so its proper verification requires the public key of the issuer, not the certificate being checked.
+
+Here’s what the repair does:
+
+1. It retrieves the certificate chain using X509_STORE_CTX_get_chain(ctx). The chain should contain the current certificate at index 0 and then the issuer certificate at index 1. If the chain is available and has more than one certificate, it extracts the issuer certificate. This ensures that the public key used for verifying the CRL’s signature truly belongs to the authority that signed the CRL.
+
+2. If the chain is not available or does not have a valid issuer certificate, the code falls back to using the current certificate’s public key. Although this fallback is less optimal, it provides a safe default that ensures the code still attempts verification rather than crashing.
+
+3. With the correct public key, the code calls X509_CRL_verify(crl, pubkey) to verify the signature on the CRL. If the verification fails (i.e., if the signature is invalid), the function logs the error, sets the proper error code, cleans up resources, and returns FALSE. This prevents accepting a CRL with an invalid signature.
+
+4. The code continues to check the CRL’s expiry by comparing its nextUpdate field with the current time. If the CRL is expired (or the nextUpdate field is invalid), it logs the issue, sets an appropriate error code, cleans up resources, and returns FALSE. This safeguards against using outdated revocation information.
+
+5. Finally, the code retrieves CRLs for the issuer of the current certificate to check if the certificate appears on any valid, non-expired revocation list. If the certificate is found on such a list, it is rejected.
+
+By using the correct public key (from the issuer certificate) to verify the CRL signature, the repair fixes the logical vulnerability. It prevents an attacker from potentially exploiting a mismatch in the verification key, which might allow a tampered or malicious CRL to be erroneously accepted if the current certificate’s key were used instead. All resource cleanup steps (like freeing the CRL stack and the store context) are also handled properly in every error path, ensuring no resource leaks occur during the verification process.
+
+Overall, the repair aligns the verification process with the intended security model, ensuring that CRL validation is performed against the appropriate cryptographic key and that the CRL validity period is correctly enforced.

@@ -1,0 +1,40 @@
+Below is one example of how you might change the code based on the repair description. The key idea is to examine whether the certificate being processed is truly the OCSP responder’s certificate, then choose between a “standard” verification (even if the NoCheck flag is present) or full OCSP verification. For example, you might introduce dedicated verification states (here represented as VERIFY_OCSP_STANDARD for the case when the NoCheck flag is present and VERIFY_OCSP_FULL otherwise) and check explicitly that you are working in the proper OCSP responder certificate context. One possible repair is as follows:
+
+--------------------------------------------------
+#ifdef HAVE_OCSP
+    /*
+     * First, confirm that we're processing an OCSP responder certificate.
+     * (Assume is_ocsp_responder(cert) is a helper that returns true if cert
+     * actually is being used in an OCSP response context.)
+     */
+    if (is_ocsp_responder(cert)) {
+        if (cert->ocspNoCheckSet) {
+            /* 
+             * Even though the certificate carries the NoCheck extension, we do not disable
+             * all validations. Instead, we switch to a verification level that still performs
+             * standard checks on the OCSP response.
+             */
+            verify = VERIFY_OCSP_STANDARD;
+        } else {
+            /* 
+             * If the certificate does not indicate NoCheck, do the full rigour OCSP checks.
+             */
+            verify = VERIFY_OCSP_FULL;
+        }
+    }
+#endif
+--------------------------------------------------
+
+Step-by-step explanation:
+
+1. The repair first confirms that we are indeed in the context of processing the responder’s certificate by calling a helper function such as is_ocsp_responder(cert). This prevents any certificate from being accidentally processed under OCSP-specific rules.
+
+2. Within that context, if the certificate has the NoCheck flag set (cert->ocspNoCheckSet is true), the code does not switch verification to a “no verify” mode. Instead, it uses a dedicated state (here VERIFY_OCSP_STANDARD) that might be defined to still go through a standard set of validations—even if they differ from a full verification—for the responder’s cert.
+
+3. If the certificate does not have the NoCheck flag set, then full OCSP validation is enforced (via VERIFY_OCSP_FULL).
+
+4. This approach ensures that the NoCheck extension does not cause an automatic bypass of checks, eliminating the vulnerability where an unrelated certificate response might be trusted without being fully validated.
+
+You may need to adjust the names (is_ocsp_responder, VERIFY_OCSP_STANDARD, VERIFY_OCSP_FULL) to match the conventions and definitions in your project. The main point is that the presence of NoCheck now results in a controlled “standard” verification rather than an unconditional bypass.
+
+This repair ensures that even if a certificate carries the NoCheck flag, it is still subject to proper verification within the OCSP responder’s certificate context, thereby closing the gap exploited by the original vulnerability.

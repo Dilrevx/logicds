@@ -1,0 +1,59 @@
+Below is one example of how to repair the bug step by step.
+
+–––––
+Step 1. Recognize the Problem
+
+The bug comes from this check:
+
+  if (!security_opts->acl_list && !security_opts->acl_patterns) {
+   return MOSQ_ERR_PLUGIN_DEFER;
+  }
+
+In the original code, when the ACL file is present but empty (or only contains comments/blank lines) both security_opts->acl_list and security_opts->acl_patterns remain NULL. This check then returns MOSQ_ERR_PLUGIN_DEFER—which tells Mosquitto “no ACL file provided” and effectively enables the default “allow‐all” policy. The intended behavior, however, is that if an ACL file is configured (even if empty) then the ACL plugin should act and by default deny everything.
+
+–––––
+Step 2. Determine the Appropriate Condition
+
+We must distinguish between “no ACL file configured at all” and “ACL file configured but empty.” One common way to do that is to check if an ACL file was explicitly specified. Suppose that the security options also include a field (for example, security_opts->acl_file) that holds the filename (or a flag) if an ACL file is configured. (If such a field is not already present, it is advisable to add it during configuration parsing.)
+
+Thus:
+• If no ACL file was specified (i.e. security_opts->acl_file is NULL) then it is OK to return MOSQ_ERR_PLUGIN_DEFER.
+• Otherwise, if an ACL file was configured—even if acl_list and acl_patterns end up empty—we want to continue loading the ACL plugin (which will deny all access in this case).
+
+–––––
+Step 3. Revise the Code Accordingly
+
+For example, the revised snippet might look like this:
+
+-------------------------------------------------
+  if (!security_opts->acl_file) {
+   /* No ACL file configured at all – continue to defer to default allow behavior */
+   return MOSQ_ERR_PLUGIN_DEFER;
+  }
+
+/* If an ACL file was provided, even if acl_list and acl_patterns are empty,
+   continue so that an empty ACL file yields a deny-all policy */
+-------------------------------------------------
+
+In this version, we only defer (and thereby use default access) if no ACL file has been configured. Otherwise, even if the ACL file is empty, the plugin continues processing and enforces the empty ACL (which will deny access by default).
+
+–––––
+Step 4. Verify the Behavior
+
+Test both scenarios:
+1. When no acl_file is provided—the plugin defers, allowing the default “allow all” behavior.
+2. When an acl_file is provided but is empty—the empty file is processed, and no valid ACL entries exist, so all accesses are denied.
+
+–––––
+Final Repaired Code Example
+
+Assuming that we now have a field security_opts->acl_file that is non-NULL when an ACL file is specified, the fixed snippet is:
+
+  if (!security_opts->acl_file) {
+   return MOSQ_ERR_PLUGIN_DEFER;
+  }
+  // Continue processing even if security_opts->acl_list and security_opts->acl_patterns are NULL,
+  // so that an empty ACL file enforces a deny-all policy.
+
+–––––
+This repair distinguishes between “no ACL file” (which should default to allow) and “ACL file provided but empty” (which should default to deny), thereby fixing the vulnerability.

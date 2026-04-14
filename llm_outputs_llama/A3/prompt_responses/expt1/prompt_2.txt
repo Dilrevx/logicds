@@ -1,0 +1,105 @@
+<repair>
+static int evp_cipher_init_internal(EVP_CIPHER_CTX *ctx,
+                                    const EVP_CIPHER *cipher,
+                                    ENGINE *impl, const unsigned char *key,
+                                    const unsigned char *iv, int enc,
+                                    const OSSL_PARAM params[])
+{
+    int n;
+#if!defined(OPENSSL_NO_ENGINE) &&!defined(FIPS_MODULE)
+    ENGINE *tmpimpl = NULL;
+#endif
+
+    ctx->iv_len = -1;
+
+    /*
+     * enc == 1 means we are encrypting.
+     * enc == 0 means we are decrypting.
+     * enc == -1 means, use the previously initialised value for encrypt/decrypt
+     */
+    if (enc == -1) {
+        if (ctx->encrypt == -1) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_NO_CIPHER_DIRECTION);
+            return 0;
+        }
+        enc = ctx->encrypt;
+    } else {
+        if (enc)
+            enc = 1;
+        ctx->encrypt = enc;
+    }
+
+    if (cipher == NULL && ctx->cipher == NULL) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_NO_CIPHER_SET);
+        return 0;
+    }
+
+    /* Code below to be removed when legacy support is dropped. */
+
+#if!defined(OPENSSL_NO_ENGINE) &&!defined(FIPS_MODULE)
+    /*
+     * Whether it's nice or not, "Inits" can be used on "Final"'d contexts so
+     * this context may already have an ENGINE! Try to avoid releasing the
+     * previous handle, re-querying for an ENGINE, and having a
+     * reinitialisation, when it may all be unnecessary.
+     */
+    if (ctx->engine && ctx->cipher
+        && (cipher == NULL || cipher->nid == ctx->cipher->nid))
+        goto skip_to_init;
+
+    if (cipher!= NULL && impl == NULL) {
+         /* Ask if an ENGINE is reserved for this job */
+        tmpimpl = ENGINE_get_cipher_engine(cipher->nid);
+    }
+#endif
+
+    if (cipher!= NULL && ctx->cipher!= NULL && cipher->nid!= ctx->cipher->nid) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_CIPHER_MISMATCH);
+        return 0;
+    }
+
+    if (cipher!= NULL) {
+        ctx->cipher = cipher;
+    }
+
+    if (impl!= NULL) {
+        ctx->engine = impl;
+    } else if (tmpimpl!= NULL) {
+        ctx->engine = tmpimpl;
+    } else {
+        ctx->engine = NULL;
+    }
+
+    if (key!= NULL) {
+        if (ctx->cipher->key_len > 0) {
+            if (ctx->key_len!= ctx->cipher->key_len) {
+                OPENSSL_free(ctx->key);
+                ctx->key = OPENSSL_malloc(ctx->cipher->key_len);
+                if (ctx->key == NULL) {
+                    ERR_raise(ERR_LIB_EVP, ERR_R_MALLOC_FAILURE);
+                    return 0;
+                }
+                ctx->key_len = ctx->cipher->key_len;
+            }
+            memcpy(ctx->key, key, ctx->cipher->key_len);
+        }
+    }
+
+    if (iv!= NULL) {
+        if (ctx->cipher->iv_len > 0) {
+            if (ctx->iv_len!= ctx->cipher->iv_len) {
+                OPENSSL_free(ctx->iv);
+                ctx->iv = OPENSSL_malloc(ctx->cipher->iv_len);
+                if (ctx->iv == NULL) {
+                    ERR_raise(ERR_LIB_EVP, ERR_R_MALLOC_FAILURE);
+                    return 0;
+                }
+                ctx->iv_len = ctx->cipher->iv_len;
+            }
+            memcpy(ctx->iv, iv, ctx->cipher->iv_len);
+        }
+    }
+
+    return 1;
+}
+</repair>

@@ -1,0 +1,21 @@
+The repair addresses the vulnerability by ensuring that the IKM (initial keying material) used in deriving the session master secret is never set to a default, predictable value. This situation could happen when both the pre-shared key (PSK) and key share (KSE) extensions are missing from the ServerHello message, which an attacker might deliberately trigger to compromise session security.
+
+Here’s the step-by-step explanation of the changes made in the repair:
+
+1. Identification of Both Extensions:
+   • The code now retrieves both the PSK and the Key Share extension. The PSK is still found using TLSX.find and the Key Share is similarly looked up with a new call.
+   • By checking for the existence of both extensions, the repair ensures that the IKM is only built when there is a valid source for secure randomness — either from a PSK that has been correctly negotiated or from a key exchange supported by the Key Share.
+
+2. Preventing Fallback to Predictable Value:
+   • If neither the PSK nor the Key Share is found (meaning both are null), the code no longer falls back to using a default, insecure IKM. Instead, it immediately aborts the handshake, returning an error code (TLS13_ERR_NO_SHARED_SECRET). This ensures the handshake does not proceed with compromised keying material.
+   • This abort prevents the session from being established under conditions that could expose it to an eavesdropper, thus directly addressing the vulnerability in earlier versions where a predictable key might have been used.
+
+3. Handling of PSK and Key Share Conditions:
+   • If the PSK extension is missing (while the Key Share might be present), the code still clears any remnants of potentially default or stale PSK values by setting the PSK buffer size to 0 and zeroing out the buffer memory. This avoids accidental use of any default key.
+   • If a PSK is found (and marked as chosen), then the code proceeds with the key derivation by invoking the SetupPskKey function. Only if this setup is successful does the handshake continue further.
+
+4. Secure Progression:
+   • By making these checks early in the handshake condition (when handling the server’s hello message), the repair ensures that no insecure session keys are generated. This ensures that even if a malicious server sends an incomplete set of extensions, the handshake will fail rather than compromise the session security.
+   • Finally, the encryption flag is enabled, and the state is advanced only if the system can securely derive a master secret.
+
+In summary, the repair prevents the use of a predictable IKM by requiring that either a valid PSK or a key share is present before proceeding. If neither is available, the handshake is aborted, returning an error so that no session is established with insecure key material. This directly mitigates the previously identified vulnerability and ensures the TLS 1.3 session security remains robust.

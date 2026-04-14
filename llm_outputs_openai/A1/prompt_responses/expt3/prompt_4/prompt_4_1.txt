@@ -1,0 +1,58 @@
+Below is one example of a repair. The root cause was that caller‐supplied OSSL_PARAM parameters meant to adjust key and IV lengths (or related settings) were being applied only after the cipher’s key/IV had already been set up. In modes where a longer IV is required for uniqueness (or when the key length must not be truncated) this can lead to an unwanted “fix” of an already established, and possibly incorrect, key or IV size.
+
+One safe way to fix the issue is to process the parameters before the key/IV initialization. For example, if the caller supplied a parameters array (params) you can call a helper (such as EVP_CIPHER_CTX_set_params(), which applies any updates from the OSSL_PARAM set) before proceeding with the rest of the initialisation. That way the “correct” key length and IV length will be in place and passed to the underlying cipher’s einit() function.
+
+Below is the patched code snippet with comments showing the changes:
+
+----------------------------------------------------------------
+/* Process caller-supplied parameters early so that key and IV lengths
+ * (and possibly other settings) are properly established.
+ */
+if (params != NULL) {
+    /* Apply the provided OSSL_PARAM values now, rather than letting the
+     * underlying cipher setup process its own fixed key/IV lengths.
+     * If processing the parameters fails for any reason, abort the operation.
+     */
+    if (!EVP_CIPHER_CTX_set_params(ctx, params))
+        return 0;
+    /* Optionally, clear params so that they are not reprocessed later */
+    params = NULL;
+}
+
+if ((ctx->flags & EVP_CIPH_NO_PADDING) != 0) {
+    /*
+     * If this context was already set up for no padding then we need to tell
+     * the new cipher about it.
+     */
+    if (!EVP_CIPHER_CTX_set_padding(ctx, 0))
+        return 0;
+}
+
+if (enc) {
+    if (ctx->cipher->einit == NULL) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+        return 0;
+    }
+
+    /*
+     * Now that any key/IV length adjustments have been applied via the OSSL_PARAM
+     * array, the proper lengths are returned by EVP_CIPHER_CTX_get_key_length()
+     * and EVP_CIPHER_CTX_get_iv_length(), ensuring no truncation or overrun.
+     */
+    return ctx->cipher->einit(ctx->algctx,
+                              key,
+                              key == NULL ? 0
+                                          : EVP_CIPHER_CTX_get_key_length(ctx),
+                              iv,
+                              iv == NULL ? 0
+                                         : EVP_CIPHER_CTX_get_iv_length(ctx),
+                              params);
+}
+----------------------------------------------------------------
+
+Explanation of the Fix:
+1. The repair moves the processing of the OSSL_PARAM array to the very beginning of the initialisation routine. This ensures that any updates to the key length, IV length, or related settings are applied before establishing the key/IV values.
+2. In addition, after setting the parameters, the params pointer is cleared (if desired) so that it is not processed a second time downstream.
+3. With the additional parameters applied, the calls to EVP_CIPHER_CTX_get_key_length() and EVP_CIPHER_CTX_get_iv_length() now correctly return the intended sizes, eliminating the risk of truncation or buffer overruns.
+
+This patch ensures that the caller’s parameters that affect the sizes are factored in before the key and IV are “fixed” by the underlying cipher initialisation function, preventing potential security issues.

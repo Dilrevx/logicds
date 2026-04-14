@@ -1,0 +1,78 @@
+To apply the repair described, we need to modify the `ssl3_get_cert_verify` function in the OpenSSL library. Here is a hypothetical code snippet before and after the repair to illustrate the changes:
+
+### Before Repair
+
+```c
+int ssl3_get_cert_verify(SSL *s)
+{
+    int al = SSL_AD_UNEXPECTED_MESSAGE;
+    long n;
+    int type = s->session->peer->type;
+    const unsigned char *p;
+
+    n = s->method->ssl_get_message(s,
+                                   SSL3_ST_SR_CERT_VRFY_A,
+                                   SSL3_ST_SR_CERT_VRFY_B,
+                                   -1,
+                                   SSL3_RT_HANDSHAKE,
+                                   &al);
+
+    if (!ok)
+        return ((int)n);
+
+    if (s->s3->tmp.message_type != SSL3_MT_CERTIFICATE_VERIFY ||
+        s->session->peer != NULL && (type & EVP_PKT_SIGN)) {
+        ssl3_send_alert(s, SSL3_AL_FATAL, al);
+        SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_MISSING_VERIFY_MESSAGE);
+        return (0);
+    }
+
+    /* ... rest of the function ... */
+}
+```
+
+### After Repair
+
+```c
+int ssl3_get_cert_verify(SSL *s)
+{
+    int al = SSL_AD_UNEXPECTED_MESSAGE;
+    long n;
+    const unsigned char *p;
+
+    n = s->method->ssl_get_message(s,
+                                   SSL3_ST_SR_CERT_VRFY_A,
+                                   SSL3_ST_SR_CERT_VRFY_B,
+                                   -1,
+                                   SSL3_RT_HANDSHAKE,
+                                   &al);
+
+    if (!ok)
+        return ((int)n);
+
+    // Check if the message type is not SSL3_MT_CERTIFICATE_VERIFY
+    if (s->s3->tmp.message_type != SSL3_MT_CERTIFICATE_VERIFY) {
+        ssl3_send_alert(s, SSL3_AL_FATAL, al);
+        SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_MISSING_VERIFY_MESSAGE);
+        return (0);
+    }
+
+    // ... rest of the function ...
+}
+```
+
+### Explanation of Changes
+
+- **Removed Unnecessary Check**: The line `(type & EVP_PKT_SIGN)` has been removed from the condition. This was unnecessary because the primary issue is whether a `CertificateVerify` message is present, not whether the peer has signing capabilities.
+  
+- **Simplified Condition**: The condition now only checks if the `message_type` is not `SSL3_MT_CERTIFICATE_VERIFY`. If true, it sends a fatal alert and returns an error.
+
+- **Error Handling**: The error handling remains consistent with the original code, ensuring that the appropriate alert level and error code are set when a `CertificateVerify` message is missing.
+
+### Additional Considerations
+
+- **Testing**: Ensure that you test the modified function with various scenarios, including clients providing a `CertificateVerify` message, clients not providing one, and different types of certificates.
+  
+- **Code Review**: Have the changes reviewed by other developers or security experts to ensure they address the vulnerability without introducing new issues.
+
+This repair ensures that the `ssl3_get_cert_verify` function correctly enforces the requirement for a `CertificateVerify` message, mitigating the vulnerability described.

@@ -1,0 +1,59 @@
+The vulnerability described in the provided `tls_verify_crl` function pertains to the incorrect handling of Certificate Revocation List (CRL) entries during the verification process. Specifically, the issue arises from the fact that the function checks for the presence of CRLs associated with the certificate's subject but fails to check for CRLs associated with the certificate's issuer. This oversight can lead to scenarios where a certificate, whose revocation status should have been checked against its issuer's CRL, is incorrectly deemed valid. As a result, revoked certificates might be accepted by the system, compromising the security of the TLS connection.
+
+### Original Code Analysis
+
+The original code snippet is designed to retrieve CRLs based on the certificate's subject. Here's a breakdown of the code:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, subject);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+In this code, the function attempts to fetch CRLs using `X509_STORE_CTX_get1_crls` or `X509_STORE_get1_crls`, depending on the OpenSSL version. Both functions are called with the `subject` parameter, indicating that they are looking for CRLs issued by the entity whose certificate is identified by the subject.
+
+### Vulnerability Explanation
+
+The primary vulnerability lies in the fact that the code does not attempt to fetch CRLs using the `issuer` parameter. In many cases, especially when dealing with intermediate or root CA certificates, the relevant CRLs are issued by the issuer of the certificate, not the subject itself. By failing to check the issuer's CRLs, the system may miss important revocation information, allowing revoked certificates to pass validation.
+
+### Proposed Repair
+
+To address this vulnerability, the repair involves adding an additional check for CRLs associated with the certificate's issuer. This ensures that both the subject and the issuer's CRLs are considered during the verification process. Here's the repaired code:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+  if (!crls) {
+    crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+  }
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, subject);
+  if (!crls) {
+    crls = X509_STORE_get1_crls(store_ctx, issuer);
+  }
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+### Reasoning Behind the Repair
+
+1. **Dual CRL Checking**: The repair introduces a secondary check for CRLs using the `issuer` parameter. This dual-checking mechanism ensures that the system considers both the subject's and the issuer's CRLs, providing a more comprehensive revocation status check.
+
+2. **Fallback Mechanism**: The use of an `if (!crls)` condition ensures that the system only attempts to fetch CRLs from the issuer if no CRLs were found for the subject. This fallback mechanism prevents unnecessary operations and maintains efficiency.
+
+3. **Version Compatibility**: The repair maintains compatibility across different versions of OpenSSL by applying the same logic in both the OpenSSL 1.1.x and 1.0.x branches. This ensures that the security enhancement is applied consistently regardless of the OpenSSL version in use.
+
+4. **Security Enhancement**: By ensuring that both subject and issuer CRLs are checked, the repair significantly enhances the security of the TLS verification process. It prevents the acceptance of revoked certificates, thereby safeguarding against man-in-the-middle attacks and other security threats.
+
+In summary, the proposed repair addresses the critical vulnerability by enhancing the CRL checking process to include both the subject and the issuer, thereby ensuring robust and secure certificate validation in TLS connections.

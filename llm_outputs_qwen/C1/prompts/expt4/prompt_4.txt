@@ -1,0 +1,61 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags. Do not provide any extra text explanation.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+Internally libssl in OpenSSL calls X509_verify_cert() on the client side to verify a certificate supplied by a server. That function may return a negative return value to indicate an internal error (for example out of memory). Such a negative return value is mishandled by OpenSSL and will cause an IO function (such as SSL_connect() or SSL_do_handshake()) to not indicate success and a subsequent call to SSL_get_error() to return the value SSL_ERROR_WANT_RETRY_VERIFY. This return value is only supposed to be returned by OpenSSL if the application has previously called SSL_CTX_set_cert_verify_callback(). Since most applications do not do this the SSL_ERROR_WANT_RETRY_VERIFY return value from SSL_get_error() will be totally unexpected and applications may not behave correctly as a result. 
+</vulnerability_description>
+Source code:
+Context code:
+<context_code>
+### ssl/ssl_cert.c ###
+static int ssl_security_default_callback(const SSL *s, const SSL_CTX *ctx,
+                                         int op, int bits, int nid, void *other,
+                                         void *ex);
+
+static CRYPTO_ONCE ssl_x509_store_ctx_once = CRYPTO_ONCE_STATIC_INIT;
+static volatile int ssl_x509_store_ctx_idx = -1;
+
+DEFINE_RUN_ONCE_STATIC(ssl_x509_store_ctx_init)
+{
+    ssl_x509_store_ctx_idx = X509_STORE_CTX_get_ex_new_index(0,
+                                                             "SSL for verify callback",
+                                                             NULL, NULL, NULL);
+    return ssl_x509_store_ctx_idx >= 0;
+}
+
+............
+
+</context_code>
+Buggy source code:
+
+<buggy_code>
+    if (s->ctx->app_verify_callback != NULL)
+        i = s->ctx->app_verify_callback(ctx, s->ctx->app_verify_arg);
+    else
+        i = X509_verify_cert(ctx);
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair addresses a critical issue in how OpenSSL handles errors during the verification of server certificates in a TLS/SSL handshake. The original code incorrectly interprets a negative return value from `X509_verify_cert()`, which signifies an internal error such as running out of memory, as a successful certificate verification process. This misinterpretation leads to unexpected behavior in applications using OpenSSL, particularly when they check the status of the handshake through `SSL_get_error()`.
+
+To understand the repair, we need to delve into the intended behavior and the problematic scenario. Typically, `X509_verify_cert()` returns 1 on success, 0 on failure, and a negative number to indicate an internal error. In the original code, a negative return value is treated identically to a positive one, causing the application to proceed as if the certificate was successfully verified. This can lead to security vulnerabilities because the application might trust a certificate that hasn't been properly validated.
+
+The repair introduces a conditional check specifically for the negative return value from `X509_verify_cert()`. Here’s a step-by-step explanation of the repair:
+
+1. **Preserve Existing Callback Behavior**: The repair maintains the original functionality where, if an application-specific callback (`app_verify_callback`) is set, it is invoked to perform the certificate verification. This ensures backward compatibility with applications that use custom verification logic.
+
+2. **Handle Default Verification Path**: If no application-specific callback is provided, the repair uses the default `X509_verify_cert()` function to verify the certificate. This is the standard path for most applications.
+
+3. **Intercept Internal Errors**: After calling `X509_verify_cert()`, the repair checks if the return value `i` is less than zero. A negative value indicates an internal error occurred during the verification process.
+
+4. **Treat Internal Errors as Verification Failures**: Instead of treating the negative return value as a successful verification, the repair sets `i` to 0, which signifies a failure in certificate verification. This change ensures that any internal error during verification is not mistakenly interpreted as a successful outcome.
+
+5. **Consistent Error Handling**: By treating internal errors as verification failures, the repair aligns the behavior with the expected outcome. This means that applications relying on `SSL_get_error()` to determine the status of the handshake will receive the correct information, preventing them from proceeding with potentially unverified certificates.
+
+6. **Prevent Unexpected Return Values**: The repair prevents the unexpected return value `SSL_ERROR_WANT_RETRY_VERIFY` from being triggered. This value is reserved for scenarios where an application has explicitly set a custom verification callback and chosen to defer verification. By ensuring that internal errors are not misinterpreted, the repair avoids confusion and potential misuse of this specific error code.
+
+In summary, the repair enhances the robustness of OpenSSL's certificate verification process by ensuring that internal errors do not lead to incorrect interpretations of certificate validity. This modification safeguards applications against trusting certificates that have not undergone proper validation, thereby mitigating potential security risks associated with the original implementation flaw.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

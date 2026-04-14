@@ -1,0 +1,55 @@
+The original code snippet contained a logical vulnerability that allowed the program to proceed with certificate verification even when the expected cryptographic keys were not present on the peer side. This could lead to security issues, as it might permit the use of unsupported or unavailable algorithms, potentially compromising the integrity and authenticity of the TLS 1.3 handshake process.
+
+### Understanding the Vulnerability
+
+In the original code, there were several conditional checks that logged a message if the peer sent a specific type of signature algorithm (e.g., ED25519, ED448, ECC DSA, RSA, RSA-PSS) but did not have the corresponding key present. However, these checks did not halt the execution of the function; instead, they merely logged a message using `Wslib.WOLFSSL_MSG`. As a result, the function continued to execute, potentially leading to incorrect behavior or security breaches because it proceeded with operations assuming the presence of keys that were not actually available.
+
+### The Importance of Halting Execution
+
+For a secure TLS 1.3 handshake, it is crucial that the server verifies the presence of the correct cryptographic keys before proceeding with signature verification. If the server does not have the necessary keys, it cannot correctly validate the signatures provided by the client, which can lead to man-in-the-middle attacks or other forms of security vulnerabilities.
+
+### Repairing the Vulnerability
+
+To address this issue, the repair involves modifying the conditional statements so that they not only log a message but also return an error code (`Commons.INVALID_PARAMETER`) if the expected key is not present. This ensures that the function halts execution immediately upon detecting a mismatch between the advertised signature algorithm and the available keys.
+
+Here’s a detailed breakdown of the changes:
+
+1. **Logging and Error Return**: Each conditional statement now logs a message indicating the issue and then returns `Commons.INVALID_PARAMETER`. This prevents the function from continuing to execute under invalid conditions.
+
+   ```java
+   if (args.sigAlgo == Commons.ed25519_sa_algo && !ssl.peerEd25519KeyPresent) {
+       Wslib.WOLFSSL_MSG("Peer sent ED25519 key but not in verify");
+       return Commons.INVALID_PARAMETER;
+   }
+   ```
+
+   By adding `return Commons.INVALID_PARAMETER;` after logging the message, we ensure that the function exits early if the peer sent an ED25519 signature algorithm but the corresponding key is not present.
+
+2. **Consistent Error Handling**: The same pattern is applied to all the other conditional checks, ensuring that the function behaves consistently across different types of signature algorithms.
+
+   ```java
+   if (args.sigAlgo == Commons.ed448_sa_algo && !ssl.peerEd448KeyPresent) {
+       Wslib.WOLFSSL_MSG("Peer sent ED448 key but not in verify");
+       return Commons.INVALID_PARAMETER;
+   }
+   if (args.sigAlgo == Commons.ecc_dsa_sa_algo && !ssl.peerEccDsaKeyPresent) {
+       Wslib.WOLFSSL_MSG("Peer sent ECC key but not in verify");
+       return Commons.INVALID_PARAMETER;
+   }
+   if (args.sigAlgo == Commons.rsa_sa_algo) {
+       Wslib.WOLFSSL_MSG("Peer sent PKCS#1.5 signature");
+       return Commons.INVALID_PARAMETER;
+   }
+   if (args.sigAlgo == Commons.rsa_pss_sa_algo && !ssl.peerRsaKeyPresent) {
+       Wslib.WOLFSSL_MSG("Peer sent RSA key but not in verify");
+       return Commons.INVALID_PARAMETER;
+   }
+   ```
+
+3. **Maintaining Correct Functionality**: After all the checks, if none of the conditions for returning an error are met, the function proceeds to allocate memory for the signature buffer based on the size specified in the input data.
+
+   ```java
+   sig.buffer = new byte[args.sz];
+   ```
+
+By implementing these changes, the function now robustly handles cases where the peer sends a signature algorithm for which the corresponding key is not present. This ensures that the TLS 1.3 handshake process remains secure and reliable, preventing potential security vulnerabilities that could arise from improper key management or mismatched algorithms.

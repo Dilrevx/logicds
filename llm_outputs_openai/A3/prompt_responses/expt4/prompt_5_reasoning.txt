@@ -1,0 +1,22 @@
+The repair introduces an explicit check for an undefined cipher NID (NID_undef) before proceeding with any cipher initialization. This change directly addresses the vulnerability where passing NID_undef could cause OpenSSL to treat a custom cipher as equivalent to the NULL cipher, which might inadvertently result in encryption not actually modifying the plaintext.
+
+Here’s a step-by-step explanation of the repair:
+
+1. Detection Early in the Flow:
+ - In the “non-legacy” code path, after verifying that a valid cipher is provided, the new code checks if cipher->nid is NID_undef. If true, it raises an initialization error and returns 0. This prevents the use of a custom cipher with an undefined NID from progressing any further.
+ - A similar check is also added in the “legacy” branch. This ensures that even when legacy handling is in place (e.g., when an ENGINE is used), the undefined NID case is detected and rejected.
+
+2. Preventing the NULL Cipher Matching:
+ - The vulnerability stemmed from the fact that using NID_undef would cause EVP_CIPHER_fetch to interpret it as “NULL,” thus fetching a cipher that does no real encryption. By rejecting any cipher with NID_undef, the repair prevents the accidental or malicious substitution of the NULL cipher.
+
+3. Error Handling:
+ - Instead of trying to fetch the provider’s version of the cipher (which might resolve to the NULL cipher if NID_undef was provided), the new check directly calls ERR_raise with an initialization error. This minimizes any ambiguity in the error handling path and clearly communicates the misconfiguration.
+
+4. Consistency Across Branches:
+ - The check is applied in both the provider-based initialization (non-legacy) and in the legacy ENGINE handling branch. This ensures consistent security behavior regardless of the initialization path taken.
+
+5. Maintaining Correct Behavior:
+ - For valid ciphers (i.e., those with properly defined NIDs), the rest of the initialization logic is left intact. This guarantees that the fix doesn’t alter the normal functionality of properly configured cipher operations.
+ - The rest of the code that handles the allocation of contexts, setting up cipher parameters, and invoking the underlying encryption/decryption callbacks remains unchanged, ensuring that the repair is minimally invasive.
+
+In summary, the repair fixes the vulnerability by preventing the use of custom ciphers with an undefined NID. Since NID_undef was erroneously allowing the fetching of a “NULL” cipher that left the plaintext unchanged (a severe security risk), rejecting such ciphers early in the initialization process removes the potential for bypassing encryption. This change ensures that only properly defined ciphers, with a proper unique NID, can be used, thereby maintaining the intended security guarantees of the encryption mechanism.

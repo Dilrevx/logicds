@@ -1,0 +1,63 @@
+**Vulnerability Repair: CCS Injection in OpenSSL**
+
+The provided code snippet is vulnerable to the CCS Injection vulnerability in OpenSSL. This vulnerability allows a man-in-the-middle attacker to trigger the use of a zero-length master key in certain OpenSSL-to-OpenSSL communications, potentially leading to session hijacking or sensitive information disclosure.
+
+**Repaired Code:**
+
+To fix this vulnerability, we need to add an additional check to ensure that the `ChangeCipherSpec` message is not processed until the handshake is complete. We can do this by checking the `s->handshake_func` value, which is set to `NULL` when the handshake is complete.
+
+```c
+if (rr->type == SSL3_RT_CHANGE_CIPHER_SPEC)
+{
+    /* 'Change Cipher Spec' is just a single byte, so we know
+     * exactly what the record payload has to look like */
+    if ((rr->length!= 1) || (rr->off!= 0) ||
+        (rr->data[0]!= SSL3_MT_CCS))
+    {
+        al = SSL_AD_ILLEGAL_PARAMETER;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_BAD_CHANGE_CIPHER_SPEC);
+        goto f_err;
+    }
+
+    /* Check we have a cipher to change to */
+    if (s->s3->tmp.new_cipher == NULL)
+    {
+        al = SSL_AD_UNEXPECTED_MESSAGE;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+        goto f_err;
+    }
+
+    /* Check if handshake is complete */
+    if (s->handshake_func!= NULL)
+    {
+        al = SSL_AD_UNEXPECTED_MESSAGE;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+        goto f_err;
+    }
+
+    rr->length = 0;
+
+    if (s->msg_callback)
+    {
+        s->msg_callback(0, s->version, SSL3_RT_CHANGE_CIPHER_SPEC, rr->data, 1, s, s->msg_callback_arg);
+    }
+
+    s->s3->change_cipher_spec = 1;
+    if (!ssl3_do_change_cipher_spec(s))
+    {
+        goto err;
+    }
+    else
+    {
+        goto start;
+    }
+}
+```
+
+**Explanation:**
+
+The added check `if (s->handshake_func!= NULL)` ensures that the `ChangeCipherSpec` message is not processed until the handshake is complete. If the handshake is not complete, an `SSL_AD_UNEXPECTED_MESSAGE` alert is sent, and the function returns an error.
+
+**Note:**
+
+This repair is based on the OpenSSL 1.0.1g patch for the CCS Injection vulnerability (CVE-2014-0224). The exact implementation may vary depending on the specific OpenSSL version and configuration.

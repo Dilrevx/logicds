@@ -1,0 +1,35 @@
+The provided repair addresses the "CCS Injection" vulnerability, a critical security flaw in OpenSSL related to the improper handling of ChangeCipherSpec (CCS) messages during the TLS handshake process. This vulnerability can allow an attacker to perform a man-in-the-middle (MITM) attack, potentially hijacking secure sessions or obtaining sensitive information.
+
+### Understanding the Vulnerability
+
+In a typical TLS handshake, the ChangeCipherSpec (CCS) message is used to signal the transition from one set of encryption parameters to another. It is crucial that this message is processed only at the correct point in the handshake sequence to ensure the integrity and security of the session. The CCS Injection vulnerability arises when the CCS message is processed prematurely or out of sequence, leading to the use of a zero-length master key. This can enable an attacker to decrypt or tamper with the subsequent encrypted data.
+
+### Analysis of the Buggy Code
+
+The original code snippet checks if the received record type is `SSL3_RT_CHANGE_CIPHER_SPEC` and verifies that it contains exactly one byte with the value `SSL3_MT_CCS`. It also ensures that there is a new cipher to change to (`s->s3->tmp.new_cipher != NULL`). However, the code lacks validation to confirm that the CCS message is received at the appropriate stage of the handshake.
+
+### Implementation of the Repair
+
+To mitigate the CCS Injection vulnerability, the repair introduces additional checks to ensure that the CCS message is received in the correct state. Specifically, two conditions are added:
+
+1. **Handshake Fragment Length Check:**
+   ```c
+   if (s->s3->handshake_fragment_len != 0)
+   ```
+   This condition checks whether there are any remaining handshake fragments that should be processed before receiving the CCS message. If there are, it indicates that the CCS message was received prematurely, and the function should terminate with an error.
+
+2. **Handshake Sequence Validation:**
+   ```c
+   if (s->d1->handshake_read_seq != s->d1->next_handshake_write_seq)
+   ```
+   This condition verifies that the expected handshake sequence number matches the actual sequence number of the next handshake message to be written. If they do not match, it suggests that the CCS message was received out of sequence, and the function should terminate with an error.
+
+### Explanation of the Conditions
+
+- **Handshake Fragment Length:** The `handshake_fragment_len` variable tracks the length of any unprocessed handshake fragments. If this value is non-zero, it means that there are still parts of the handshake message that need to be processed before the CCS message can be accepted. This check ensures that the CCS message is not processed until all previous handshake messages are fully handled.
+
+- **Handshake Sequence Number:** The `handshake_read_seq` and `next_handshake_write_seq` variables are used to manage the sequence of handshake messages. By comparing these values, the code ensures that the CCS message is received at the correct point in the handshake sequence. If the sequences do not match, it indicates that the CCS message was received out of order, which is a violation of the protocol.
+
+### Conclusion
+
+By adding these checks, the repair ensures that the CCS message is processed only under the correct circumstances, thereby preventing the CCS Injection vulnerability. This enhancement strengthens the security of the TLS handshake process by ensuring that all handshake messages are received and processed in the proper sequence, thus maintaining the integrity and confidentiality of the communication session.

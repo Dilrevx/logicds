@@ -1,0 +1,54 @@
+The original code snippet in the `srsRAN` implementation contains a vulnerability related to the handling of certain NAS (Non-Access Stratum) messages in plaintext without proper integrity checks. Specifically, the messages `Detach Request`, `EMM Information`, `EMM Status`, and `Attach/Service Reject` with an `emm_cause` value of 25 are accepted in plaintext, which can lead to security issues such as replay attacks or unauthorized modifications.
+
+### Vulnerability Analysis
+
+In the provided code, the `switch` statement checks the `msg_type` to determine how to handle different NAS messages. If the `sec_hdr_type` is `LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS`, indicating that the message is not protected by integrity mechanisms, the code allows several message types to pass through without additional checks. This includes the problematic messages mentioned in the vulnerability description.
+
+The critical issue here is that these messages should not be accepted in plaintext under normal circumstances due to their sensitive nature. For example, `Detach Request` could be used to terminate a user's session, `EMM Information` could reveal information about the user's network attachment, and `EMM Status` could indicate the status of the user's connection. Allowing these messages to be sent in plaintext without integrity protection can expose the system to various security threats.
+
+### Repair Strategy
+
+To address this vulnerability, the repair strategy involves modifying the code to ensure that only specific conditions allow these messages to be processed when they are not integrity-protected. The key change is to add a check for the `emm_cause` value when handling `EMM Information`, `EMM Status`, and `Service Reject` messages. If the `emm_cause` is not equal to 25, these messages should be rejected as they are being sent in plaintext without necessary security measures.
+
+### Implementation Details
+
+1. **Retain Allowed Messages**: The messages `Identity Request`, `Authentication Request`, `Authentication Reject`, `Attach Reject`, `Detach Accept`, and `Tracking Area Update Reject` are retained in the `break` statements because they are either less sensitive or have specific handling mechanisms elsewhere in the code.
+
+2. **Conditional Handling for Sensitive Messages**: For `EMM Information`, `EMM Status`, and `Service Reject`, an additional condition is added to check the `emm_cause`. Only if `emm_cause` equals 25, these messages are allowed to pass through without integrity protection. Otherwise, they are logged as errors and processing is halted.
+
+3. **Logging and Error Handling**: When a message is rejected due to lack of integrity protection, an error message is logged with details about the message type and security header type. This helps in debugging and monitoring potential security incidents.
+
+### Code Explanation
+
+```cpp
+if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS) {
+  switch (msg_type) {
+    case LIBLTE_MME_MSG_TYPE_IDENTITY_REQUEST: // special case for IMSI is checked in parse_identity_request()
+    case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REQUEST:
+    case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REJECT:
+    case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+    case LIBLTE_MME_MSG_TYPE_DETACH_ACCEPT:
+    case LIBLTE_MME_MSG_TYPE_TRACKING_AREA_UPDATE_REJECT:
+      break;
+    case LIBLTE_MME_MSG_TYPE_EMM_INFORMATION:
+    case LIBLTE_MME_MSG_TYPE_EMM_STATUS:
+    case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT:
+      if (emm_cause != 25) {
+        logger.error("Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X without integrity protection!",
+                     msg_type,
+                     sec_hdr_type);
+        return;
+      }
+      break;
+    default:
+      logger.error("Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X without integrity protection!",
+                   msg_type,
+                   sec_hdr_type);
+      return;
+  }
+}
+```
+
+### Conclusion
+
+By implementing these changes, the code now enforces stricter security policies for handling sensitive NAS messages in plaintext. It ensures that only messages with a specific `emm_cause` value (25) are allowed to bypass integrity checks, thereby mitigating the risk of unauthorized access and manipulation. This repair enhances the overall security posture of the `srsRAN` implementation, protecting against potential vulnerabilities associated with insecure message handling.

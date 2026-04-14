@@ -1,0 +1,14 @@
+The repair first checks if the certificate includes a Subject Alternative Name (SAN) extension. If the SAN extension is present, instead of looping through each alternative name and comparing its value regardless of type, the code immediately calls a helper function, x509_crt_verify_san(). This function is specialized for processing all SAN entries while applying stricter, type-aware checks (for example, validating that the SAN is a DNS name rather than an IP address). By doing this, the repair ensures that only SAN entries of a permitted type are considered valid. As a result, it prevents an attacker from exploiting the vulnerability by presenting an alternative name of an incorrect type—like an IP address—to fraudulently pass the verification process.
+
+If the x509_crt_verify_san() function finds an appropriate SAN match, the repair returns immediately, signaling that the certificate is valid with respect to its SAN. This early exit streamlines the control flow and reduces the risk of any unsecured fallback from being reached.
+
+However, if the SAN verification does not yield a valid match (or if the SAN extension isn’t present), the repair then falls back to inspecting the certificate’s subject field. It iterates through the subject entries to locate one that specifically carries the Common Name (CN) Object Identifier. Here, the code uses x509_crt_check_cn() to compare the certificate’s subject CN with the expected name. This method is similar to the original approach but is now only used as a backup when the SAN verification fails or is not applicable.
+
+Finally, if neither SAN nor subject CN validation results in a successful match, the repair flags the certificate as having a common name mismatch by setting an appropriate error flag (MBEDTLS_X509_BADCERT_CN_MISMATCH). This error flag signals to higher-level certificate verification routines that the certificate’s identity does not match the expected parameters.
+
+To summarize, the repair addresses the vulnerability by:
+1. Delegating SAN processing to a helper function that performs strict, type-aware validation, thereby ensuring only approved types (like DNS names) are considered.
+2. Retaining a fallback check on the subject’s CN if no valid SAN is found, thus preserving compatibility with certificates that lack the SAN extension.
+3. Employing early returns upon successful validation to simplify control flow and minimize the risk of inadvertently accepting an improperly validated name.
+
+This dual approach directly remedies the original vulnerability, removing the risk that an alternative name of an unauthorized type (such as an IP address) could be exploited to impersonate a domain.

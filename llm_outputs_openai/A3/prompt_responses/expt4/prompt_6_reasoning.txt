@@ -1,0 +1,22 @@
+The repair introduces an explicit check to determine whether the incoming cipher (or the cipher stored in the context) originates from the legacy custom method. In the original code, if a cipher created by the legacy API was passed with an undefined identifier (NID_undef), it could inadvertently trigger the provider-based code path. This might lead to fetching the NULL cipher instead of using the custom cipher, thereby exposing the plaintext as ciphertext.
+
+The repair adds two extra conditions at the beginning of the function:
+
+1. It checks if the provided cipher is non-null and either has an undefined NID (NID_undef) or has a legacy flag (EVP_CIPH_LEGACY) set. These properties identify that the cipher was created using the legacy API. 
+
+2. It also checks for the scenario where no new cipher is passed explicitly, but the context already holds a cipher; if that stored cipher qualifies as legacy, it triggers the same cleanup and legacy handling.
+
+When either of these conditions is met, the function immediately frees any previously fetched cipher (to clear any state that might conflict) and jumps to the legacy handling branch. This ensures that the subsequent operations follow the legacy code path rather than attempting to fetch an equivalent cipher from available providers.
+
+By forcing the legacy branch for explicitly identified legacy custom ciphers, the repair prevents the possibility of the provider-based initialization code erroneously matching an undefined legacy cipher (e.g., one with NID_undef) to an unintended provider’s NULL cipher. This is crucial because, in the vulnerable behavior, such a match would allow plaintext to be emitted as ciphertext.
+
+Additionally, the repair retains the original flow for non-legacy ciphers. It still checks for engine involvement and clears any pre-existing state when necessary. For typical cases, it proceeds to fetch and reference a provider-based cipher if required, before later initializing encryption or decryption.
+
+In summary, the repair fixes the vulnerability by:
+
+• Explicitly detecting legacy custom ciphers using either an undefined NID or a dedicated legacy flag.
+• Forcing these detected ciphers into the legacy branch, thereby bypassing the dangerous provider-based lookup.
+• Cleaning up any state (freeing fetched cipher pointers) that could lead to using the wrong cipher implementation.
+• Ensuring that custom legacy ciphers are always handled appropriately and do not get replaced by an equivalent NULL cipher from a provider.
+
+This targeted fix prevents the unintended use of the NULL cipher—a scenario that could lead to severe security issues—and directs the flow to legacy code that is expected to handle these custom ciphers safely.

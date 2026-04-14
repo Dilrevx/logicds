@@ -1,0 +1,19 @@
+The repair essentially adds an explicit check for duplicate ChangeCipherSpec (CCS) messages before processing a new one. Here’s how it works:
+
+1. Duplicate CCS Check:  
+   The new block at the beginning of the conditional checks if the change_cipher_spec flag is already set (i.e., if a CCS message has already been processed). When that flag is true, it indicates that a CCS was already received earlier in the handshake. In such a case, we immediately set an alert (SSL_AD_UNEXPECTED_MESSAGE) and generate an error (using SSLerr), then jump to the error handling block. This prevents a second CCS message from being accepted.  
+   
+   Why is this important? An attacker could craft a second, duplicate CCS message to potentially trigger a state change, causing the session to use a zero-length master key. This repair stops that possibility by ensuring only one valid CCS message is ever processed.
+
+2. Payload Validation:  
+   The next part verifies that the payload of the CCS record follows the strict expectations (a one-byte array equal to SSL3_MT_CCS, with no offset). This confirms that the message is what the protocol expects and that it is not tampered with in transit. Although this check existed in the original code, it is still crucial to avoid malformed or malicious CCS payloads.
+
+3. New Cipher Check:  
+   The repair retains the check for a valid pending new cipher. A CCS message should only be processed if a new cipher suite is already negotiated. If not (i.e., new_cipher is NULL), it indicates an out-of-order CCS, which might be malicious (as in the original vulnerability pattern). Thus, an error is raised if the cipher change is not expected.
+
+4. Safety in Processing:  
+   After these verifications, the record length is reset, and if a message callback is defined, it logs or processes the CCS message. The flag is updated to note that the cipher specification change is underway, and then the actual cipher change routine is invoked.  
+   
+   The repair ensures that once a valid CCS is processed, any attempt to process another one is strictly rejected. This is key for mitigating the CCS injection attack, where a malicious actor could send multiple CCS messages, possibly hijacking the session by forcing an insecure state.  
+
+In summary, by adding the safeguard against duplicate CCS messages (checking if the change_cipher_spec flag is already set) and preserving strict checks on the message payload and cipher state, the repair addresses the flaw described. It prevents an attacker from injecting an extra CCS message to force a session into a vulnerable state, hence fixing the CCS injection vulnerability.

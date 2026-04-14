@@ -1,0 +1,65 @@
+package main;
+
+import commons.*;
+
+public class Ssl3GetCertVerify {
+
+        if (s.s3.tmp.message_type != Constants.SSL3_MT_CERTIFICATE_VERIFY) {
+            // If the client provided a certificate then a CertificateVerify message is mandatory
+            if (peer != null) {
+                al = Constants.SSL_AD_UNEXPECTED_MESSAGE;
+                Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+                        Constants.SSL_R_MISSING_VERIFY_MESSAGE);
+                Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);
+                return ret;
+            }
+            s.s3.tmp.reuse_message = 1;
+            return 1;
+        }
+
+        // Proceed with processing the CertificateVerify message
+
+        // Retrieve the message contents (signature) from the temporary buffer.
+        // (Assuming that s.s3.tmp.message holds the signature data.)
+        p = s.s3.tmp.message;
+
+        // Initialize the digest context with the appropriate message digest algorithm.
+        // For example, select an algorithm based on the certificate type.
+        int md_type = Helper.select_md_algorithm(type);
+        if (md_type == 0) {
+            al = Constants.SSL_AD_INTERNAL_ERROR;
+            Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+                    Constants.SSL_R_NO_REQUIRED_DIGEST);
+            Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);
+            return ret;
+        }
+        Helper.EVP_VerifyInit(mctx, md_type);
+
+        // Update the digest with the handshake messages that were exchanged so far.
+        // (Assume s.getHandshakeMessages() returns a byte[] with the concatenated handshake data.)
+        byte[] handshakeData = s.getHandshakeMessages();
+        Helper.EVP_VerifyUpdate(mctx, handshakeData);
+
+        // Verify the signature using the public key from the client certificate.
+        // EVP_VerifyFinal() should return a positive value if verification is successful.
+        if (pkey == null || Helper.EVP_VerifyFinal(mctx, p, pkey) <= 0) {
+            al = Constants.SSL_AD_DECRYPT_ERROR;
+            Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+                    Constants.SSL_R_BAD_SIGNATURE);
+            Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);
+            return ret;
+        }
+
+        // Cleanup the message digest context.
+        Helper.EVP_MD_CTX_cleanup(mctx);
+        ret = 1;
+        return ret;
+    }
+
+
+    private static byte[] slice(byte[] array, int offset) {
+        byte[] result = new byte[array.length - offset];
+        System.arraycopy(array, offset, result, 0, result.length);
+        return result;
+    }
+}

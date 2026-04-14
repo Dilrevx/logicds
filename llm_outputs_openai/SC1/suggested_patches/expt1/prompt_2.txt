@@ -1,0 +1,77 @@
+import java.util.List;
+import common.*;
+
+public class OpenSslSsl {
+    public VerifyCallback verify_callback;
+    public SslContext ctx;
+    public int verify_result;
+    public List<X509> verified_chain;
+    public VerifyParams param;
+    public Session session;
+    public int verify_mode;
+    public int rwstate;
+    public Tmp tmp;
+
+    public static final int SSL_VERIFY_NONE = 0;
+    public static final int SSL_RETRY_VERIFY = 1;
+    public static final int SSL_R_CERTIFICATE_VERIFY_FAILED = 1001;
+
+
+public static int ssl_verify_cert_chain(OpenSslSsl s, List<X509> sk) {
+    X509_STORE_CTX ctxStore = new X509_STORE_CTX();
+    int i;
+
+    // Instead of directly plugging in the provided callback,
+    // wrap it so that even if the callback would normally allow
+    // an invalid certificate (i.e. when pre-verification fails),
+    // the verification will fail.
+    if (s.verify_callback != null) {
+        ctxStore.set_verify_cb(new VerifyCallback() {
+            @Override
+            public boolean verify(boolean preverify_ok, X509_STORE_CTX ctx) {
+                // Enforce that if the pre-verification fails, the chain is rejected.
+                if (!preverify_ok) {
+                    return false;
+                }
+                // Otherwise, delegate to the original callback.
+                return s.verify_callback.verify(preverify_ok, ctx);
+            }
+        });
+    }
+
+    // Add all certificates from the chain to the store context.
+    for (i = 0; i < sk.size(); i++) {
+        X509 cert = sk.get(i);
+        if (!ctxStore.add_cert(cert)) {
+            // If adding a certificate fails, return error.
+            return -1;
+        }
+    }
+
+    // Initialize the store context with the certificate chain.
+    if (!ctxStore.init_chain()) {
+        return -1;
+    }
+
+    // Perform the full certificate chain verification.
+    int result = ctxStore.verify_cert_chain();
+
+    return result;
+}
+
+
+    public static int tls_post_process_server_certificate(OpenSslSsl s, int wst) {
+        int i = ssl_verify_cert_chain(s, s.session.peer_chain);
+        if (i == -1) {
+            s.rwstate = SSL_RETRY_VERIFY;
+            return WorkState.WORK_MORE_A;
+        }
+        if (s.verify_mode != SSL_VERIFY_NONE && i == 0) {
+            SSLfatal(s, Err.ssl_x509err2alert(s.verify_result), SSL_R_CERTIFICATE_VERIFY_FAILED);
+            return WorkState.WORK_ERROR;
+        }
+        return WorkState.WORK_FINISHED_CONTINUE;
+    }
+
+    static void SSLfatal(OpenSslSsl s, int alert, int code) {}
+}

@@ -1,0 +1,46 @@
+<repair>
+void rrc_nr::handle_security_mode_command(const asn1::rrc_nr::security_mode_cmd_s& smc)
+{
+  transaction_id = smc.rrc_transaction_id;
+
+  const auto& sec_algo_cfg = smc.crit_exts.security_mode_cmd().security_cfg_smc.security_algorithm_cfg;
+  sec_cfg.cipher_algo = static_cast<CIPHERING_ALGORITHM_ID_ENUM>(sec_algo_cfg.ciphering_algorithm.value);
+
+  // Check that integrity protection algorithm is present and not set to the insecure NIA0.
+  if (sec_algo_cfg.integrity_prot_algorithm_present)
+  {
+    sec_cfg.integ_algo = static_cast<INTEGRITY_ALGORITHM_ID_ENUM>(sec_algo_cfg.integrity_prot_algorithm.value);
+
+    // Reject if integrity algorithm is NIA0 (i.e. no integrity protection).
+    if (sec_cfg.integ_algo == INTEGRITY_ALGORITHM_ID_NIA0)
+    {
+      logger.error("Security Mode Command rejected: Integrity Algorithm NIA0 is not allowed.");
+      // Optionally, send a failure message to the network.
+      send_security_mode_failure();
+      return;
+    }
+  }
+  else
+  {
+    logger.error("Security Mode Command rejected: Missing Integrity Algorithm Config");
+    send_security_mode_failure();
+    return;
+  }
+
+  logger.info("Received Security Mode Command nea: %s, nia: %s",
+              ciphering_algorithm_id_nr_text[sec_cfg.cipher_algo],
+              integrity_algorithm_id_nr_text[sec_cfg.integ_algo]);
+
+  // Generate AS security keys
+  generate_as_keys();
+
+  // Configure PDCP for security. Note: Security is activated only after the security mode command is validated.
+  uint32_t lcid = srb_to_lcid(nr_srb::srb1);
+  pdcp->config_security(lcid, sec_cfg);
+  pdcp->enable_integrity(lcid, DIRECTION_TXRX);
+  send_security_mode_complete();
+  pdcp->enable_encryption(lcid, DIRECTION_TXRX);
+
+  security_is_activated = true;
+}
+</repair>

@@ -1,0 +1,95 @@
+Below is an example of how you might modify the Phase 2 processing function in the PEAP code to incorporate the extra validation. In this example, it is assumed that the existing code already checks for a forced failure flag and that the decision variable (or result status) is set to success when a success packet is received. The patch adds a helper function (here called is_phase2_auth_valid()) that is used to verify whether Phase 2 authentication was sufficiently completed. If the helper function returns false despite the receipt of a “success” indicator, the code will log a message and override the successful status. Only when both no forced failure is present and the extra validation passes will the authentication be accepted.
+
+For example, consider the patched C code below:
+
+---------------------------------------------------------------------
+/* Example patched code snippet to fix the PEAP authentication bypass
+ * vulnerability. */
+
+#include "eap_peer_common.h"  // hypothetical header for logging and state definitions
+
+/*
+ * is_phase2_auth_valid() performs additional checks to ensure that
+ * Phase 2 authentication has been fully and properly executed.
+ *
+ * Returns 1 on valid/sufficient Phase 2 authentication, 0 otherwise.
+ */
+static int is_phase2_auth_valid(struct eap_sm *sm)
+{
+    /*
+     * Add code here to verify that all necessary Phase 2 criteria
+     * have been met. This might include checks on decrypted data,
+     * session state variables, or any other markers that confirm
+     * that Phase 2 was properly executed.
+     *
+     * For illustration, assume that sm->phase2_finished is set only
+     * when Phase 2 has been properly completed.
+     */
+    if (sm->phase2_finished)
+        return 1;
+    return 0;
+}
+
+/*
+ * Process Phase 2 authentication status.
+ *
+ * 'sm' holds the session-specific state.
+ * 'phase2_status' is the result indicated by the received packet.
+ * Forced failure (e.g., due to a detected anomaly) is stored in sm->phase2_forced_fail.
+ *
+ * Returns EAP_FAILURE if either a forced failure is present or if the
+ * extra Phase 2 validation check fails; otherwise, returns EAP_SUCCESS.
+ */
+int process_phase2_authentication(struct eap_sm *sm, int phase2_status)
+{
+    int decision;
+
+    /* Check if a forced failure has been flagged */
+    if (sm->phase2_forced_fail) {
+        wpa_printf(MSG_INFO, "PEAP: Forced failure in Phase 2 authentication detected");
+        decision = EAP_FAILURE;
+    } else if (phase2_status == EAP_SUCCESS) {
+        /*
+         * The Phase 2 packet indicates success; verify that Phase 2 authentication
+         * has been sufficiently completed using additional checks.
+         */
+        if (!is_phase2_auth_valid(sm)) {
+            wpa_printf(MSG_INFO, "PEAP: Although server indicated success, Phase 2 authentication data is insufficient. Overriding success.");
+            decision = EAP_FAILURE;
+        } else {
+            decision = EAP_SUCCESS;
+        }
+    } else {
+        /* For any non-success packet, or if no special conditions apply, use underlying status */
+        decision = phase2_status;
+    }
+
+    return decision;
+}
+
+/* Usage example in the authentication process */
+void handle_eap_peap_phase2(struct eap_sm *sm, int received_phase2_status)
+{
+    int final_status = process_phase2_authentication(sm, received_phase2_status);
+
+    if (final_status == EAP_SUCCESS) {
+        wpa_printf(MSG_DEBUG, "PEAP: Phase 2 authentication completed successfully.");
+        /* Continue with the remaining authentication process */
+    } else {
+        wpa_printf(MSG_WARNING, "PEAP: Phase 2 authentication failed. Aborting connection.");
+        /* Handle failure: cleanup state, alert upper layers, etc. */
+    }
+}
+---------------------------------------------------------------------
+
+Explanation of the changes:
+
+1. The function is_phase2_auth_valid() encapsulates the extra validation logic that inspects the internal session state. (In an actual implementation, this function can be more detailed, checking decrypted tokens, nonce values, or any other artifacts that indicate proper Phase 2 completion.)
+
+2. In process_phase2_authentication(), the code first checks if a forced failure flag is set. If yes, it logs the issue and sets the decision to failure.
+
+3. If no forced failure is flagged and the received Phase 2 status indicates success, is_phase2_auth_valid() is called. Only if this extra check passes does the code treat the Phase 2 exchange as a true success.
+
+4. If the extra check fails, an informational log is recorded and the result is explicitly set to failure—preventing the attacker’s ability to bypass full authentication by sending a forged success packet.
+
+This layered verification ensures that both the TLS handshake in Phase 1 and the cryptographic validation in Phase 2 are properly enforced, effectively mitigating the vulnerability described.

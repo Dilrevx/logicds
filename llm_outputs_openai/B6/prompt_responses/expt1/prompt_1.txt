@@ -1,0 +1,67 @@
+<repair>
+static void x509_crt_verify_name( const mbedtls_x509_crt *crt,
+                                  const char *cn,
+                                  uint32_t *flags )
+{
+    const mbedtls_x509_name *name;
+    const mbedtls_x509_sequence *cur;
+
+    /* Defensive null pointer checks */
+    if( crt == NULL || cn == NULL || flags == NULL )
+        return;
+
+    /* Ensure the input string is null‐terminated and non‐empty.
+     * Using strlen() here is safe since 'cn' has been validated. */
+    size_t cn_len = strlen( cn );
+    if( cn_len == 0 )
+    {
+        *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+        return;
+    }
+
+    /*
+     * Loop over the subject components to try matching the Common Name.
+     * Note: The comparison uses the explicit length from the certificate field
+     * to avoid any potential buffer over-read if the certificate field is not
+     * null-terminated.
+     */
+    for( name = &crt->subject; name != NULL; name = name->next )
+    {
+        /* Check if this is a Common Name object */
+        if( MBEDTLS_OID_CMP( &name->oid, MBEDTLS_OID_AT_CN ) == 0 )
+        {
+            /* Compare lengths first */
+            if( name->val.len == cn_len )
+            {
+                /* Use memcmp to prevent reading past the intended buffer,
+                 * even if the certificate string is not null terminated. */
+                if( memcmp( name->val.p, cn, cn_len ) == 0 )
+                {
+                    /* Verified: common name matches */
+                    return;
+                }
+            }
+        }
+    }
+
+    /*
+     * Additionally check Subject Alternative Names, if present.
+     * Each entry in the sequence is assumed to have a pointer and length,
+     * so we compare length and content explicitly.
+     */
+    for( cur = crt->subject_alt_names; cur != NULL; cur = cur->next )
+    {
+        if( cur->buf != NULL && cur->len == cn_len )
+        {
+            if( memcmp( cur->buf, cn, cn_len ) == 0 )
+            {
+                /* Verified against an alternative name */
+                return;
+            }
+        }
+    }
+
+    /* No match found: mark name verification as failed */
+    *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+}
+</repair>

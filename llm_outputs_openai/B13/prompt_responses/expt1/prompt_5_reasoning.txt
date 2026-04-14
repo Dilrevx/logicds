@@ -1,0 +1,20 @@
+The repair mainly involves ensuring that, when processing TSIG authentication (the TSIG branch of the conditional), the code correctly extracts and then copies the TSIG signer information into the provided signer variable. Here’s a walkthrough of the changes and how they address the vulnerability:
+
+1. TSIG Processing Block Revisited:
+  • In the original buggy code (now commented out), the TSIG handling block did not perform a crucial step: copying the signer name from the parsed TSIG data (tsig.signer) into the output parameter (signer). This oversight could allow an attacker, with knowledge of a valid TSIG key name, to bypass proper authentication checks by manipulating TSIG-related fields.
+
+2. Adding Signer Cloning:
+  • In the repaired code, after parsing the TSIG data structure using dns_rdata_tostruct, the code now explicitly invokes dns_name_clone(&tsig.signer, signer). This function call copies the actual signer name from the TSIG data structure into the signer provided by the caller.
+  • By doing this, the application guarantees that the signer name accurately reflects the authenticated TSIG information. This step prevents a situation where the signer value might be uninitialized or misleading, which could allow an attacker to subvert TSIG verification, for example, in an AXFR (zone transfer) or NOTIFY request.
+
+3. Validation of TSIG Status:
+  • Before cloning the signer’s name, the code checks the TSIG verification results. It ensures that if msg->tsigstatus is not dns_rcode_noerror or if tsig.error indicates an error, an appropriate error code (DNS_R_TSIGVERIFYFAILURE or DNS_R_TSIGERRORSET) is returned.
+  • This linkage between the verification status and the signer information builds an integrity check, ensuring that only a properly verified TSIG-signed message leads to a successful Cloning of the signer identity.
+
+4. Consistency with SIG(0) Block:
+  • The repair also maintains symmetry with how the sig0 branch is handled. In that branch, after processing and verifying the TSIG signature data structure, the code clones the signer name via dns_name_clone. Aligning the TSIG branch with this mechanism ensures consistency in signer extraction across different authentication methods.
+
+5. Defense Against Bypass:
+  • The vulnerability described involves an attacker exploiting the TSIG path to bypass proper authentication controls on sensitive operations such as zone transfers. By ensuring the correct cloning of the signer name and tying it to a proper TSIG verification (by checking both msg->tsigstatus and tsig.error), the fix prevents a scenario where an attacker could send a crafted TSIG packet that appears to be properly authenticated when it is not.
+
+Overall, this repair not only fills the logical gap in the TSIG processing code but also reinforces the integrity of the authentication process by correctly associating and verifying the signer name from the TSIG key structure.

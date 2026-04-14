@@ -1,0 +1,13 @@
+The main vulnerability stemmed from the logic that modified the certificate verification flag (“verify”) when an OCSP response included the NoCheck extension. Previously, if the certificate had the NoCheck extension and the verification mode was VERIFY_OCSP, the code set verify to NO_VERIFY. This effectively disabled strict verification for that certificate. An attacker could potentially exploit this by injecting an OCSP response with a NoCheck extension even if the certificate was not actually related to the authenticated chain, thereby bypassing proper OCSP verification checks.
+
+In the repair, the problematic code section is preserved but commented out and replaced with a new approach. Here’s how the fix works and why it is secure:
+
+1. The repair first processes the certificate extensions in the same way as before (ensuring that the certificate version is appropriate and decoding any present extensions).
+
+2. Within the OCSP-related zone, rather than downgrading the verification flag from VERIFY_OCSP to NO_VERIFY when the NoCheck extension is present, the repaired code simply logs that the NoCheck extension is present. This logging (via the WOLFSSL_MSG call) is meant for audit purposes, but crucially, it does not alter the verification logic. This means that full verification remains in place regardless of the NoCheck extension.
+
+3. This change stops the accidental or malicious disabling of certificate verification. Logging the presence of the NoCheck extension helps with debugging and maintaining an audit trail, but it ensures that regardless of any flags set within the certificate, the verification flag remains unchanged. As a result, even if an attacker manages to insert a NoCheck extension in an OCSP response, the certificate’s validity will still be thoroughly verified.
+
+4. Finally, after processing all the extensions and handling the OCSP check logging, the code advances the index pointer to bypass the processed extension data (cert->srcIdx is set to cert->sigIndex) and then returns the normal operation value.
+
+In summary, the repair addresses the vulnerability by removing the behavior that would incorrectly downgrade verification standards. Instead of modifying the “verify” flag upon encountering a NoCheck extension, the code keeps the verification process intact while still acknowledging the presence of the extension through logging. This way, the system prevents unauthorized leniency in certificate verification, thereby closing the door on potential exploits where a malicious OCSP response could disable important security checks.

@@ -1,0 +1,18 @@
+The repair addresses the vulnerability that arises when old (or “replayed”) packets are misinterpreted as part of a new SRTP session after a restart. Here’s what was done and how it fixes the issue:
+
+1. Restarting the SRTP Session on Replay Errors:
+   The original code checked for replay errors (err being srtp_err_status_replay_old or srtp_err_status_replay_fail) when srtp->probation_cnt was still positive. These errors can occur when new RTP streams are initiated (with a new sequence number) while older packets are still arriving. If untreated, these errors might result in the media transport reverting from SRTP-protected media to basic (insecure) RTP. To prevent this insecure fallback, the repair code forces a restart of the SRTP session as soon as such replay errors are detected.
+
+2. Stopping the SRTP Session:
+   The code calls pjmedia_transport_srtp_stop() to stop the current SRTP session. This step is crucial because it resets the internal state of the SRTP session (particularly, the rollover counter) that is used for replay protection. If not reset, when the new stream arrives with the correct sequence numbers, the session would still mistakenly treat them as replayed packets.
+
+3. Restarting with the Original Policies:
+   After stopping the session, the SRTP session is restarted using the stored transmission (tx_policy) and reception (rx_policy) configurations. This reinitialization ensures that the SRTP context clears any state that could interfere with the recognition of the new, legitimate sequence values.
+
+4. Re-attempting Packet Unprotection:
+   Once the SRTP session is restarted, the code reattempts to unprotect (decrypt and verify) the packet by calling srtp_unprotect(). This step is essential because it gives the packet another chance to be processed correctly under the newly initialized SRTP context.
+
+5. Preventing Insecure Fallback:
+   By restarting the session and reattempting unprotection, the repair prevents the system from handing off a packet under SRTP restart conditions to an unprotected callback. This mechanism stops the application from falling back to sending media insecurely via basic RTP, thus mitigating the vulnerability where the media negotiation might inadvertently switch to an insecure mode.
+
+Overall, the repair ensures that in cases of replay-related errors during session initialization (when outdated packets recycle into the system), the SRTP stream is promptly re-synchronized. The code no longer bypasses SRTP processing and ensures that any replay confusion is resolved by restarting the session, hence safeguarding the integrity and confidentiality of the media transport.

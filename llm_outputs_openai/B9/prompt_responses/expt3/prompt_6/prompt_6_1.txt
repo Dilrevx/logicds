@@ -1,0 +1,89 @@
+Below is an example of how the verification code might be reworked. In this snippet the certificate check no longer “short-circuits” on a mismatched signature algorithm. Instead, it sets a flag (valid_sig_algo) when the signature algorithm matches the key material provided in the certificate. Only after all algorithm‐specific checks are performed does the code decide whether to continue or abort the handshake. (Note that this example is written in C-like pseudocode to illustrate the repair. In your actual code the types, constant values and error handling may differ.)
+
+--------------------------------------------------
+/* Example of the repaired certificate signature verification routine */
+
+typedef enum {
+    SIG_ALGO_UNKNOWN,
+    SIG_ALGO_ED25519,
+    SIG_ALGO_ED448,
+    SIG_ALGO_ECDSA,
+    SIG_ALGO_RSA_PSS,
+    SIG_ALGO_RSA_PKCS1, /* Not allowed in TLS 1.3 */
+    /* ... potentially additional algorithms ... */
+} SignatureAlgorithm;
+
+/* A simplified structure for the peer certificate holding pointers to key data */
+typedef struct {
+    void *ed25519_key;
+    void *ed448_key;
+    void *ecc_key;      /* For ECDSA or similar algorithms */
+    struct {
+        void *key;
+        int present;
+    } rsa_key;
+    /* ... other key types if needed ... */
+} Certificate;
+
+/* Function for certificate verification; returns non-zero on error */
+int verify_peer_certificate(Certificate *peer_cert, SignatureAlgorithm sig_algo)
+{
+    int ret = 0;
+    int valid_sig_algo = 0;  /* Flag to indicate if the signature algorithm matches the provided certificate */
+
+    switch(sig_algo)
+    {
+        case SIG_ALGO_ED25519:
+            /* Check that certificate actually has an ED25519 key */
+            valid_sig_algo = (peer_cert->ed25519_key != NULL);
+            break;
+
+        case SIG_ALGO_ED448:
+            /* Check for ED448 key */
+            valid_sig_algo = (peer_cert->ed448_key != NULL);
+            break;
+
+        case SIG_ALGO_ECDSA:
+            /* For ECDSA, ensure that an ECC key is present */
+            valid_sig_algo = (peer_cert->ecc_key != NULL);
+            break;
+
+        case SIG_ALGO_RSA_PSS:
+            /* For RSA-PSS, check that the RSA key is both non-NULL and marked as present */
+            valid_sig_algo = (peer_cert->rsa_key.key != NULL && peer_cert->rsa_key.present);
+            break;
+
+        case SIG_ALGO_RSA_PKCS1:
+            /* RSA PKCS#1.5 is disallowed in TLS v1.3; immediately mark as invalid */
+            return -1;  /* or trigger an error response immediately */
+
+        default:
+            /* Unrecognized or unsupported signature algorithm */
+            return -1;
+    }
+
+    /* Final check: if the signature algorithm does not match the certificate key material found, reject */
+    if(!valid_sig_algo)
+    {
+        /* Log the mismatch if needed and trigger a handshake failure */
+        return -1;
+    }
+
+    /* Continue with other verification steps ... */
+
+    return ret;
+}
+
+--------------------------------------------------
+
+Explanation:
+
+1. A flag variable (valid_sig_algo) is initialized to 0 (false).  
+2. For each supported signature algorithm, the switch‐statement checks whether the certificate includes the corresponding key.  
+  • For ED25519, ED448, and ECDSA signatures the code checks that an appropriate key pointer in the certificate is non-NULL.  
+  • For RSA-PSS the check is slightly more restrictive – it also verifies the “present” flag.  
+  • For RSA PKCS#1.5 the function immediately produces an error because that algorithm is not allowed in TLS v1.3.  
+3. Once the switch has been evaluated, a final check on valid_sig_algo ensures that unless a matching key was found in the certificate, the handshake will be aborted.  
+4. This consolidated check prevents bypassing certificate validation by submitting a mismatched signature algorithm.  
+
+This modification removes any divergent behavior for different signature algorithms and ensures a uniform standard for certificate validation across the handshake process.

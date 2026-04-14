@@ -1,0 +1,110 @@
+<repair>
+	/* --- snip: unchanged code above --- */
+	/* If we are a server and get a client hello when renegotiation isn't
+	 * allowed send back a no renegotiation alert and carry on.
+	 * WARNING: experimental code, needs reviewing (steve)
+	 */
+	if (s->server &&
+	    SSL_is_init_finished(s) &&
+	    !s->s3->send_connection_binding &&
+	    (s->version > SSL3_VERSION) &&
+	    (s->s3->handshake_fragment_len >= 4) &&
+	    (s->session != NULL) && (s->session->cipher != NULL) &&
+	    !(s->ctx->options & SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION))
+		{
+		/* BUGFIX: Explicitly clear the handshake fragment buffer to prevent
+		 * a logical vulnerability where leftover handshake data might later be
+		 * misinterpreted. */
+		s->s3->handshake_fragment_len = 0;
+		rr->length = 0;
+		ssl3_send_alert(s, SSL3_AL_WARNING, SSL_AD_NO_RENEGOTIATION);
+		goto start;
+		}
+	if (s->s3->alert_fragment_len >= 2)
+		{
+		int alert_level = s->s3->alert_fragment[0];
+		int alert_descr = s->s3->alert_fragment[1];
+
+		s->s3->alert_fragment_len = 0;
+
+		if (s->msg_callback)
+			s->msg_callback(0, s->version, SSL3_RT_ALERT, s->s3->alert_fragment, 2, s, s->msg_callback_arg);
+
+		if (s->info_callback != NULL)
+			cb = s->info_callback;
+		else if (s->ctx->info_callback != NULL)
+			cb = s->ctx->info_callback;
+
+		if (cb != NULL)
+			{
+			j = (alert_level << 8) | alert_descr;
+			cb(s, SSL_CB_READ_ALERT, j);
+			}
+
+		if (alert_level == 1) /* warning */
+			{
+			s->s3->warn_alert = alert_descr;
+			if (alert_descr == SSL_AD_CLOSE_NOTIFY)
+				{
+				s->shutdown |= SSL_RECEIVED_SHUTDOWN;
+				return(0);
+				}
+			/* This is a warning but we receive it if we requested
+			 * renegotiation and the peer denied it. Terminate with
+			 * a fatal alert because if application tried to
+			 * renegotiate it presumably had a good reason and
+			 * expects it to succeed.
+			 *
+			 * In future we might have a renegotiation where we
+			 * don't care if the peer refused it where we carry on.
+			 */
+			else if (alert_descr == SSL_AD_NO_RENEGOTIATION)
+				{
+				al = SSL_AD_HANDSHAKE_FAILURE;
+				SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_NO_RENEGOTIATION);
+				goto f_err;
+				}
+#ifdef SSL_AD_MISSING_SRP_USERNAME
+			else if (alert_descr == SSL_AD_MISSING_SRP_USERNAME)
+				return(0);
+#endif
+			}
+		else if (alert_level == 2) /* fatal */
+			{
+			char tmp[16];
+
+			s->rwstate = SSL_NOTHING;
+			s->s3->fatal_alert = alert_descr;
+			SSLerr(SSL_F_SSL3_READ_BYTES, SSL_AD_REASON_OFFSET + alert_descr);
+			BIO_snprintf(tmp, sizeof tmp, "%d", alert_descr);
+			ERR_add_error_data(2, "SSL alert number ", tmp);
+			s->shutdown |= SSL_RECEIVED_SHUTDOWN;
+			SSL_CTX_remove_session(s->ctx, s->session);
+			return(0);
+			}
+		else
+			{
+			al = SSL_AD_ILLEGAL_PARAMETER;
+			SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_UNKNOWN_ALERT_TYPE);
+			goto f_err;
+			}
+
+		goto start;
+		}
+
+	if (s->shutdown & SSL_SENT_SHUTDOWN) /* but we have not received a shutdown */
+		{
+		s->rwstate = SSL_NOTHING;
+		rr->length = 0;
+		return(0);
+		}
+
+	/* Successfully processed record; return number of bytes read */
+	return(n);
+
+f_err:
+	/* send fatal alert and cleanup */
+	ssl3_send_alert(s, SSL3_AL_FATAL, al);
+	return(-1);
+	}
+</repair>

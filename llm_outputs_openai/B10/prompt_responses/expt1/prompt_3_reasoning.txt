@@ -1,0 +1,22 @@
+The repair introduces an additional check right after computing the final message size (args->sz). Initially, the code only checked if the total size exceeded the supplied buffer (outSz), but it didn’t verify that the computed size itself was logically valid. The vulnerability was that an integer overflow or miscalculation during size computations could produce an args->sz that is less than the header size (args->headerSz). This could lead to subsequent memory operations writing data at an unexpected offset, thus corrupting memory or allowing potential out-of-bound writes.
+
+Key changes and their explanations:
+
+1. Size Validation Check:
+   - The code now adds:
+     if (args->sz < args->headerSz) { ... }
+   - This check makes sure that the total computed size of the message is not less than the size of the header. If args->sz is smaller, it signals a calculation error (possibly due to an integer overflow) and stops further processing. This prevents proceeding with an invalid message size that may lead to buffer overflows or other security issues.
+
+2. Order of Conditions:
+   - The new check is placed before verifying if the message overwrites the allotted output buffer (by comparing args->sz with outSz). This order ensures that even if the size is within bounds relative to outSz, it is still validated against an expected minimum (args->headerSz). This double-check both prevents accidental memory corruption and ensures the message structure is logically correct.
+
+3. Handling the sizeOnly Case:
+   - The patch also treats the sizeOnly call correctly. In a sizeOnly call, where the caller only wants to compute the message size, the computed message size is returned immediately after the safe-guard checks. The check prevents returning a bogus size if the calculation was invalid.
+
+4. Continued Flow for Normal Operation:
+   - If the computed size is valid, the function then proceeds to call helper functions such as BuildMessageHeader, BuildMessageBody, and FinalizeMessage. These calls construct the full message securely, now that the size calculation has been properly validated.
+
+5. Async Operation Handling:
+   - The repair preserves the handling for asynchronous operations (WOLFSSL_ASYNC_CRYPT), ensuring that any required cleanup or state updates are performed even if an error occurs.
+
+Overall, the repair fixes the vulnerability by ensuring that before any critical memory writes or further processing occur, the computed size is rigorously validated against a logical minimum. This prevents attacks that might exploit integer overflow vulnerabilities to bypass buffer size checks and potentially overwrite memory or execute unintended behavior, thus significantly hardening the function against such vulnerabilities.

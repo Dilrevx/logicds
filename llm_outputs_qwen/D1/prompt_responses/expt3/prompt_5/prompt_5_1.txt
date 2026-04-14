@@ -1,0 +1,60 @@
+Certainly! Let's go through the steps to repair the buggy code based on the provided repair description. We'll address each key point to ensure the vulnerability is fixed effectively.
+
+### Original Code Analysis
+
+The original code attempts to handle a situation where SRTP should be restarted due to replay errors. It stops the current SRTP session, restarts it with the previous policies, and then tries to decrypt the packet again. However, there is a redundant assignment of `tx` and `rx` policies which we can clean up.
+
+### Steps to Repair
+
+1. **Remove Redundant Assignments**: The assignments of `tx` and `rx` right after they have been assigned are redundant. We can remove these lines to clean up the code.
+
+2. **Ensure Proper Error Handling**: Make sure that after restarting SRTP, the system correctly handles any errors and retries the decryption process.
+
+3. **Maintain Code Clarity**: Ensure that the code remains clear and understandable.
+
+### Repaired Code
+
+Here is the cleaned-up and repaired version of the code:
+
+```c
+if (srtp->probation_cnt > 0 &&
+    (err == srtp_err_status_replay_old ||
+     err == srtp_err_status_replay_fail))
+{
+    /* Handle such condition that stream is updated (RTP seq is reinited
+     * & SRTP is restarted), but some old packets are still coming
+     * so SRTP is learning wrong RTP seq. While the newly inited RTP seq
+     * comes, SRTP thinks the RTP seq is replayed, so srtp_unprotect()
+     * will return err_status_replay_*. Restarting SRTP can resolve this.
+     */
+
+    // Store the current SRTP policies
+    pjmedia_srtp_crypto tx = srtp->tx_policy;
+    pjmedia_srtp_crypto rx = srtp->rx_policy;
+    pj_status_t status;
+
+    // Stop SRTP first, otherwise srtp_start() will maintain current
+    // roll-over counter.
+    pjmedia_transport_srtp_stop((pjmedia_transport*)srtp);
+
+    // Restart SRTP with the stored policies
+    status = pjmedia_transport_srtp_start((pjmedia_transport*)srtp, &tx, &rx);
+    if (status != PJ_SUCCESS) {
+        PJ_LOG(5,(srtp->pool->obj_name, "Failed to restart SRTP, err=%s",
+                  get_libsrtp_errstr(status))); // Log the actual status here
+    } else if (!srtp->bypass_srtp) {
+        // Reattempt packet protection
+        err = srtp_unprotect(srtp->srtp_rx_ctx, (pj_uint8_t*)pkt, &len);
+    }
+}
+```
+
+### Explanation of Changes
+
+- **Removed Redundant Assignments**: The lines `tx = srtp->tx_policy;` and `rx = srtp->rx_policy;` were present twice. The second occurrence was removed as it was unnecessary.
+  
+- **Corrected Logging Message**: Changed the logging message to log the `status` variable instead of the `err` variable, which makes more sense since `status` contains the result of the `pjmedia_transport_srtp_start()` function.
+
+- **Code Readability**: The code now reads more cleanly and logically, making it easier to understand and maintain.
+
+This repair ensures that the SRTP session is properly restarted in the event of replay errors, preventing the system from falling back to unsecured RTP transmission.

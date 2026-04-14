@@ -1,0 +1,34 @@
+Below is one example of a repair patch that checks the result of the “first‐kex packet” guess and immediately aborts the connection when the guess is wrong. In our patched version, if the negotiated KEX or host key algorithms do not match between the client and server (i.e. if the guess is “wrong”) then we log an error and terminate the key‐exchange rather than continuing with a connection that might lack integrity protection. (Note that in a real-world fix the session–aborting code may need to integrate with your connection teardown framework.) 
+
+––––– Begin Patched Code –––––
+
+    if (first_kex_packet_follows || session->send_first_kex_follows) {
+        char **client_methods = crypto->client_kex.methods;
+        char **server_methods = crypto->server_kex.methods;
+        session->first_kex_follows_guess_wrong =
+            cmp_first_kex_algo(client_methods[SSH_KEX],
+                               server_methods[SSH_KEX]) ||
+            cmp_first_kex_algo(client_methods[SSH_HOSTKEYS],
+                               server_methods[SSH_HOSTKEYS]);
+        SSH_LOG(SSH_LOG_DEBUG, "The initial guess was %s.",
+                session->first_kex_follows_guess_wrong ? "wrong" : "right");
+
+        /* If the guess is wrong then continuing the handshake risks a downgrade attack.
+           Abort the connection to prevent bypassing integrity checks. */
+        if (session->first_kex_follows_guess_wrong) {
+            SSH_LOG(SSH_LOG_ERR,
+                "First key-exchange packet guess mismatch -- aborting to avoid potential downgrade attack.");
+            /* It is critical to tear down the session properly. Replace the following line 
+             * with your project’s procedure for cleaning up/aborting the connection. */
+            return SSH_ERR_PROTOCOL;  // or call a disconnect routine if available
+        }
+    }
+
+––––– End Patched Code –––––
+
+Explanation of the changes:
+1. After computing session->first_kex_follows_guess_wrong, we now check if it is true.
+2. When true, we log an error and immediately abort the handshake rather than continuing.
+3. This avoids the condition where the client and server might negotiate a connection that has some security features downgraded or absent (the Terrapin attack scenario).
+
+This repair ensures that if the attacker manages to influence the order or omission of key negotiation packets, the connection is terminated rather than allowed to continue in a potentially insecure state.

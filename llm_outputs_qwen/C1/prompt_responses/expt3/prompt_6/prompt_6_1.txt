@@ -1,0 +1,62 @@
+To address the vulnerability described, we need to modify the code where `X509_verify_cert()` is called and ensure that any negative return values are properly handled to avoid the incorrect `SSL_ERROR_WANT_RETRY_VERIFY` error being set.
+
+Here's a snippet of how you might apply the repair in the context of the OpenSSL source code:
+
+```c
+int ssl_verify_cert_chain(SSL *s, STACK_OF(X509) *sk)
+{
+    int i = 0;
+    X509_STORE_CTX *ctx = NULL;
+
+    // Assume app_verify_callback is a function pointer for the application-specific callback
+    int (*app_verify_callback)(X509_STORE_CTX *, void *) = s->ctx->app_verify_callback;
+
+    if (app_verify_callback != NULL) {
+        // Use the application-specific callback
+        ctx = X509_STORE_CTX_new();
+        if (ctx == NULL) {
+            // Handle memory allocation failure
+            return -1;
+        }
+        X509_STORE_CTX_init(ctx, s->ctx->cert_store, sk ? sk_X509_value(sk, 0) : NULL, sk);
+        i = app_verify_callback(ctx, s->ctx->app_verify_arg);
+        X509_STORE_CTX_free(ctx);
+    } else {
+        // Directly call X509_verify_cert()
+        ctx = X509_STORE_CTX_new();
+        if (ctx == NULL) {
+            // Handle memory allocation failure
+            return -1;
+        }
+        X509_STORE_CTX_init(ctx, s->ctx->cert_store, sk ? sk_X509_value(sk, 0) : NULL, sk);
+        i = X509_verify_cert(ctx);
+        X509_STORE_CTX_free(ctx);
+
+        // Check for internal errors and treat them as verification failures
+        if (i < 0) {
+            i = 0; // Convert internal error to verification failure
+        }
+    }
+
+    // Continue with the rest of the certificate verification logic...
+    return i;
+}
+```
+
+### Explanation of the Fix
+
+1. **Check for Application-Specific Callback**:
+   - The code first checks if an application-specific callback is set via `s->ctx->app_verify_callback`.
+   - If a callback is set, it initializes a `X509_STORE_CTX` and uses the callback to verify the certificate chain.
+
+2. **Direct Call to `X509_verify_cert()`**:
+   - If no application-specific callback is set, it directly calls `X509_verify_cert()` to verify the certificate chain.
+
+3. **Handling Negative Return Values**:
+   - After calling `X509_verify_cert()`, the code checks if the return value `i` is negative.
+   - If `i` is negative, indicating an internal error, it sets `i` to `0` to represent a verification failure instead of an internal error.
+
+4. **Freeing Resources**:
+   - Regardless of whether the callback is used or `X509_verify_cert()` is called directly, the `X509_STORE_CTX` is freed to prevent memory leaks.
+
+This repair ensures that internal errors during certificate verification are handled in a way that is consistent with the library's design, preventing applications from receiving the unexpected `SSL_ERROR_WANT_RETRY_VERIFY` error.

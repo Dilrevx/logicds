@@ -1,0 +1,87 @@
+package main;
+
+import commons.*;
+
+public class KeyVerifier {
+    public static int check_dnskey_sigs(Vctx vctx,
+                                        DnsRdataDnskey dnskey,
+                                        RData rdata,
+                                        boolean is_ksk)
+    {
+        byte[] active_keys  = is_ksk ? vctx.ksk_algorithms : vctx.zsk_algorithms;
+        byte[] standby_keys = is_ksk ? vctx.standby_ksk    : vctx.standby_zsk;
+        boolean[] goodkey   = is_ksk ? vctx.goodksk         : vctx.goodzsk;
+
+        if (Dnssec.dns_dnssec_selfsigns(rdata,
+                vctx.origin, vctx.keyset, vctx.keysigs, false, vctx.mctx))
+        {
+            if ((active_keys[dnskey.algorithm] & 0xFF) != 255) {
+                active_keys[dnskey.algorithm]++;
+            }
+        }
+        else if (!is_ksk &&
+                Dnssec.dns_dnssec_signs(rdata,
+                        vctx.origin, vctx.soaset, vctx.soasigs, false, vctx.mctx))
+        {
+            if ((active_keys[dnskey.algorithm] & 0xFF) != 255) {
+                active_keys[dnskey.algorithm]++;
+            }
+            return Commons.ISC_R_SUCCESS;
+        }
+        else {
+            if ((standby_keys[dnskey.algorithm] & 0xFF) != 255) {
+                standby_keys[dnskey.algorithm]++;
+            }
+            return Commons.ISC_R_SUCCESS;
+        }
+        if (vctx.secroots == null) {
+            goodkey[0] = true;
+            return Commons.ISC_R_SUCCESS;
+        }
+        DstKey[] keyOut = new DstKey[1];
+        int result = Dnssec.dns_dnssec_keyfromrdata(
+                vctx.origin, rdata, vctx.mctx, keyOut);
+        if (result != Commons.ISC_R_SUCCESS) {
+            return result;
+        }
+        DstKey key = keyOut[0];
+        Keynode[] knOut = new Keynode[1];
+        result = Keytable.dns_keytable_findkeynode(
+                vctx.secroots, vctx.origin,
+                Dst.dst_key_alg(key), Dst.dst_key_id(key),
+                knOut);
+
+    /* First, if the initial result isn’t a success, immediately free the key and exit.
+       This prevents any unvalidated or partial data from being used. */
+    if (result != Commons.ISC_R_SUCCESS) {
+        Dst.dst_key_free(keyOut);
+        return Commons.ISC_R_SUCCESS;
+    }
+    
+    /* Assume that "knOut" is an array of Keynode pointers and "knOut_count" holds its length.
+       Also assume an externally provided "expectedKey" that holds the trusted key for secure comparison,
+       and a function "secure_key_compare(candidate, expected)" that returns true only if both keys match. */
+    boolean foundGoodKey = false;
+    for (int i = 0; i < knOut_count; i++) {
+        Keynode currentKey = knOut[i];
+        if (!foundGoodKey && secure_key_compare(currentKey, expectedKey)) {
+            /* This key matches the trusted key: detach it and mark the trusted datasets accordingly */
+            Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[] { currentKey });
+            Rdataset.dns_rdataset_settrust(vctx.keyset, Commons.dns_trust_secure);
+            Rdataset.dns_rdataset_settrust(vctx.keysigs, Commons.dns_trust_secure);
+            goodkey[0] = true;
+            foundGoodKey = true;
+            /* We do not break immediately because we want to ensure that any extra 
+               (possibly forged) keys are cleaned up. */
+        } else {
+            /* Detach invalid or extra key nodes as a precaution */
+            Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[] { currentKey });
+        }
+    }
+    
+    /* Free key resources once we have finished processing */
+    Dst.dst_key_free(keyOut);
+    return Commons.ISC_R_SUCCESS;
+
+    }
+}

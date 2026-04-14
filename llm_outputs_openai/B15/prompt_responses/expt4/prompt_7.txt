@@ -1,0 +1,104 @@
+<repair>
+static isc_result_t
+check_dnskey_sigs(vctx_t *vctx, const dns_rdata_dnskey_t *dnskey,
+                  dns_rdata_t *rdata, bool is_ksk)
+{
+	unsigned char *active_keys, *standby_keys;
+	dns_keynode_t *keynode = NULL;
+	bool *goodkey;
+	dst_key_t *key = NULL;
+	isc_result_t result;
+
+	active_keys = (is_ksk ? vctx->ksk_algorithms : vctx->zsk_algorithms);
+	standby_keys = (is_ksk ? vctx->standby_ksk : vctx->standby_zsk);
+	goodkey = (is_ksk ? &vctx->goodksk : &vctx->goodzsk);
+
+	/*
+	 * First, check if the DNSKEY RRset is self‐signed. In the case where
+	 * no trust anchors are configured, a properly self‐signed RRset is
+	 * sufficient.  However, if a trust anchor table is configured, we must
+	 * verify that the key is indeed a trust anchor before accepting the data.
+	 */
+	if (dns_dnssec_selfsigns(rdata, vctx->origin, &vctx->keyset,
+				 &vctx->keysigs, false, vctx->mctx))
+	{
+		/*
+		 * If no trust anchors are configured, count and accept.
+		 */
+		if (vctx->secroots == NULL) {
+			if (active_keys[dnskey->algorithm] != 255)
+				active_keys[dnskey->algorithm]++;
+			*goodkey = true;
+			return (ISC_R_SUCCESS);
+		}
+
+		/*
+		 * When a trust anchor table is configured, perform proper key lookup.
+		 */
+		result = dns_dnssec_keyfromrdata(vctx->origin, rdata, vctx->mctx,
+						 &key);
+		if (result != ISC_R_SUCCESS)
+			return (result);
+
+		result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+						  dst_key_alg(key), dst_key_id(key),
+						  &keynode);
+		switch (result) {
+		case ISC_R_SUCCESS:
+			/*
+			 * The supplied key is a trust anchor.
+			 */
+			dns_keytable_detachkeynode(vctx->secroots, &keynode);
+			dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+			dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+			*goodkey = true;
+			/* Only update the algorithm counter after a successful trust anchor check */
+			if (active_keys[dnskey->algorithm] != 255)
+				active_keys[dnskey->algorithm]++;
+			result = ISC_R_SUCCESS;
+			break;
+		case DNS_R_PARTIALMATCH:
+		case ISC_R_NOTFOUND:
+			/*
+			 * The key isn’t in the trust anchor table.
+			 * Do not mark the zone as having been validated by a trust anchor.
+			 */
+			result = ISC_R_SUCCESS;
+			break;
+		default:
+			/*
+			 * An error occurred while searching the trust anchor table.
+			 */
+			dst_key_free(&key);
+			return (result);
+		}
+		dst_key_free(&key);
+		return (result);
+	}
+	/*
+	 * If the DNSKEY RRset isn’t self‐signed, check if additional signatures are present.
+	 */
+	else if (!is_ksk &&
+		 dns_dnssec_signs(rdata, vctx->origin, &vctx->soaset,
+				  &vctx->soasigs, false, vctx->mctx))
+	{
+		if (active_keys[dnskey->algorithm] != 255)
+			active_keys[dnskey->algorithm]++;
+		return (ISC_R_SUCCESS);
+	} else {
+		/*
+		 * For records that do not meet the above validation, increment the
+		 * standby counter.
+		 */
+		if (standby_keys[dnskey->algorithm] != 255)
+			standby_keys[dnskey->algorithm]++;
+		return (ISC_R_SUCCESS);
+	}
+}
+</repair>
+
+Explanation:
+• The code now defers updating the “active_keys” counter until after a trust anchor check has been successfully performed when a trust anchor table (secroots) is configured.
+• When no trust anchors are configured, self‐signed data is immediately accepted.
+• This prevents an attacker on the network path from manipulating the counters based solely on self‐signed data and substituting forged data for data that was originally validated through a trust anchor.
+This repair addresses the flaw noted in the vulnerability description for mirror zone handling.

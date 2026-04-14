@@ -1,0 +1,64 @@
+The original code snippet contained a logical vulnerability that prevented it from correctly checking if a certificate was revoked by a Certificate Revocation List (CRL). Specifically, the code mistakenly used the `subject` of the current certificate to fetch the CRLs instead of using the `issuer`. This error meant that the system would not properly verify whether the current certificate had been revoked according to the CRL issued by the certificate authority (CA) that signed it.
+
+### Detailed Explanation of the Repair
+
+#### Original Vulnerability
+
+In the original code, the following section is responsible for fetching the CRLs:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, subject);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+Here, `X509_STORE_CTX_get1_crls()` or `X509_STORE_get1_crls()` is called with `subject` as the argument. However, the correct approach is to use the `issuer` of the current certificate to fetch the relevant CRLs. The `issuer` is the CA that signed the current certificate, and its CRL contains the list of certificates that have been revoked by that CA.
+
+#### Corrected Code
+
+The corrected code modifies the argument passed to the functions that fetch the CRLs:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, issuer);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+By passing `issuer` instead of `subject`, the code now correctly fetches the CRLs issued by the CA that signed the current certificate.
+
+#### Additional Checks
+
+After fetching the CRLs, the code checks if the current certificate is listed in the CRLs as revoked. This is done using the `X509_CRL_get0_by_serial()` function, which searches the CRL for a record matching the serial number of the current certificate:
+
+```c
+res = X509_CRL_get0_by_serial(crl, NULL, X509_get_serialNumber(xs));
+if (res != 0) {
+  tls_log("certificate revoked by CRL: %s", tls_get_errors());
+
+  X509_STORE_CTX_set_error(ctx, X509_V_ERR_CERT_REVOKED);
+  sk_X509_CRL_free(crls);
+  X509_STORE_CTX_cleanup(store_ctx);
+  X509_STORE_CTX_free(store_ctx);
+  return FALSE;
+}
+```
+
+If `X509_CRL_get0_by_serial()` returns a non-zero value, it indicates that the certificate is found in the CRL, meaning it has been revoked. In this case, the function logs the revocation, sets an appropriate error in the `X509_STORE_CTX`, and returns `FALSE` to indicate that the certificate verification failed.
+
+#### Conclusion
+
+This repair ensures that the system correctly checks for certificate revocation by using the CRLs issued by the appropriate CA. It addresses the logical vulnerability by ensuring that the CRL lookup is performed using the `issuer` of the certificate rather than the `subject`. This change enhances the security of the system by preventing the acceptance of revoked certificates, which could otherwise lead to man-in-the-middle attacks or other security breaches.

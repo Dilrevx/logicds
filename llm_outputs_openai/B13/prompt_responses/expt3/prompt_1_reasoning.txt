@@ -1,0 +1,21 @@
+The repair adds an explicit ACL (Access Control List) check to the TSIG verification process. Originally, the code validated the TSIG using only DNS response codes (tsigstatus and error codes) from the TSIG record. An attacker with access to an authoritative server and knowledge of a key name could potentially craft a request that passes TSIG validation (because they can mimic some aspects of a valid request) but is still unauthorized. This could allow an attacker to retrieve full zone transfers (AXFR) or send fake NOTIFY packets.
+
+In the fixed code, after confirming that TSIG verification succeeds (ensuring msg->tsigstatus and tsig.error are both dns_rcode_noerror), an additional condition is introduced:
+
+  else if (!is_transfer_allowed(msg->peeraddr))
+   result = DNS_R_AXFRNOTALLOWED;
+
+This check calls a helper function, is_transfer_allowed(), passing the peer's IP address. This function should verify whether the requester's IP is permitted to perform sensitive operations like a zone transfer.
+
+In essence, the repair secures the code by:
+
+1. Maintaining the original TSIG authentication checks.
+2. Adding an ACL check to ensure that even if an attacker can forge a TSIG packet, they must also be coming from an authorized IP address according to the server's ACL. This double-check mitigates attacks where the TSIG might be subverted.
+
+By doing so, the vulnerability is addressed in two ways:
+• TSIG verification ensures integrity of the message through cryptographic means.
+• ACL verification ensures that only trusted network addresses are ever allowed to request the sensitive data (AXFR zone transfers or notifications).
+
+This layered security approach makes it substantially harder for an attacker to circumvent TSIG authentication because they now must also bypass network-based restrictions, meaning even if they can spoof the TSIG, their connection must come from an IP address explicitly allowed in the system’s transfer ACL.
+
+Overall, the technical remedy in the repair strikes a balance between cryptographic validation (TSIG) and network-level security (ACL). This significantly reduces the risk of misuse such as unauthorized AXFR or spurious notifications, fulfilling the intent behind the vulnerability description and strengthening the trusted boundaries of the server.

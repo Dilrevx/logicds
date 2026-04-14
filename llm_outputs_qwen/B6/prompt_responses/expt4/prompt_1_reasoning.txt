@@ -1,0 +1,39 @@
+The provided repair addresses a critical vulnerability in the certificate verification process related to the handling of the `subjectAltName` (SAN) extension in X.509 certificates. The original code did not properly restrict the comparison of the expected common name (`cn`) with names found in the `subjectAltName` extension, leading to potential security issues. Specifically, the vulnerability allowed an attacker to potentially impersonate a domain by obtaining a certificate for an IP address that resolves to the same domain. Here’s a detailed explanation of the repair:
+
+### Original Vulnerability
+
+In the original code snippet, the verification logic for the common name (CN) checks both the `subjectAltName` and the `subject` fields of the certificate. When the `subjectAltName` extension is present, the code iterates through all entries in this extension and compares each one with the expected CN using the `x509_crt_check_cn` function. However, it does not filter these entries based on their type, meaning it compares against all types of SANs, including IP addresses.
+
+This is problematic because the `subjectAltName` extension can contain multiple types of names, such as DNS names (type 2), email addresses (type 1), and IP addresses (types 7 for IPv4 and 8 for IPv6). An attacker could exploit this by obtaining a certificate for an IP address that resolves to the target domain. Since the code does not differentiate between DNS names and IP addresses, it would incorrectly consider the certificate valid if the IP address matches the expected CN, even if the CN is intended to be a DNS name.
+
+### Repair Explanation
+
+The repair modifies the logic for checking names in the `subjectAltName` extension to ensure that only DNS names are considered when verifying the CN. This is achieved by adding a check for the type of each SAN entry before performing the comparison.
+
+```c
+if( crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME )
+{
+    for( cur = &crt->subject_alt_names; cur != NULL; cur = cur->next )
+    {
+        // Check if the type of the subjectAltName is DNS name (type 2)
+        if( cur->type == MBEDTLS_X509_SAN_DNSNAME &&
+            x509_crt_check_cn( &cur->buf, cn, cn_len ) == 0 )
+            break;
+    }
+
+    if( cur == NULL )
+        *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+}
+```
+
+#### Key Changes
+
+1. **Type Checking**: The repair introduces a condition to check if the type of the current SAN entry is `MBEDTLS_X509_SAN_DNSNAME` (which corresponds to DNS names, type 2). This ensures that only DNS names are considered during the verification process, effectively ignoring other types like IP addresses.
+
+2. **Preservation of Existing Logic**: The rest of the logic remains unchanged, ensuring that the code still correctly handles cases where the `subjectAltName` extension is not present and falls back to checking the `subject` field of the certificate.
+
+3. **Security Enhancement**: By filtering out non-DNS SAN entries, the repair prevents the vulnerability described. It ensures that a certificate is only considered valid if it contains a DNS name that matches the expected CN, thus maintaining the integrity of the domain verification process.
+
+### Conclusion
+
+The repair enhances the security of the certificate verification process by ensuring that only DNS names are considered when matching the expected common name against the `subjectAltName` entries in an X.509 certificate. This change effectively mitigates the risk of an attacker using an IP address to impersonate a domain, thereby protecting systems from potential man-in-the-middle attacks and other forms of certificate-based fraud.

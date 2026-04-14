@@ -1,0 +1,79 @@
+Based on the provided vulnerability and repair descriptions, let's apply the necessary changes to the code snippet. The goal is to ensure that custom ciphers created with `NID_undef` do not inadvertently lead to the use of the NULL cipher. We'll focus on modifying the initialization functions to include the necessary checks for the cipher's origin.
+
+Here is a hypothetical code snippet before the patch, followed by the patched version:
+
+### Original Code Snippet
+```c
+int EVP_EncryptInit_ex2(EVP_CIPHER_CTX *ctx, const EVP_CIPHER *cipher, ENGINE *impl,
+                        const unsigned char *key, const unsigned char *iv) {
+    if (ctx == NULL)
+        return 0;
+
+    EVP_CIPHER_CTX_reset(ctx);
+    ctx->cipher = cipher;
+    ctx->engine = impl;
+
+    if (impl != NULL) {
+        // Handle engine-specific initialization
+        return 1;
+    }
+
+    if (cipher != NULL && cipher->prov != NULL) {
+        // Handle provider-specific initialization
+        return 1;
+    }
+
+    // Fallback to legacy method
+    return legacy_EVP_EncryptInit_ex(ctx, key, iv);
+}
+```
+
+### Patched Code Snippet
+In the patched version, we add checks to ensure that custom ciphers created with `EVP_CIPHER_meth_new()` are handled correctly:
+
+```c
+#include <openssl/evp.h>
+
+int EVP_EncryptInit_ex2(EVP_CIPHER_CTX *ctx, const EVP_CIPHER *cipher, ENGINE *impl,
+                        const unsigned char *key, const unsigned char *iv) {
+    if (ctx == NULL)
+        return 0;
+
+    EVP_CIPHER_CTX_reset(ctx);
+    ctx->cipher = cipher;
+    ctx->engine = impl;
+
+    // Check if the cipher is from a legacy method and handle accordingly
+    if (cipher != NULL && cipher->origin == EVP_ORIG_METH) {
+        return legacy_EVP_EncryptInit_ex(ctx, key, iv);
+    }
+
+    // If the cipher is NULL, check if the context's cipher is from a legacy method
+    if (cipher == NULL && ctx->cipher != NULL && ctx->cipher->origin == EVP_ORIG_METH) {
+        return legacy_EVP_EncryptInit_ex(ctx, key, iv);
+    }
+
+    if (impl != NULL) {
+        // Handle engine-specific initialization
+        return 1;
+    }
+
+    if (cipher != NULL && cipher->prov != NULL) {
+        // Handle provider-specific initialization
+        return 1;
+    }
+
+    // Fallback to legacy method if no provider is found and the cipher is not from a legacy method
+    return legacy_EVP_EncryptInit_ex(ctx, key, iv);
+}
+```
+
+### Explanation of Changes
+1. **Check for Legacy Method Origin**:
+   - Added a check to see if the `cipher` is not `NULL` and its `origin` is `EVP_ORIG_METH`. This indicates that the cipher was created using `EVP_CIPHER_meth_new()`.
+   - Added a similar check for when `cipher` is `NULL` but `ctx->cipher` is not `NULL` and its `origin` is `EVP_ORIG_METH`.
+
+2. **Route to Legacy Method**:
+   - If either of the above conditions is true, the function routes the process to the legacy method `legacy_EVP_EncryptInit_ex()` to ensure that the custom cipher is used instead of falling back to the NULL cipher.
+
+These changes ensure that custom ciphers are handled correctly and prevent the use of the NULL cipher when `NID_undef` is mistakenly used. This patch should be applied to all relevant initialization functions (`EVP_EncryptInit_ex2()`, `EVP_DecryptInit_ex2()`, and `EVP_CipherInit_ex2()`) to fully mitigate the vulnerability.

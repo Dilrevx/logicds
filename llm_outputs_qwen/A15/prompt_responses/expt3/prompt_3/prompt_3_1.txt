@@ -1,0 +1,39 @@
+To address the described vulnerability in the `wpa_supplicant` implementation of PEAP, we need to ensure that the system does not accept an EAP-TLV Success packet prematurely, which could lead to skipping Phase 2 authentication. The vulnerability arises because the current code does not properly validate whether Phase 2 authentication should have been completed before accepting an EAP-TLV Success packet.
+
+The key issue here is that the code does not check if Phase 2 has actually been performed and succeeded before setting the decision to `DECISION_UNCOND_SUCC`. To mitigate this, we should add a check to confirm that Phase 2 has indeed been successfully completed before accepting an EAP-TLV Success packet.
+
+Here's a proposed repair:
+
+```c
+if (status == EAP_TLV_RESULT_SUCCESS) {
+    // Check if Phase 2 has been successfully completed
+    if (phase2_success) { // Assuming phase2_success is a boolean flag indicating success of Phase 2
+        wpa_printf(MSG_INFO, "EAP-TLV: TLV Result - Success "
+               "- EAP-TLV/Phase2 Completed");
+        if (force_failure) {
+            wpa_printf(MSG_INFO, "EAP-TLV: Earlier failure"
+                   " - force failed Phase 2");
+            resp_status = EAP_TLV_RESULT_FAILURE;
+            ret->decision = DECISION_FAIL;
+        } else {
+            resp_status = EAP_TLV_RESULT_SUCCESS;
+            ret->decision = DECISION_UNCOND_SUCC;
+        }
+    } else {
+        wpa_printf(MSG_WARNING, "EAP-TLV: Received Success but Phase 2 was not completed");
+        resp_status = EAP_TLV_RESULT_FAILURE;
+        ret->decision = DECISION_FAIL;
+    }
+} else if (status == EAP_TLV_RESULT_FAILURE) {
+    // Handle failure case
+    wpa_printf(MSG_INFO, "EAP-TLV: TLV Result - Failure");
+    resp_status = EAP_TLV_RESULT_FAILURE;
+    ret->decision = DECISION_FAIL;
+}
+```
+
+In this repair:
+- We introduce a check for `phase2_success`, a boolean variable that should be set to true only after Phase 2 authentication has successfully completed.
+- If `phase2_success` is false when an EAP-TLV Success packet is received, we log a warning and treat it as a failure, preventing an attacker from bypassing Phase 2 authentication.
+
+This change ensures that an EAP-TLV Success packet cannot be used to bypass the necessary Phase 2 authentication, thus mitigating the described vulnerability.

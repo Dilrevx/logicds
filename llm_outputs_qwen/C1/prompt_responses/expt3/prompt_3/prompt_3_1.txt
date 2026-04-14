@@ -1,0 +1,44 @@
+To address the vulnerability described, we need to ensure that when `X509_verify_cert()` returns a negative value indicating an internal error, the application handles it appropriately. The issue arises because such a return value can lead to an unexpected `SSL_ERROR_WANT_RETRY_VERIFY` error, which is intended only for use with a custom certificate verification callback.
+
+Here’s how you can modify the code to handle the error more robustly:
+
+1. **Check the Return Value of `X509_verify_cert()`:** If `X509_verify_cert()` returns a negative value, it indicates an error. We should handle this case separately to avoid setting an incorrect error state that could confuse the application.
+
+2. **Set an Appropriate Error State:** Instead of allowing the error to propagate in a way that could result in `SSL_ERROR_WANT_RETRY_VERIFY`, we should set a clear error state that indicates an internal error occurred during certificate verification.
+
+3. **Log the Error:** It’s also a good practice to log the error so that it can be diagnosed later.
+
+Here’s the revised code snippet:
+
+```c
+#include <openssl/err.h>  // For logging errors
+
+int verify_certificate(SSL *s, X509_STORE_CTX *ctx) {
+    int i;
+
+    if (s->ctx->app_verify_callback != NULL) {
+        i = s->ctx->app_verify_callback(ctx, s->ctx->app_verify_arg);
+    } else {
+        i = X509_verify_cert(ctx);
+        if (i < 0) {
+            // Log the error
+            ERR_print_errors_fp(stderr);
+            // Set an appropriate error state
+            SSLerr(SSL_F_SSL_VERIFY_CERTIFICATE, SSL_R_CERTIFICATE_VERIFY_FAILED);
+            return -1;  // Indicate failure
+        }
+    }
+
+    return i;
+}
+```
+
+### Explanation:
+
+- **Error Logging:** `ERR_print_errors_fp(stderr);` logs the OpenSSL error stack to standard error. This helps in diagnosing the issue by providing detailed information about what went wrong.
+  
+- **Setting an Error State:** `SSLerr()` is used to set an error code specific to SSL operations. In this case, `SSL_R_CERTIFICATE_VERIFY_FAILED` is a suitable error code to indicate that the certificate verification process failed due to an internal error.
+
+- **Return Value Handling:** If `X509_verify_cert()` returns a negative value, the function immediately returns `-1` to indicate failure, ensuring that the calling code can handle this case appropriately.
+
+This modification ensures that the application behaves correctly when an internal error occurs during certificate verification, avoiding the unexpected `SSL_ERROR_WANT_RETRY_VERIFY` error.

@@ -1,0 +1,72 @@
+The provided repair addresses a critical security vulnerability in the wolfSSL library related to TLS 1.3 clients being susceptible to man-in-the-middle (MITM) attacks. This vulnerability arises when a malicious entity with network privileges impersonates a TLS 1.3 server, potentially bypassing proper authentication mechanisms. The core issue in the original code snippet is that it logs a warning message when certain conditions are met (e.g., the peer sends an ED25519 key but it's not in the verification process), but it does not halt the handshake or terminate the connection. An attacker could exploit this by providing malformed or unauthorized keys, leading to a successful MITM attack.
+
+### Analysis of the Vulnerable Code
+
+The original code checks for the presence of specific types of public keys (ED25519, ED448, ECC DSA, RSA PKCS#1.5, RSA PSS) from the peer during the TLS handshake. If the expected public key is not present or incorrectly configured, it logs a message indicating the issue. However, the absence of an `ERROR_OUT` macro call means that the handshake continues even when these anomalies are detected. This lack of action allows an attacker to proceed with the handshake, potentially establishing a secure connection with false credentials.
+
+For example, consider the RSA PKCS#1.5 signature scenario:
+```c
+#ifndef NO_RSA
+    if (args->sigAlgo == rsa_sa_algo) {
+        WOLFSSL_MSG("Oops, peer sent PKCS#1.5 signature");
+        ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+    }
+#endif
+```
+In this case, the code correctly halts the handshake with an `ERROR_OUT` macro when a PKCS#1.5 signature is received. However, similar protections are missing for other key types like ED25519, ED448, and ECC DSA.
+
+### Explanation of the Repair
+
+The repair introduces `ERROR_OUT(INVALID_PARAMETER, exit_dcv);` statements after each logging statement where the peer's public key does not meet the expected criteria. This change ensures that whenever an anomaly is detected in the peer's public key, the handshake is immediately terminated, preventing further communication with an unauthenticated server.
+
+Here is a detailed breakdown of the changes made:
+
+1. **ED25519 Key Check:**
+   ```c
+   #ifdef HAVE_ED25519
+       if (args->sigAlgo == ed25519_sa_algo && !ssl->peerEd25519KeyPresent) {
+           WOLFSSL_MSG("Peer sent ED25519 key but not in verify");
+           ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+       }
+   #endif
+   ```
+   - **Condition:** The condition checks if the signature algorithm is ED25519 and the peer's ED25519 key is not present.
+   - **Action:** If true, log a message and terminate the handshake with `ERROR_OUT`.
+
+2. **ED448 Key Check:**
+   ```c
+   #ifdef HAVE_ED448
+       if (args->sigAlgo == ed448_sa_algo && !ssl->peerEd448KeyPresent) {
+           WOLFSSL_MSG("Peer sent ED448 key but not in verify");
+           ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+       }
+   #endif
+   ```
+   - **Condition:** Checks if the signature algorithm is ED448 and the peer's ED448 key is not present.
+   - **Action:** Logs a message and terminates the handshake if the condition is met.
+
+3. **ECC DSA Key Check:**
+   ```c
+   #ifdef HAVE_ECC
+       if (args->sigAlgo == ecc_dsa_sa_algo && !ssl->peerEccDsaKeyPresent) {
+           WOLFSSL_MSG("Peer sent ECC key but not in verify");
+           ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+       }
+   #endif
+   ```
+   - **Condition:** Checks if the signature algorithm is ECC DSA and the peer's ECC DSA key is not present.
+   - **Action:** Logs a message and terminates the handshake if the condition is met.
+
+4. **RSA PSS Key Check:**
+   ```c
+   #ifndef NO_RSA
+       if (args->sigAlgo == rsa_pss_sa_algo && (ssl->peerRsaKey == NULL || !ssl->peerRsaKeyPresent)) {
+           WOLFSSL_MSG("Peer sent RSA key but not in verify");
+           ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+       }
+   #endif
+   ```
+   - **Condition:** Checks if the signature algorithm is RSA PSS and either the peer's RSA key is null or not present.
+   - **Action:** Logs a message and terminates the handshake if the condition is met.
+
+By ensuring that the handshake is terminated whenever an unexpected or unauthorized key is detected, the repair effectively mitigates the risk of an attacker successfully impersonating a TLS server and establishing a secure connection. This aligns with best practices in secure software development, where validation errors must lead to immediate termination of sensitive operations to prevent exploitation.

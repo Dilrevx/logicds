@@ -1,0 +1,15 @@
+Below is an explanation of the repair and how it addresses the vulnerability:
+
+The vulnerability was that even writable DLZ zones were not being checked for zone transfer permissions when looked up from the normal zone table. In other words, if the zone was present in the normal zone table, the DLZ-specific allowzonexfr method was not called, bypassing any restrictions imposed by the DLZ module.
+
+The repair addresses this in two parts:
+
+1. In the case where the zone is not found in the normal zone table (result != ISC_R_SUCCESS), the code still calls the DLZ zone transfer check (dns_dlzallowzonexfr) unconditionally. If the call returns ISC_R_NOPERM, the code prepares proper log messages and denies the transfer request by setting result to DNS_R_REFUSED. Otherwise, if any other non-success result is returned, it aborts the process with a NOTAUTH error. This block ensures that for DLZ zones not found in the standard zone table, the DLZ-specific transfer control is properly applied.
+
+2. The repair then adds a new conditional branch that handles the case when the zone is found in the normal zone table (i.e., result was ISC_R_SUCCESS initially), but the zone is managed by a DLZ driver that supports the allowzonexfr method. It checks if client->view->dlz_driver is not NULL and if the allowzonexfr function pointer is set. If these conditions are met, it calls dns_dlzallowzonexfr even though the zone exists in the normal zone table. This extra check ensures that when the zone is managed by a DLZ module, the DLZ's own transfer permissions (for example, in writable zones) are enforced. As with the earlier part, if the DLZ check results in ISC_R_NOPERM, an appropriate refusal is logged and returned; otherwise, it aborts with a NOTAUTH error if any unexpected result is encountered.
+
+By restructuring the code in this manner, both cases (zone not found normally and zone found manually with a DLZ driver that supports allowzonexfr) now call dns_dlzallowzonexfr. This results in consistent enforcement of the DLZ module’s zone transfer controls regardless of whether the DLZ zone is writable or not. Essentially, the repair ensures that any DLZ module that provides an allowzonexfr method will have its permissions checked, closing the vulnerability where a writable DLZ zone could bypass zone transfer controls.
+
+Furthermore, the repair maintains the existing logging behavior and proper error handling (by logging in the security domain and setting appropriate error codes), so that upon denial of permissions, the user is informed consistently. This makes the code behavior uniform and secure in both scenarios.
+
+In summary, the repair ensures that the allowzonexfr method is always invoked when dealing with DLZ zones – whether the zone is looked up in the normal zone table or through the DLZ backend – thus effectively mitigating the risk of unauthorized AXFR zone transfers on writable DLZ zones.

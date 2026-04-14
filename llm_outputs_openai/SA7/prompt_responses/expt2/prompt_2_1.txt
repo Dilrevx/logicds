@@ -1,0 +1,72 @@
+<repair>
+        do {
+            i = ctx.chain.size();
+            x = ctx.chain.get(i - 1);
+            if (Helper.cert_self_signed(x)) {
+                if (ctx.chain.size() == 1) {
+                    ok = ctx.get_issuer(x);
+                    if (ok <= 0 || !Helper.equals(x, Helper.lastIssuer)) {
+                        ctx.error = Constants.X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT;
+                        ctx.current_cert = x;
+                        ctx.error_depth = i - 1;
+                        if (ok == 1) Helper.free(Helper.lastIssuer);
+                        bad_chain = 1;
+                        ok = cb.call(0, ctx);
+                        if (!Helper.booleanOk(ok)) return ok;
+                    } else {
+                        // Replace the self-signed certificate with the trusted issuer.
+                        Helper.free(x);
+                        x = Helper.lastIssuer;
+                        ctx.chain.set(i - 1, x);
+                        ctx.last_untrusted = 0;
+                    }
+                } else {
+                    // If a self-signed certificate appears later in the chain,
+                    // remove it and update the chain state accordingly.
+                    chain_ss = ctx.chain.remove(ctx.chain.size() - 1);
+                    ctx.last_untrusted = ctx.chain.size();  // reset untrusted count to current chain length
+                    num--;
+                    j--;
+                    x = ctx.chain.get(num - 1);
+                }
+            }
+            for (;;) {
+                if (depth < num) break;
+                if (Helper.cert_self_signed(x)) break;
+                ok = ctx.get_issuer(x);
+                if (ok < 0) return ok;
+                if (ok == 0) break;
+                x = Helper.lastIssuer;
+                ctx.chain.add(x);
+                num++;
+            }
+            i = Helper.check_trust(ctx);
+            if (i == Constants.X509_TRUST_REJECTED) break;
+            retry = 0;
+            if (i != Constants.X509_TRUST_TRUSTED
+                    && (param.flags & Constants.X509_V_FLAG_TRUSTED_FIRST) == 0
+                    && (param.flags & Constants.X509_V_FLAG_NO_ALT_CHAINS) == 0) {
+                // Search for an alternative chain by iterating backwards
+                while (j-- > 1) {
+                    // Get the issuer candidate directly from the chain.
+                    xtmp2 = ctx.chain.get(j - 1);
+                    ok = ctx.get_issuer(xtmp2);
+                    if (ok < 0) return ok;
+                    if (ok > 0) {
+                        // Ensure we free the temporary issuer resource
+                        Helper.free(Helper.lastIssuer);
+                        // Remove any extra certificates beyond position j to obtain a proper chain.
+                        while (num > j) {
+                            X509 removed = ctx.chain.remove(ctx.chain.size() - 1);
+                            Helper.free(removed);
+                            num--;
+                        }
+                        // Reset untrusted certificate count to match the updated chain length.
+                        ctx.last_untrusted = ctx.chain.size();
+                        retry = 1;
+                        break;
+                    }
+                }
+            }
+        } while (retry != 0);
+</repair>

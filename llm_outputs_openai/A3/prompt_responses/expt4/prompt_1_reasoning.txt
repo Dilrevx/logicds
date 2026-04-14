@@ -1,0 +1,25 @@
+The repair adds a check that detects when a custom cipher has been created with an undefined NID (NID_undef). Here’s a walkthrough:
+
+1. Existing Logic Preservation:  
+   The repair begins by preserving the original condition that determines if the context is using a legacy engine, engine implementation, or other implementation (depending on compile-time flags). If any of these conditions are met, the code continues into the block.
+
+2. Check for Undefined NID:  
+   Within the conditional block, before proceeding with cleanup and legacy fallback, a new check is added:
+     
+     if (ctx->cipher != NULL && ctx->cipher->nid == NID_undef) {
+         ...
+         return 0;
+     }
+     
+   This line ensures that if the currently set cipher is not null and its NID field is NID_undef, the code will trigger an early exit. The vulnerability described arises because a custom cipher with an undefined NID inadvertently maps to the NULL cipher. Therefore, by checking for NID_undef, we prevent the code from continuing down the path where it would otherwise fallback to using the NULL cipher.
+
+3. Cleanup and Error Reporting:  
+   If the undefined NID condition is met, the repair code first frees the fetched cipher structure using EVP_CIPHER_free() and then nullifies the pointer (setting ctx->fetched_cipher to NULL) to avoid memory leaks or dangling pointers. Additionally, it raises an error by calling ERR_raise() with an appropriate error code (EVP_R_INVALID_CIPHER) to signal that an invalid cipher configuration was encountered. Finally, the function returns 0 to indicate failure, preventing further processing with the insecure fallback.
+
+4. Normal Legacy Fall-Through:  
+   If the NID is valid (i.e., it is not NID_undef), then the original logic is executed. This includes checking if the fetched_cipher is equal to the cipher currently set in the context. If they are the same, the code sets ctx->cipher to NULL. Following this, the fetched_cipher is freed and nulled out, and execution jumps to the legacy section via goto legacy.
+
+How It Fixes the Vulnerability:  
+By adding an explicit check for a cipher constructed with NID_undef, the patch ensures that such ciphers are not inadvertently accepted. The vulnerability described occurs when a custom cipher with an undefined identifier mistakenly falls back to the NULL cipher, leading to plaintext encryption (i.e., no encryption) which compromises security. The repair avoids this dangerous fallback by validating the cipher before it can proceed with encryption/decryption initialization and by aborting the process if an undefined cipher is detected. This ensures that only properly defined ciphers, which are expected to have a valid provider mapping, are used in cryptographic operations, thereby preserving the intended security guarantees.
+
+In summary, the repair intercepts the misconfiguration early in the cipher initialization process and prevents the use of a potentially insecure default (NULL cipher), effectively mitigating the vulnerability in OpenSSL versions 3.0.0 to 3.0.5.

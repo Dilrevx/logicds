@@ -1,0 +1,87 @@
+<repair>
+  // Write NAS pcap
+  if (pcap != nullptr) {
+    pcap->write_nas(pdu->msg, pdu->N_bytes);
+  }
+
+  // Parse the message header
+  liblte_mme_parse_msg_header((LIBLTE_BYTE_MSG_STRUCT*)pdu.get(), &pd, &msg_type);
+  logger.info(pdu->msg, pdu->N_bytes, "DL %s Decrypted PDU", rrc->get_rb_name(lcid));
+
+  /* 
+   * In earlier versions plaintext NAS PDUs were accepted for many message types.
+   * However, per TS 24.301 Sec. 4.4.4.2 and to address a logical vulnerability,
+   * only the following plaintext messages are permitted:
+   *   - DETACH REQUEST
+   *   - EMM INFORMATION
+   *   - EMM STATUS
+   * 
+   * Additionally, the ATTACH REJECT and SERVICE REJECT messages are allowed in plaintext
+   * only when the embedded EMM cause is exactly 25.
+   *
+   * All other messages MUST employ integrity protection.
+   */
+  if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS) {
+    switch (msg_type) {
+      case LIBLTE_MME_MSG_TYPE_DETACH_REQUEST:
+      case LIBLTE_MME_MSG_TYPE_EMM_INFORMATION:
+      case LIBLTE_MME_MSG_TYPE_EMM_STATUS:
+        break;
+      case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+      case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT: {
+          // Extract the EMM cause from the PDU.
+          // Assume liblte_mme_get_emm_cause() is a helper function that returns the EMM cause.
+          uint8 emm_cause = liblte_mme_get_emm_cause((LIBLTE_BYTE_MSG_STRUCT*)pdu.get());
+          if (emm_cause != 25) {
+              logger.error("Plain NAS message MSG_TYPE=%02X requires emm_cause 25, got %02X",
+                           msg_type, emm_cause);
+              return;
+          }
+        }
+        break;
+      default:
+        logger.error("Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X without proper integrity protection!",
+                     msg_type, sec_hdr_type);
+        return;
+    }
+  }
+
+  // Reserved for Security Mode Command (Sec 9.3.1)
+  if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT &&
+      msg_type != LIBLTE_MME_MSG_TYPE_SECURITY_MODE_COMMAND) {
+    logger.error("Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X. Security header type reserved!",
+                 msg_type, sec_hdr_type);
+    return;
+  }
+
+  switch (msg_type) {
+    case LIBLTE_MME_MSG_TYPE_ATTACH_ACCEPT:
+      parse_attach_accept(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+      parse_attach_reject(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REQUEST:
+      parse_authentication_request(lcid, std::move(pdu), sec_hdr_type);
+      break;
+    case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REJECT:
+      parse_authentication_reject(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_IDENTITY_REQUEST:
+      parse_identity_request(std::move(pdu), sec_hdr_type);
+      break;
+    case LIBLTE_MME_MSG_TYPE_SECURITY_MODE_COMMAND:
+      parse_security_mode_command(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT:
+      parse_service_reject(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_ESM_INFORMATION_REQUEST:
+      parse_esm_information_request(lcid, std::move(pdu));
+      break;
+    default:
+      logger.error("Unknown NAS message type: %02X", msg_type);
+      return;
+  }
+}
+</repair>

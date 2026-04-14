@@ -1,0 +1,17 @@
+The repair introduces a check for the Key Share extension in addition to the existing PSK logic. Previously, if no valid PSK extension was present, the code cleared the PSK key, which inadvertently led to falling back on a default, predictable IKM value when generating the session master secret. This predictable value could be exploited by an attacker to compromise the session keys.
+
+Here’s a walk-through of how the repair fixes the issue:
+
+1. Checking for Key Share Extension:  
+   The repair adds a lookup for the Key Share extension using the same mechanism as for the PSK extension. In TLS 1.3, at least one of these (PSK or key share) must be present to ensure that secure key material is used during the key exchange. If both extensions are missing, this signifies that neither appropriate PSK nor ephemeral key share values were provided. Without these, the master secret would derive from insecure (and potentially predictable) values.
+
+2. Aborting the Handshake:  
+   If both the PSK (or a valid, chosen instance) and the key share extension are absent, the handshake is aborted by returning an error (in this case, Errors.TLS_HANDSHAKE_FAILURE). This prevents the protocol from falling back to generating the master secret using a predictable IKM, effectively closing the vulnerability where an attacker might force such insecure behavior.
+
+3. PSK Handling When Only Key Share is Present:  
+   If the PSK is missing but the key share extension is provided, the system correctly sets the handshake as non-resuming, clears any PSK-related buffers, and continues. This ensures that even if the PSK extension isn’t provided, the secure key share provided by TLS 1.3 is relied upon for proper key exchange, avoiding the use of any default or predictable keying material.
+
+4. Overall Integrity of the Session:  
+   By enforcing that at least one secure keying mechanism is in place (either through a valid PSK or a key share), the repair prevents the scenario where a default value (which might be known or easily guessed) is used. This guarantees that the generated master secret is derived only from secure and non-predictable values, maintaining the integrity and confidentiality of the TLS session.
+
+In summary, the repair mitigates the vulnerability by ensuring that the server does not proceed with insecure default key material. It does so by validating that either a well-formed PSK or an acceptable key share extension is present before continuing, thereby eliminating the risk of using a default predictable IKM value in TLS 1.3 sessions.

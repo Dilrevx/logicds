@@ -1,0 +1,22 @@
+The repair provided is aimed at fixing a vulnerability in the dnsmasq code that allows an attacker to perform a DNS Cache Poisoning attack. The vulnerability arises from the fact that dnsmasq does not properly verify the source address and port of incoming DNS replies, making it possible for an attacker to forge replies and have them accepted by dnsmasq.
+
+The buggy code snippet checks if a forwarded query matches an incoming reply based on three conditions:
+
+1. `f->sentto` is not null, indicating that the query was sent to a specific address.
+2. `f->new_id == id`, which checks if the query ID matches the ID of the incoming reply.
+3. `!hash || memcmp(hash, f->hash, HASH_SIZE) == 0`, which checks if the hash of the query matches the hash of the incoming reply.
+
+However, this check is insufficient because it does not take into account the source address and port of the incoming reply. An attacker can exploit this by sending a forged reply with a matching ID and hash, but from a different source address and port.
+
+The repair adds two additional conditions to the check:
+
+1. `f->sentto.sin_port == reply->source.sin_port`, which checks if the source port of the incoming reply matches the port to which the query was sent.
+2. A conditional check based on the address family (IPv4 or IPv6) to verify that the source address of the incoming reply matches the address to which the query was sent.
+
+For IPv4, the check is `f->sentto.sin_addr.s_addr == reply->source.sin_addr.s_addr`, which compares the 32-bit IP addresses.
+
+For IPv6, the check is `memcmp(&f->sentto.sin6_addr, &reply->source.sin6_addr, sizeof(struct in6_addr)) == 0`, which compares the 128-bit IP addresses using a memory comparison function.
+
+By adding these additional checks, the repair ensures that dnsmasq only accepts incoming replies that match the exact source address and port to which the query was sent, in addition to the existing checks for ID and hash. This significantly reduces the likelihood of an attacker being able to forge a reply and have it accepted by dnsmasq, thereby preventing DNS Cache Poisoning attacks.
+
+In accordance with RFC 5452, which specifies the requirements for DNS security, the repair ensures that dnsmasq uses all the attributes of a query (ID, hash, source address, and source port) to match a reply, rather than just a subset of these attributes. This provides a more robust and secure way of verifying incoming DNS replies and prevents attacks that rely on incomplete verification.

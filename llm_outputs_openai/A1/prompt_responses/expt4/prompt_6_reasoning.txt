@@ -1,0 +1,20 @@
+The repair adds a proactive step that processes critical parameters—the key length and IV length—before the cipher’s own initialization functions (einit/dinit) are called. This change ensures that the cipher context is configured with the correct lengths from the OSSL_PARAM array in advance, preventing potential truncation or overruns of the IV.
+
+Here’s the key part of the change:
+
+1. Conditional Compilation for Non-FIPS Builds:  
+   The repair introduces the new block within an #ifndef FIPS_MODULE section. This ensures that non-FIPS builds receive the fix while the FIPS module maintains its existing behavior. The rationale is that the new OSSL_PARAM processing needed to correct the vulnerability—CVE-2023-5363—applies only to non-FIPS environments where the parameter processing order could lead to misconfigured lengths.
+
+2. Pre-processing the Parameters:  
+   The added code first checks whether the parameters array (params) is not NULL. It then defines a temporary array of OSSL_PARAM objects (temp_params) that can hold up to two parameter entries. The code searches for the key length parameter using OSSL_PARAM_locate_const() and adds it to the temporary array if found. It then does the same for the IV length parameter. Note that it also checks for an alternative identifier (OSSL_CIPHER_PARAM_AEAD_IVLEN) as a synonym for the IV length. This ensures that all possible relevant parameters are captured.
+
+3. Immediate Application of the Parameters:  
+   Right after the extraction of these parameters, the new temporary array is passed to EVP_CIPHER_CTX_set_params(). This call updates the cipher context’s configuration with the correct key and IV lengths before any further initialization happens. In doing so, it ensures that the subsequent calls to cipher-specific initialization functions (such as einit() for encryption or dinit() for decryption) work with the correct lengths that have been pre-set.
+
+4. Error Handling:  
+   If EVP_CIPHER_CTX_set_params() fails to apply these settings, the code raises an error (EVP_R_INVALID_IV_LENGTH) and aborts the initialization by returning 0. This prevents the cipher from being configured with an inconsistent or insecure state, thereby stopping further operations with a compromised configuration.
+
+5. Backward Compatibility and Padding Preservation:  
+   The repair does not modify the overall cipher initialization flow—legacy paths, object fetching, and context resets remain untouched to preserve existing behavior. Before the new parameter processing, it preserves the “no padding” configuration if the context was previously set that way. This ensures continuity in how padding behavior is maintained after the initialization.
+
+In summary, by pre-processing and applying the key and IV length parameters ahead of the cipher initialization, the repair ensures that the context is set up with the correct lengths. This proactive approach eliminates the risk of later length mismatches that could lead to truncation (losing uniqueness of the IV) or buffer overruns, effectively mitigating the vulnerability associated with CVE-2023-5363 while maintaining backward compatibility with the existing system behavior.

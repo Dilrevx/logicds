@@ -1,0 +1,20 @@
+The repair introduces an explicit check on the return value from the certificate verification function. In the original code, if X509_verify_cert (or the application's callback) returned a negative value—indicating an internal error like an out‐of-memory condition—that negative value was left unhandled. This improper handling could cause OpenSSL to later return SSL_ERROR_WANT_RETRY_VERIFY, an unexpected error for applications that never set a custom verification callback.
+
+Here's how the repair fixes the issue:
+
+1. Right after the verification call (whether from s->ctx->app_verify_callback or the default X509_verify_cert), the code checks if the returned value (stored in i) is less than zero. This indicates that an internal error occurred during the certificate verification process.
+
+2. If i is negative, the code resets i to 0. By doing so, it ensures that the function treats internal errors as verification failures rather than an indeterminate state.
+
+3. Additionally, it explicitly sets s->verify_result to a specific error code, here X509_V_ERR_APPLICATION_VERIFICATION, to record that an application-level verification error occurred. This means that even though verification failed, the failure is communicated in a consistent manner that applications can reliably interpret.
+
+4. For non-negative results, the code proceeds as before by using X509_STORE_CTX_get_error(ctx) to determine the outcome of the certificate verification.
+
+This change matters because it prevents the propagation of negative error values through the SSL/TLS handshake process. Applications expecting standard verification behavior might not handle a negative error code correctly, leading to ambiguous behavior or even security issues. The patch thereby normalizes the error handling mechanism by ensuring that any internal error is captured, logged (via ERR_raise if applicable elsewhere), and reported in a controlled fashion.
+
+In summary, the repair fixes the vulnerability by:
+• Detecting negative return values indicating internal errors.
+• Converting these into a standard verification failure (i.e., setting i = 0).
+• Assigning an appropriate error code (X509_V_ERR_APPLICATION_VERIFICATION) to s->verify_result.
+  
+This ensures that the SSL/TLS handshake process behaves in a predictable way, avoiding unexpected error codes such as SSL_ERROR_WANT_RETRY_VERIFY, and improves the overall robustness and security of certificate validation within OpenSSL.

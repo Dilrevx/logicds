@@ -1,0 +1,63 @@
+Below is an example patch written in C (using pseudo–OpenSSL style functions) that implements the repair. In the original (buggy) code the presence of a NoCheck extension on an OCSP responder certificate was used to short‐circuit all further checks by switching the verification state to a “bypass” mode. This patch revises that logic so that it applies the NoCheck flag only when processing an OCSP responder certificate and even then does not disable all verification but instead uses the “normal” verification state. Adjust the function and variable names as needed to match your code base.
+
+───────────────────────────── Begin Patch ─────────────────────────────
+
+/* Example function that processes an OCSP response for a given certificate */
+int process_ocsp_response(X509 *cert, int current_verify_state, OCSP_VERIFY_CTX *ctx)
+{
+    /*
+     * Assume:
+     * - OCSP_CERT_VERIFY is the state for verifying an OCSP responder certificate fully.
+     * - STANDARD_VERIFY is the state that applies a baseline set of checks.
+     * - current_verify_state is the current context state (set earlier based on caller’s intent).
+     *
+     * The original code might have done something like:
+     *
+     * if (current_verify_state == OCSP_FULL_CHECK && X509_has_nocheck(cert))
+     *     current_verify_state = OCSP_BYPASS_ALL;
+     *
+     * which is dangerous. The following patch refines that logic.
+     */
+
+    /* Check if we are verifying an OCSP responder certificate */
+    if (is_ocsp_responder_context(ctx)) {
+        /*
+         * If the certificate has the NoCheck extension,
+         * do not disable all checking. Instead, switch it to the baseline
+         * verification state (e.g. STANDARD_VERIFY) rather than bypassing it completely.
+         */
+        if (X509_check_nocheck(cert)) {
+            /* The certificate is marked with NoCheck.
+             * Instead of bypassing, continue with a baseline (or full) verification,
+             * so we set the state for OCSP responder certificate verification.
+             * That ensures that even with NoCheck, the certificate is appropriately validated.
+             */
+            current_verify_state = OCSP_CERT_VERIFY;  /* or STANDARD_VERIFY, as defined */
+        } else {
+            /* No NoCheck flag present; enforce full OCSP-based checks. */
+            current_verify_state = OCSP_FULL_VERIFY;
+        }
+    }
+
+    /* Proceed with the rest of the OCSP response processing using current_verify_state */
+
+    // ... (rest of OCSP processing code) ...
+
+    return perform_ocsp_checks(cert, current_verify_state, ctx);
+}
+
+───────────────────────────── End Patch ─────────────────────────────
+
+Explanation of the Patch:
+
+1. The code first checks whether the current verification context (ctx) is for an OCSP responder certificate (using a helper like is_ocsp_responder_context). This prevents accidentally applying the adjustment to certificates in an unrelated context.
+
+2. If the certificate is indeed intended for OCSP response verification, the patch examines whether the NoCheck extension is present (using X509_check_nocheck).
+
+3. Instead of unconditionally downgrading the verification (e.g., by setting a “bypass” state), the patch sets the verification state to OCSP_CERT_VERIFY (or a sensible alternative like STANDARD_VERIFY) so that the certificate still undergoes baseline checks.
+
+4. If the certificate does not have the NoCheck extension, the code sets the state to OCSP_FULL_VERIFY, ensuring full, rigorous checking of the OCSP response.
+
+Using this restructured logic, the presence of the NoCheck extension no longer disables necessary validation of the certificate. It simply directs the system to choose the correct branch of the verification process appropriate for an OCSP responder certificate, thereby closing the vulnerability.
+
+Make sure to integrate this patch into your existing OCSP processing logic and test thoroughly to verify that it both prevents bypass attacks and does not break legitimate OCSP validations.

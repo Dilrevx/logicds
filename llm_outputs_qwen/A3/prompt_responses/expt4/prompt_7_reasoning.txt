@@ -1,0 +1,63 @@
+The repair addresses a critical vulnerability in the OpenSSL library related to the initialization of custom ciphers using the `EVP_CIPHER_meth_new()` function. The vulnerability arises when the `NID_undef` (Not Implemented Definition) is incorrectly passed as the NID (Numeric Identifier) to `EVP_CIPHER_meth_new()`. This results in OpenSSL mistakenly fetching and using the NULL cipher, which does not perform any encryption or decryption, leading to plaintext being exposed as ciphertext.
+
+### Analysis of the Vulnerability
+
+In the provided code, the vulnerability stems from the following section:
+
+```c
+if (cipher->prov == NULL) {
+#ifdef FIPS_MODULE
+    /* We only do explicit fetches inside the FIPS module */
+    ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+    return 0;
+#else
+    EVP_CIPHER *provciph =
+        EVP_CIPHER_fetch(NULL,
+                         cipher->nid == NID_undef ? "NULL"
+                                                  : OBJ_nid2sn(cipher->nid),
+                         "");
+
+    if (provciph == NULL)
+        return 0;
+    cipher = provciph;
+    EVP_CIPHER_free(ctx->fetched_cipher);
+    ctx->fetched_cipher = provciph;
+#endif
+}
+```
+
+When `cipher->nid` is `NID_undef`, the code fetches the "NULL" cipher, which is a placeholder cipher that performs no encryption. This allows plaintext to be output as ciphertext, bypassing the intended encryption process.
+
+### Repair Strategy
+
+To mitigate this vulnerability, the repair introduces a check to explicitly reject the use of `NID_undef` when initializing a cipher. This ensures that the NULL cipher is never fetched and used inadvertently. Here’s how the repair is implemented:
+
+#### Step-by-Step Explanation of the Repair
+
+1. **Check for `NID_undef`:**
+   - Before attempting to fetch a cipher provider, the code checks if `cipher->nid` is equal to `NID_undef`.
+   - If `cipher->nid` is `NID_undef`, an error is raised with `ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_NID);` and the function returns 0 immediately, preventing further execution.
+
+2. **Fetching the Cipher Provider:**
+   - If `cipher->nid` is not `NID_undef`, the code proceeds to fetch the appropriate cipher provider using `EVP_CIPHER_fetch()`.
+   - The `OBJ_nid2sn(cipher->nid)` function converts the NID to its corresponding short name, which is used to fetch the cipher.
+
+3. **Handling Fetch Failure:**
+   - If the cipher fetch fails (`provciph == NULL`), the function returns 0, indicating an initialization error.
+   - If the cipher fetch succeeds, the fetched cipher replaces the original cipher in the context, and the old fetched cipher is freed.
+
+4. **Updating the Context:**
+   - The context's `cipher` pointer is updated to point to the newly fetched cipher.
+   - The context's `fetched_cipher` pointer is also updated to ensure proper management of the cipher's lifecycle.
+
+5. **Legacy Code Handling:**
+   - The repair does not modify the legacy code paths, which handle cases where engines are involved or when legacy ciphers are used.
+   - This ensures backward compatibility while addressing the vulnerability in the modern cipher initialization path.
+
+### Benefits of the Repair
+
+- **Security Enhancement:** By explicitly rejecting `NID_undef`, the repair prevents the use of the NULL cipher, ensuring that plaintext is always encrypted.
+- **Error Handling:** The repair introduces clear error handling for invalid NIDs, making it easier to diagnose issues related to cipher initialization.
+- **Maintainability:** The added check is straightforward and does not complicate the existing codebase, maintaining readability and ease of maintenance.
+
+This repair effectively addresses the vulnerability by enforcing a strict requirement for valid NIDs during cipher initialization, thereby enhancing the security of applications that rely on OpenSSL for encryption.

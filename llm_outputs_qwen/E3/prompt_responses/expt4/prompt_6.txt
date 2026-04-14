@@ -1,0 +1,111 @@
+<repair>
+int nas_5g::write_pdu(srsran::unique_byte_buffer_t pdu)
+{
+  logger.info(pdu->msg, pdu->N_bytes, "DL PDU (length %d)", pdu->N_bytes);
+
+  nas_5gs_msg nas_msg;
+
+  if (nas_msg.unpack_outer_hdr(pdu) != SRSRAN_SUCCESS) {
+    logger.error("Unable to unpack outer NAS header");
+    return SRSRAN_ERROR;
+  }
+
+  switch (nas_msg.hdr.security_header_type) {
+    case nas_5gs_hdr::security_header_type_opts::plain_5gs_nas_message:
+      // Check for specific message types that require integrity protection
+      if (nas_msg.unpack(pdu) != SRSRAN_SUCCESS) {
+        logger.error("Unable to unpack complete NAS pdu");
+        return SRSRAN_ERROR;
+      }
+      switch (nas_msg.hdr.message_type) {
+        case msg_opts::options::registration_accept:
+        case msg_opts::options::configuration_update_command:
+          logger.error("Not handling NAS message with plain header requiring integrity check");
+          return SRSRAN_ERROR;
+        default:
+          break;
+      }
+      break;
+    case nas_5gs_hdr::security_header_type_opts::integrity_protected:
+      if (integrity_check(pdu.get()) == false) {
+        logger.error("Not handling NAS message with integrity check error");
+        return SRSRAN_ERROR;
+      }
+      break;
+    case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered:
+      if (integrity_check(pdu.get()) == false) {
+        logger.error("Not handling NAS message with integrity check error");
+        return SRSRAN_ERROR;
+      } else {
+        cipher_decrypt(pdu.get());
+      }
+      break;
+    case nas_5gs_hdr::security_header_type_opts::integrity_protected_with_new_5G_nas_context:
+      break;
+    case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered_with_new_5G_nas_context:
+      return SRSRAN_ERROR;
+    default:
+      logger.error("Not handling NAS message with unknown security header");
+      break;
+  }
+
+  if (pcap != nullptr) {
+    pcap->write_nas(pdu->msg, pdu->N_bytes);
+  }
+
+  logger.info(pdu->msg, pdu->N_bytes, "Decrypted DL PDU (length %d)", pdu->N_bytes);
+
+  // Parse the message header
+  if (nas_msg.unpack(pdu) != SRSRAN_SUCCESS) {
+    logger.error("Unable to unpack complete NAS pdu");
+    return SRSRAN_ERROR;
+  }
+
+  switch (nas_msg.hdr.message_type) {
+    case msg_opts::options::registration_accept:
+      handle_registration_accept(nas_msg.registration_accept());
+      break;
+    case msg_opts::options::registration_reject:
+      handle_registration_reject(nas_msg.registration_reject());
+      break;
+    case msg_opts::options::authentication_reject:
+      handle_authentication_reject(nas_msg.authentication_reject());
+      break;
+    case msg_opts::options::authentication_request:
+      handle_authentication_request(nas_msg.authentication_request());
+      break;
+    case msg_opts::options::identity_request:
+      handle_identity_request(nas_msg.identity_request());
+      break;
+    case msg_opts::options::security_mode_command:
+      handle_security_mode_command(nas_msg.security_mode_command(), std::move(pdu));
+      break;
+    case msg_opts::options::service_accept:
+      handle_service_accept(nas_msg.service_accept());
+      break;
+    case msg_opts::options::service_reject:
+      handle_service_reject(nas_msg.service_reject());
+      break;
+    case msg_opts::options::deregistration_accept_ue_terminated:
+      handle_deregistration_accept_ue_terminated(nas_msg.deregistration_accept_ue_terminated());
+      break;
+    case msg_opts::options::deregistration_request_ue_terminated:
+      handle_deregistration_request_ue_terminated(nas_msg.deregistration_request_ue_terminated());
+      break;
+    case msg_opts::options::dl_nas_transport:
+      handle_dl_nas_transport(nas_msg.dl_nas_transport());
+      break;
+    case msg_opts::options::deregistration_accept_ue_originating:
+      handle_deregistration_accept_ue_originating(nas_msg.deregistration_accept_ue_originating());
+      break;
+    case msg_opts::options::configuration_update_command:
+      handle_configuration_update_command(nas_msg.configuration_update_command());
+      break;
+    default:
+      logger.error(
+          "Not handling NAS message type: %s (0x%02x)", nas_msg.hdr.message_type.to_string(), nas_msg.hdr.message_type);
+      break;
+  }
+  return SRSRAN_SUCCESS;
+}
+</repair>

@@ -1,0 +1,110 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+An attacker who is able to send and receive messages to an authoritative DNS server and who has knowledge of a valid TSIG key name may be able to circumvent TSIG authentication of AXFR requests via a carefully constructed request packet. A server that relies solely on TSIG keys for protection with no other ACL protection could be manipulated into: providing an AXFR of a zone to an unauthorized recipient or accepting bogus NOTIFY packets.
+</vulnerability_description>
+Here is the buggy source code:
+<buggy_code>
+isc_result_t
+dns_message_signer(dns_message_t *msg, dns_name_t *signer) {
+	isc_result_t result = ISC_R_SUCCESS;
+	dns_rdata_t rdata = DNS_RDATA_INIT;
+
+	REQUIRE(DNS_MESSAGE_VALID(msg));
+	REQUIRE(signer != NULL);
+	REQUIRE(msg->from_to_wire == DNS_MESSAGE_INTENTPARSE);
+
+	if (msg->tsig == NULL && msg->sig0 == NULL)
+		return (ISC_R_NOTFOUND);
+
+	if (msg->verify_attempted == 0)
+		return (DNS_R_NOTVERIFIEDYET);
+
+	if (!dns_name_hasbuffer(signer)) {
+		isc_buffer_t *dynbuf = NULL;
+		result = isc_buffer_allocate(msg->mctx, &dynbuf, 512);
+		if (result != ISC_R_SUCCESS)
+			return (result);
+		dns_name_setbuffer(signer, dynbuf);
+		dns_message_takebuffer(msg, &dynbuf);
+	}
+
+	if (msg->sig0 != NULL) {
+		dns_rdata_sig_t sig;
+
+		result = dns_rdataset_first(msg->sig0);
+		INSIST(result == ISC_R_SUCCESS);
+		dns_rdataset_current(msg->sig0, &rdata);
+
+		result = dns_rdata_tostruct(&rdata, &sig, NULL);
+		if (result != ISC_R_SUCCESS)
+			return (result);
+
+		if (msg->verified_sig && msg->sig0status == dns_rcode_noerror)
+			result = ISC_R_SUCCESS;
+		else
+			result = DNS_R_SIGINVALID;
+		dns_name_clone(&sig.signer, signer);
+		dns_rdata_freestruct(&sig);
+	} else {
+		dns_name_t *identity;
+		dns_rdata_any_tsig_t tsig;
+
+		result = dns_rdataset_first(msg->tsig);
+		INSIST(result == ISC_R_SUCCESS);
+		dns_rdataset_current(msg->tsig, &rdata);
+
+		result = dns_rdata_tostruct(&rdata, &tsig, NULL);
+		INSIST(result == ISC_R_SUCCESS);
+		if (msg->tsigstatus != dns_rcode_noerror)
+			result = DNS_R_TSIGVERIFYFAILURE;
+		else if (tsig.error != dns_rcode_noerror)
+			result = DNS_R_TSIGERRORSET;
+		else
+			result = ISC_R_SUCCESS;
+		dns_rdata_freestruct(&tsig);
+
+		if (msg->tsigkey == NULL) {
+			/*
+			 * If msg->tsigstatus & tsig.error are both
+			 * dns_rcode_noerror, the message must have been
+			 * verified, which means msg->tsigkey will be
+			 * non-NULL.
+			 */
+			INSIST(result != ISC_R_SUCCESS);
+		} else {
+			identity = dns_tsigkey_identity(msg->tsigkey);
+			if (identity == NULL) {
+				if (result == ISC_R_SUCCESS)
+					result = DNS_R_NOIDENTITY;
+				identity = &msg->tsigkey->name;
+			}
+			dns_name_clone(identity, signer);
+		}
+	}
+
+	return (result);
+}
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair takes a systematic approach to ensure that TSIG authentication is strictly enforced before proceeding with further processing. Here’s a breakdown of the steps:
+
+1. First, the code converts the raw TSIG data into a structured format by calling a conversion function. This step is essential to extract the TSIG fields from the network data so that they can be examined and verified. An assertion guarantees that the conversion completes successfully, preventing further processing if there is a failure.
+
+2. In the original code, after conversion, the decision whether to treat the TSIG verification as successful depended solely on the status fields attached to the message and the TSIG error field. However, this was insufficient because it did not ensure that the TSIG signature was actually verified. The repair adds a critical condition by checking an explicit flag that indicates whether the signature has been verified.
+
+3. The repaired code introduces a check for an explicit “verified signature” indicator. Alongside confirming that the message-level TSIG status is error-free and that no error is reported in the TSIG data, this additional check guarantees that the TSIG signature has been meaningfully validated. This means that a signature will only be trusted if it has passed thorough scrutiny, preventing attackers from exploiting scenarios where the TSIG flag might be misleading or bypassed.
+
+4. If all of these conditions are met—the signature has been verified, the message status is error-free, and the TSIG error field indicates no issues—then the result is finalized as successful, allowing the further processing of the DNS message. This tightly couples the successful outcome to both the accurate decoding of the TSIG record and the confirmed verification of its integrity.
+
+5. On the other hand, if the signature verification has failed (i.e., the verified flag is false) or the message status indicates an issue, the code explicitly categorizes the result as a verification failure. This ensures that no zone transfer or acknowledgement of the request is carried out when there is any ambiguity about the authenticity of the TSIG signature.
+
+6. Finally, if the verification flag was true but an error is still present in the TSIG data, the code treats this as a distinct error state. An assertion confirms that the error field is not silently ignored, and the result is set to reflect that an error was set in the TSIG processing. This guarantees that even if a valid signature was seen, any additional error information is consistently acted upon.
+
+In summary, these repair steps fortify the TSIG authentication process by adding an explicit check for a verified signature. This extra validation step prevents attackers from exploiting any weaknesses that might arise if the authentication relied solely on status fields. It ensures that only messages with a properly verified and error-free signature are accepted, thereby reducing the risk of unauthorized zone transfers or bogus notifications.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

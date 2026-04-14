@@ -1,0 +1,13 @@
+The repair adds an explicit check to ensure that when a CertificateVerify message is missing, it is only acceptable if the client’s certificate does not require signing. The vulnerability arises because if a client presents a Diffie‐Hellman (DH) certificate (used for ephemeral DH key exchange) that should have produced a CertificateVerify message, the original code would mistakenly accept this case without it. An attacker might exploit this by sending a crafted handshake without the CertificateVerify message, thus bypassing the authentication requirement.
+
+Here’s what the change does, step by step:
+
+1. When the message type is not CertificateVerify, the code sets a flag (reuse_message). This part is kept same as before since there is a reuse or replay behavior management in play.
+
+2. The repair then checks if the peer’s certificate is present. Unlike the original code that simply looked for the EVP_PKT_SIGN flag, the revised code introduces an additional check—using a helper function (Helper.isEphemeralDH) that determines if the certificate in use is for ephemeral Diffie-Hellman. The idea is to differentiate between a certificate that is legitimately allowed to omit the CertificateVerify message (e.g., fixed_dh) and one that isn’t (e.g., ephemeral DH or other types that indicate signing capability).
+
+3. If either the certificate’s flags indicate signing capability (the flag check remains: (type & Constants.EVP_PKT_SIGN) != 0) or if the certificate is determined to be a DH certificate that is being used with ephemeral DH (i.e., not fixed), then the absence of the CertificateVerify message is a protocol violation. The server responds by sending a fatal alert and aborting the handshake.
+
+4. If the conditions that require CertificateVerify are not met (for example, if there is no certificate or the certificate is of a type that legitimately does not require a signature), the function allows the handshake to continue.
+
+By adding the check for ephemeral DH (using Helper.isEphemeralDH), the repair directly addresses the vulnerability. It ensures that the additional requirement of a CertificateVerify message is enforced for any certificate where signing is necessary—specifically for DH keys that are used with ephemeral behavior—thus preventing an attacker from bypassing authentication. This aligns the behavior with the TLS specification and prevents the server from erroneously accepting incomplete authentication handshakes, effectively fixing the issue.

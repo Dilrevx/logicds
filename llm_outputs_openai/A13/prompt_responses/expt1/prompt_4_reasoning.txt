@@ -1,0 +1,18 @@
+The repair focuses on ensuring that the code properly distinguishes between zones found in the zone table and zones that may be provided by a DLZ (Dynamically Loadable Zones) engine. In the original snippet, a block of code that handled cases where dns_zt_find failed was commented out. This left the function with a logical flaw: a failure in looking up the zone in the zone table might not have been correctly handled, potentially opening an unauthorized path for zone transfers.
+
+Below is the walk-through of the key changes made in the repair:
+
+1. Zone Table Lookup and DLZ Fallback:
+ • The call to dns_zt_find now has its result checked immediately. If the lookup fails, the code then checks whether DLZ support is available by verifying if client->view->dlz_searched is non-empty.
+ • Only if DLZ support is enabled will the function attempt a DLZ-based zone lookup using dns_dlzallowzonexfr. This ensures that the system doesn’t inadvertently process a zone that hasn’t been explicitly authorized through one of the two valid mechanisms (zone table or DLZ).
+
+2. Correct Handling of Unauthorized Requests:
+ • If dns_dlzallowzonexfr returns ISC_R_NOPERM, the repair logs an error with detailed information (using dns_name_format and dns_rdataclass_format) and then sets the result to DNS_R_REFUSED. This gives a clear refusal, which prevents unauthorized zone transfers.
+ • If the DLZ lookup does not return success, the function now explicitly calls FAILQ to indicate that the zone is non-authoritative, preventing further processing of an unauthorized request.
+ • If neither the zone table lookup nor the DLZ authorization applies, the function cleanly handles the failure by calling FAILQ with an appropriate error message.
+
+3. Comments and Clean-up Code:
+ • The added comments explain the decision-making process, improving readability and maintainability. They clearly indicate that the zone transfer request will be rejected if the zone is not found in either the standard zone table or the permitted DLZ.
+ • Resource management is also considered. The code ensures that if any step fails, resources such as the quota are properly detached, which is essential for preventing resource leaks.
+
+By making these checks explicit, the repaired code correctly enforces the server’s policies regarding authoritative zone transfers. It prevents unauthorized transfers by not allowing a zone transfer to proceed unless the zone is confirmed to be either in the zone table or properly authorized via DLZ. This fix, therefore, addresses the logical vulnerability that could have otherwise been exploited by an attacker to transfer data for a zone that the server is not authoritative for.

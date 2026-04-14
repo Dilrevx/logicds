@@ -1,0 +1,11 @@
+The repair makes two major changes to ensure that connections are not left in CLOSE_WAIT indefinitely:
+
+1. Fallback Mechanism on Enqueue Failure:
+   • In the original code, an off-thread socket’s detach event is simply enqueued for later processing on another thread. If that enqueuing fails or is delayed by a maliciously crafted TCP stream, the connection might remain in CLOSE_WAIT as the detach never occurs.
+   • The repair adds an immediate fallback: if the attempt to enqueue the event (via NodeManager.enqueueEvent(...)) returns a failure (i.e., the function returns false), the code then directly calls NodeManager.nmhandle_detach_cb(handle) to perform the detach synchronously. This ensures that even if the off-thread processing cannot take place promptly, the detach function is invoked in order to avoid leaving the connection in CLOSE_WAIT indefinitely.
+
+2. Scheduled Forced Detach:
+   • To further safeguard against cases where the event might be delayed for an extended period (even if enqueueing was “successful”), the repair schedules a forced detachment via a call to NodeManager.scheduleForcedDetach(handle, 5000).
+   • This scheduled forced detach enforces an upper time bound—in this case, 5000 milliseconds—on how long the connection might remain outstanding. If the normal event handling fails to close the connection within that fixed timeout, the forced detach ensures that the connection is eventually closed.
+
+Together, these changes address the vulnerability by providing an “insurance policy” against the issue that a specially crafted TCP stream can cause the connection to linger in CLOSE_WAIT. Even if the normal off-thread event handling is subverted or delayed by an attacker, the fallback mechanism (direct synchronous handling) and the forced timeout ensure that connections do not remain open indefinitely.

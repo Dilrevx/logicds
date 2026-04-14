@@ -1,0 +1,16 @@
+The repair modifies the original lookup_frec function by adding an extra parameter (reply_fd) representing the file descriptor on which the reply was received. In addition to matching the query identifier (new_id) and an optional hash, the repair verifies that the reply comes from the same network socket that was used to forward the query.
+
+Here’s how it works:
+
+1. First, the function now iterates through the forwarded queries (frec) and, as before, only considers records that have been sent (f->sentto is non-NULL) and have a matching id and hash (if provided). This retains the original identification criteria.
+
+2. Next, after a potential match is found based solely on the record contents, the code applies an additional check using socket file descriptor information. Each query record now carries additional metadata about the network channel used to send the query. This metadata comes in three forms:
+   - If a query was sent from a specific (upstream-bound) socket, it will have a valid f->bound_fd. In this case, the repair compares reply_fd with f->bound_fd to ensure that the reply is received on the same channel.
+   - For queries dispatched over IPv4 that use a default socket, the query record indicates f->af set to AF_INET. The repair requires that the reply be received on daemon->ipv4_fd. This ensures that the reply did not come from an unrelated network source.
+   - Similarly, for IPv6 queries (f->af set to AF_INET6), the check ensures that reply_fd matches daemon->ipv6_fd.
+
+3. If none of these conditions match (or if the address family is unknown), the candidate query record is rejected, and the search continues.
+
+By incorporating these additional socket file descriptor checks, we ensure that the response originates from the exact network channel which was used to send out the query. This almost entirely eliminates the possibility that an attacker could simply forge a reply matching the query identifier (or hash) without concurrently matching the correct file descriptor. Consequently, even if the attacker manages to guess or forge the id and hash correctly, the forged reply will be rejected if it does not arrive on the proper socket channel. 
+
+This change aligns the implementation more closely with RFC5452’s expectations of matching on multiple query attributes by bringing in a network parameter that was previously overlooked. It substantially raises the difficulty for a successful DNS cache poisoning attack, as any attacker would now need to also match the correct socket timing and file descriptor, securing the DNS reply matching process.

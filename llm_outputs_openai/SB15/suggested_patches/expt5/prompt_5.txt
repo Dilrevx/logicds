@@ -1,0 +1,101 @@
+package main;
+
+import commons.*;
+
+public class KeyVerifier {
+    public static int check_dnskey_sigs(Vctx vctx,
+                                        DnsRdataDnskey dnskey,
+                                        RData rdata,
+                                        boolean is_ksk)
+    {
+        byte[] active_keys  = is_ksk ? vctx.ksk_algorithms : vctx.zsk_algorithms;
+        byte[] standby_keys = is_ksk ? vctx.standby_ksk    : vctx.standby_zsk;
+        boolean[] goodkey   = is_ksk ? vctx.goodksk         : vctx.goodzsk;
+
+        if (Dnssec.dns_dnssec_selfsigns(rdata,
+                vctx.origin, vctx.keyset, vctx.keysigs, false, vctx.mctx))
+        {
+            if ((active_keys[dnskey.algorithm] & 0xFF) != 255) {
+                active_keys[dnskey.algorithm]++;
+            }
+        }
+        else if (!is_ksk &&
+                Dnssec.dns_dnssec_signs(rdata,
+                        vctx.origin, vctx.soaset, vctx.soasigs, false, vctx.mctx))
+        {
+            if ((active_keys[dnskey.algorithm] & 0xFF) != 255) {
+                active_keys[dnskey.algorithm]++;
+            }
+            return Commons.ISC_R_SUCCESS;
+        }
+        else {
+            if ((standby_keys[dnskey.algorithm] & 0xFF) != 255) {
+                standby_keys[dnskey.algorithm]++;
+            }
+            return Commons.ISC_R_SUCCESS;
+        }
+        if (vctx.secroots == null) {
+            goodkey[0] = true;
+            return Commons.ISC_R_SUCCESS;
+        }
+        DstKey[] keyOut = new DstKey[1];
+        int result = Dnssec.dns_dnssec_keyfromrdata(
+                vctx.origin, rdata, vctx.mctx, keyOut);
+        if (result != Commons.ISC_R_SUCCESS) {
+            return result;
+        }
+        DstKey key = keyOut[0];
+        Keynode[] knOut = new Keynode[1];
+        result = Keytable.dns_keytable_findkeynode(
+                vctx.secroots, vctx.origin,
+                Dst.dst_key_alg(key), Dst.dst_key_id(key),
+                knOut);
+
+    // If the initial result is not success, free the key resources and return success.
+    if (result != Commons.ISC_R_SUCCESS) {
+        Dst.dst_key_free(keyOut);
+        return Commons.ISC_R_SUCCESS;
+    }
+
+    // Loop over all key nodes and perform a secure comparison with the expected (trusted) key.
+    // Assume that 'knOut' is an array of Keynode and 'expectedKey' has been defined elsewhere.
+    boolean keyMatched = false;
+    for (int i = 0; i < knOut.length; i++) {
+        Keynode keynode = knOut[i];
+        
+        // Use a secure comparison function to verify if this keynode matches the expected trusted key.
+        // It is assumed that SecurityUtils.secureKeyCompare() returns true when the nodes match.
+        if (SecurityUtils.secureKeyCompare(keynode, expectedKey)) {
+            // The key is validated. Detach it from the key table.
+            Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[] { keynode });
+            
+            // Set the trust levels of the associated DNS data sets to secure.
+            Rdataset.dns_rdataset_settrust(vctx.keyset, Commons.dns_trust_secure);
+            Rdataset.dns_rdataset_settrust(vctx.keysigs, Commons.dns_trust_secure);
+            
+            // Indicate that a good (validated) key has been found.
+            goodkey[0] = true;
+            
+            keyMatched = true;
+            
+            // Once a trusted key is found, break out of the loop.
+            break;
+        } else {
+            // Detach any key node that does not match the expected trusted key
+            // to remove any potentially forged or unvalidated key from the key table.
+            Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[] { keynode });
+        }
+    }
+
+    // As an additional safety measure, if there are any residual key nodes, detach them.
+    // (This block is optional if the key table structure guarantees no leftover keys after the loop.)
+    // while ((keynode = Keytable.dns_keytable_getnext(vctx.secroots)) != null) {
+    //     Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[] { keynode });
+    // }
+
+    // Free the key resources and return a success status.
+    Dst.dst_key_free(keyOut);
+    return Commons.ISC_R_SUCCESS;
+
+    }
+}

@@ -1,0 +1,28 @@
+Below is one example of a repair. The vulnerability occurred because the code “truncated” the list of algorithms (by stripping out the extension) before the client’s key‐exchange (KEX) hash was computed. In SSH the exchange hash must be computed over exactly what the client sent; if it is computed after removing extension tokens then an attacker may be able to remove or “drop” packets (or negotiate a downgraded mode) without invalidating the exchange hash. One safe fix is to make sure that any server‐side modifications (such as stripping the extension from the algorithm list) occur only after the exchange hash is computed using the original, unmodified list.
+
+For example, suppose that later in the code the exchange hash is computed using the contents of clientMethods[SSHConstants.SSH_KEX]. In that case, you must preserve the original string for hash computation. One repair is to copy the original KEX method string into a temporary variable, use that version for the handshake verification, and only then (if necessary) update clientMethods for further processing. One possible patch might look like this:
+
+--------------------------------------------------
+    // Preserve the original algorithm string for handshake hash computation.
+    String originalKexMethods = clientMethods[SSHConstants.SSH_KEX];
+    
+    // Compute the exchange hash using the original unmodified string.
+    if (!computeExchangeHash(originalKexMethods, /* other parameters */)) {
+        // handle error: exchange hash verification failed
+    }
+    
+    // Now that the handshake is complete, remove the extension for further processing.
+    // (Avoid doing this earlier, because it would lead to a mismatch in the handshake hash.)
+    int extStart = findSubstring(originalKexMethods, "," + SSHConstants.KEX_EXTENSION_CLIENT);
+    if (extStart != -1) {  // assuming findSubstring returns -1 when not found
+        clientMethods[SSHConstants.SSH_KEX] = truncateString(originalKexMethods, extStart);
+    }
+--------------------------------------------------
+
+Key points in this repair:
+
+1. The original list of client KEX methods is preserved in originalKexMethods.
+2. The handshake (and its integrity check) is computed using originalKexMethods.
+3. Only after the handshake is complete is the extension token removed (by truncation) from the clientMethods array.
+
+This way, an attacker cannot manipulate the handshake hash by selectively omitting extension packets, which was the root cause of the Terrapin attack. (Note: Adjust the return values or error handling depending on your implementation details.)

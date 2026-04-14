@@ -1,0 +1,17 @@
+The repair focuses on tightening buffer length checks to prevent potential buffer over-read or overruns during parsing. Vulnerabilities like buffer overflow in TLS message processing can occur if the code does not correctly verify that there’s sufficient data remaining before reading parts of the message.
+
+Key points in the repair include:
+
+1. Enhanced buffer length verification:  
+   Instead of simply using arithmetic on the current index alone, the repair consistently checks the remaining bytes by subtracting the number of bytes already processed (args->idx – args->begin) from helloSz. For example, before reading the server random or the session ID length, the code verifies that (helloSz - (args->idx - args->begin)) is sufficient to cover the expected bytes. This ensures that if the input message is malformed or too short, the function returns a BUFFER_ERROR instead of reading garbage memory.
+
+2. Consistent bounds checking before each read:  
+   Every critical read operation is preceded by a check. For instance, before reading RAN_LEN + ENUM_LEN (used for server random and compression type), the repair validates that enough bytes remain. Similarly, before reading extensions length (OPAQUE16_LEN) and later the extension data, it confirms that sufficient buffer space exists. This consistent pattern helps ensure that unexpected or maliciously truncated messages will be caught early and safely rejected.
+
+3. Preventing integer underflow/overflow:  
+   By using the expression (helloSz - (args->idx - args->begin)) throughout, the code avoids direct arithmetic on the index that could lead to integer underflow/overflow errors if the index is manipulated incorrectly. This approach further solidifies the code against a potential vulnerability that might let an attacker control the computed buffer length.
+
+4. Maintaining semantic equivalence:  
+   Although these changes add extra protective checks, the overall control flow and message processing logic of the TLS 1.3 ServerHello remain unchanged. The function still handles downgrades, cipher suite selection, and various TLS extensions as before. The repair just augments how data is safely extracted to ensure all memory accesses are bounded by the actual message length (helloSz).
+
+In summary, this repair is a defensive coding update that makes sure each operation on the input buffer is preceded by a verification that enough data is available. This prevents the possibility of reading beyond the allocated buffer limits, which is a common cause of memory corruption vulnerabilities. By consistently checking remaining lengths using the safe subtraction (helloSz - (args->idx - args->begin)), the updated code prevents buffer overshoot vulnerabilities and any related exploits that could arise when handling malformed or malicious ServerHello messages in TLS 1.3.

@@ -1,0 +1,23 @@
+The repair changes the error handling logic for the case when the result of the policy check indicates either an invalid policy tree (X509_PCY_TREE_INVALID) or a failure (X509_PCY_TREE_FAILURE). Previously, the code treated a X509_PCY_TREE_INVALID result by merely iterating through the chain, invoking the callback for certificates with invalid policy extensions, and then returning success (i.e. 1). This behavior allowed the verification process to proceed even though there were certificates with invalid policy extensions, which could lead to undesired security compromises.
+
+Here’s what the repair does:
+
+1. Combined Error Conditions:
+   • The fixed code combines both error conditions (X509_PCY_TREE_INVALID and X509_PCY_TREE_FAILURE) into a single if statement.
+   • This means that if either condition is true, the loop checking the certificates is executed. As such, the repair no longer ignores the failure after examining the certificates.
+
+2. Certificate Policy Extension Check:
+   • The loop starts from index 1 (skipping the first certificate, which typically is the trust anchor) and iterates through the certificate chain.
+   • For each certificate, it uses a callback mechanism (CB_FAIL_IF) when the certificate’s ex_flags field indicates an invalid policy extension (via EXFLAG_INVALID_POLICY).
+   • This notifies any registered callback about the failed certificate. The purpose is to make explicit that some element in the chain violates the expected policy.
+
+3. Raising an Error and Appropriate Termination:
+   • After processing all the certificates in the chain, the repair explicitly raises an error using ERR_raise with the error code X509_V_ERR_INVALID_POLICY_EXTENSION.
+   • Instead of returning success (as the original code did with a “return 1”), the function now jumps to a cleanup label (memerr) that subsequently returns 0. This indicates a failure in policy verification.
+   • This change ensures that the function does not mistakenly succeed in the presence of invalid certificate policy extensions. By returning a failure, it helps prevent a vulnerability where an invalid chain might be accepted inadvertently.
+
+4. Consistency and Robustness:
+   • Handling both X509_PCY_TREE_INVALID and X509_PCY_TREE_FAILURE uniformly makes the verification process more robust. 
+   • It avoids the possibility that a failure might slip by the system by ignoring the invalid chain, thus preserving the security assumptions made by the certificate validation process.
+
+Overall, the repair fixes the vulnerability by ensuring that any indication of an invalid policy or a verification failure does not lead to a falsely successful outcome. Instead of bypassing errors after checking certificate extensions, the new code correctly raises an error and terminates processing with an indication of failure. This behavior prevents potential exploitation where a certificate chain with invalid or inconsistent policy extensions could otherwise be accepted.

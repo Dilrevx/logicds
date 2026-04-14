@@ -1,0 +1,18 @@
+The repair separates the two checks so that a result from the “verifyCA” check isn’t overwritten by the “strict” (curve parameter) check. Here’s a walkthrough of the changes:
+
+1. Separate Result Variables:  
+   Instead of reusing a single “ret” variable that was first set by Util.verifyCA() and then overwritten by the result of CheckCurve.checkCurve(), we now store the CA verification result in a variable called ret_ca and the strict (curve parameter) check result separately in ret_strict. This separation ensures that the outcome of the CA check (which confirms that a certificate is a valid CA to issue other certs) is not lost when the strict check is performed.
+
+2. Conditional Strict Check:  
+   The code determines whether strict checking is enabled by verifying if the strict flag is set and whether there are multiple certificates in the chain. Only then is CheckCurve.checkCurve(x) called, and its return value is stored in ret_strict. If ret_strict indicates an error (either a negative result or zero), the code sets the appropriate error message in the context. Importantly, the CA check result (ret_ca) remains intact.
+
+3. Combining the Results:  
+   After performing both individual checks, we combine the results into a single “ret” value. The combined result requires that both ret_ca (the result of the CA verification) and ret_strict (the result of the strict check) succeed. This ensures that if either of the checks fails, the overall result is flagged as failure (ret = 0). This is crucial since the vulnerability stemmed from the strict check inadvertently bypassing the CA check.
+
+4. Further Processing and Error Handling:  
+   Following the combination, if ret indicates a failure, the callback ctx.verify_cb_cert(...) is invoked to handle the error accordingly. The rest of the logic, such as handling certificate extension validations and path length checks, remains unchanged. These checks continue to ensure that only certificates that satisfy all constraints (e.g., valid proxy purposes, maximum path lengths) are accepted.
+
+5. Addressing the Vulnerability:  
+   The vulnerability was caused by overwriting the result of the CA certificate check when additional strict security checks were performed. By storing the results separately and then requiring both to pass, the repair guarantees that even if the strict check introduces an error (like an explicit elliptic curve parameters issue), it does not ignore a possible failure in the CA certificate check. This prevents malicious or misconfigured certificates that aren’t valid CAs from inadvertently passing verification when the strict flag is used.
+
+In summary, the repair isolates the certificate authority validation check from the elliptic curve explicit parameters check, preserving the original security intent. With both checks combined to determine the final result, the vulnerability where the CA check could be bypassed is effectively fixed.

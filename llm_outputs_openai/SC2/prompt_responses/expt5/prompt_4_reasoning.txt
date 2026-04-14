@@ -1,0 +1,15 @@
+The repair ensures that each strict validation step is only executed if no previous errors have occurred. This is controlled by checking whether "ret" is still greater than zero before performing each additional check.
+
+In the first block, which performs an elliptic curve parameter verification when strict mode is enabled and there is more than one certificate in the chain, we now add "&& ret > 0" alongside the existing conditions. The purpose is to make sure that if an earlier check already set "ret" to a non-positive value (indicating an error), the curve check is skipped completely. This prevents the curve check from mistakenly altering the error state established by a preceding error.
+
+After calling CheckCurve.checkCurve(x), the code tests the returned value ("ret"). If the check returns a negative value, an unspecified error is recorded, and "ret" is set to zero. If the return value is exactly zero, a specific error—for example, regarding explicit elliptic curve parameters—is set. Setting "ret" to zero in both instances signifies that an error has occurred at this stage, ensuring that the subsequent validation will not override this failure.
+
+In the second block, the original code then validates the certificate's CA flag. However, without our patch, this block could execute even if an earlier error had occurred, potentially overwriting the error code from the earlier elliptic curve validation. The repair adds a condition to confirm that "ret" remains greater than zero (i.e., that no error was previously encountered) before proceeding with the CA check. This means that if "ret" is not positive, the CA-related error check is skipped, preserving the initial error that was already detected.
+
+This sequential validation approach, governed by the overall success flag ("ret > 0"), ensures that the very first detected error remains the only error reported. By preventing later checks from running if a prior error was found, the repair maintains the integrity of error reporting. It's a safeguard against a scenario where an early failure (like an invalid elliptic curve parameter) might be mistakenly replaced by a subsequent error (like an invalid extension due to non-CA certificate status).
+
+In summary, the main fixes are:
+1. Adding "&& ret > 0" in the first strict check block so that the elliptic curve check does not override an already triggered error.
+2. Including a check for "ret > 0" in the second block to prevent a CA-related validation from overwriting a previously set error.
+
+These changes ensure that if any earlier security check fails, subsequent validations will simply be skipped, thus preserving the original error and preventing the vulnerability where multiple validations might conflict and override each other.

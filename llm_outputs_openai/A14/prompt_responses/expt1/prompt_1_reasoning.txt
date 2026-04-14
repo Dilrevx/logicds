@@ -1,0 +1,20 @@
+The repair focuses on the section of the code that handles a renegotiation attempt when the server should not accept a new Client Hello because renegotiation isn’t permitted. In the original snippet, the code had the line that resets the handshake fragment commented out:
+
+  /*s->s3->handshake_fragment_len = 0;*/
+
+Leaving that fragment intact could potentially allow replay or incorrect use of previously stored client handshake data, which is a known vulnerability. An attacker might exploit such leftover state to initiate unauthorized renegotiation or interfere with the protocol’s state machine.
+
+In the repaired code, we explicitly clear the stored handshake fragment by setting s->s3->handshake_fragment_len to 0 before sending the no renegotiation alert. This means that any data pertaining to a previously attempted renegotiation is completely removed from memory, so it cannot be replayed or abused in future processing. Clearing the handshake fragment ensures that any subsequent read operations will not mistakenly process stale data.
+
+After clearing the fragment, we reset the record length (rr->length = 0) to avoid processing any of the remaining data from that record. Then, the ssl3_send_alert function is called with SSL_AD_NO_RENEGOTIATION, which informs the client that renegotiation is not allowed. Finally, the code jumps back to the label (goto start;) to reinitialize or re-read the necessary data and continue processing safely.
+
+Additionally, the repair maintains proper error handling: if the alert received later on indicates a fatal error, it correctly logs the error and cleans up the session. This ensures that both benign and malicious renegotiation attempts are dealt with in a secure manner.
+
+In summary, the repair fixes the vulnerability by:
+
+1. Explicitly clearing the handshake fragment data (s->s3->handshake_fragment_len = 0), ensuring no leftover handshake data can be reused for unauthorized renegotiation attempts.
+2. Resetting the record length (rr->length = 0) to discard any in-process data that might otherwise be incorrectly processed.
+3. Sending an appropriate warning alert (SSL_AD_NO_RENEGOTIATION) to indicate that renegotiation is not permitted.
+4. Continuing the control flow safely by retrying to obtain new records (via goto start) but without the risk of processing stale renegotiation data.
+
+Through these measures, the code better protects against potential state manipulation and renegotiation attacks by removing any vulnerability that would allow previously captured handshake data to be exploited.

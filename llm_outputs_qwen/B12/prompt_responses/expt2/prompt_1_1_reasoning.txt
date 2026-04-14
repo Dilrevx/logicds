@@ -1,0 +1,29 @@
+The provided repair addresses a critical vulnerability in the wolfSSL library related to TLS 1.3 client authentication, specifically focusing on the handling of different signature algorithms used by the peer (server). The vulnerability allows a malicious attacker in a privileged network position to impersonate a TLS 1.3 server and potentially bypass authentication checks.
+
+### Vulnerability Analysis
+
+In the original code snippet, there are checks for various signature algorithms (ED25519, ED448, ECC DSA, RSA PKCS#1.5, and RSA PSS) that the peer might use to sign its messages during the TLS handshake. However, the handling of these checks is inconsistent and incomplete:
+
+1. **ED25519 and ED448**: If the peer uses ED25519 or ED448 as the signature algorithm but does not provide the corresponding public key (`peerEd25519KeyPresent` or `peerEd448KeyPresent` is false), the code logs a message ("Oops, peer sent ED25519/ED448 key but not in verify") but does not terminate the connection or return an error. This means that even though the peer has not provided the necessary public key for verification, the handshake process continues, potentially allowing an attacker to proceed without proper authentication.
+
+2. **ECC DSA**: Similar to ED25519 and ED448, if the peer uses ECC DSA but does not provide the corresponding public key (`peerEccDsaKeyPresent` is false), the code logs a message but does not terminate the handshake.
+
+3. **RSA PKCS#1.5**: If the peer uses RSA PKCS#1.5, the code logs a message and immediately terminates the handshake with an `INVALID_PARAMETER` error. This is the correct behavior for this scenario.
+
+4. **RSA PSS**: If the peer uses RSA PSS but does not provide the corresponding public key (`peerRsaKey` is NULL or `peerRsaKeyPresent` is false), the code logs a message and terminates the handshake with an `INVALID_PARAMETER` error. This is also the correct behavior.
+
+### Repair Explanation
+
+The repair involves ensuring that all cases where the peer does not provide the necessary public key for the specified signature algorithm result in the termination of the handshake with an appropriate error. This is achieved by adding `ERROR_OUT(INVALID_PARAMETER, exit_dcv);` after each logging statement where the peer's public key is missing. Here’s how the repair works for each case:
+
+1. **ED25519 and ED448**: After logging the message indicating that the peer did not send the necessary public key, the code now calls `ERROR_OUT(INVALID_PARAMETER, exit_dcv);`. This macro is designed to set an error state (`INVALID_PARAMETER`) and jump to the `exit_dcv` label, which typically contains cleanup code and a return statement to terminate the handshake process.
+
+2. **ECC DSA**: Similarly, after logging the message for missing ECC DSA public key, the code now includes `ERROR_OUT(INVALID_PARAMETER, exit_dcv);` to ensure the handshake is terminated if the public key is not present.
+
+3. **RSA PKCS#1.5 and RSA PSS**: These cases already correctly terminate the handshake when the public key is missing, so no changes were needed here.
+
+### Security Implications
+
+By ensuring that the handshake is terminated whenever the peer does not provide the necessary public key for the specified signature algorithm, the repair effectively mitigates the risk of a man-in-the-middle attack. An attacker would no longer be able to impersonate a server and bypass authentication checks simply by omitting the required public key. This aligns with the security principles of mutual authentication and integrity, which are fundamental to the TLS protocol.
+
+In summary, the repair ensures that the TLS handshake process adheres strictly to the expected behavior, thereby enhancing the security of the communication channel established between the client and server.

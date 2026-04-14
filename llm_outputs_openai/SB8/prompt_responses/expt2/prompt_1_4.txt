@@ -1,0 +1,36 @@
+<repair>
+        if (extMsgType[0] == CommonsConstants.server_hello) {
+            PreSharedKey psk = null;
+            TlsExtension pskExt = TLSX.find(ssl.extensions, CommonsConstants.TLSX_PRE_SHARED_KEY);
+            if (pskExt != null)
+                psk = (PreSharedKey)pskExt.data;
+            while (psk != null && !psk.chosen)
+                psk = psk.next;
+
+            /* Check for the key share extension as well.
+               If neither PSK nor key share is provided, do not fall back to a default (predictable) IKM.
+               Instead, abort the handshake with an error to prevent using predictable key material. */
+            TlsExtension keyShare = TLSX.find(ssl.extensions, CommonsConstants.TLSX_KEY_SHARE);
+            if (psk == null && keyShare == null) {
+                /* Neither PSK nor Key Share extension is present.
+                   Aborting handshake prevents generation of a master secret from a predictable IKM. */
+                return TLS_ERR_MISSING_REQUIRED_EXTENSION;
+            }
+
+            if (psk != null) {
+                int ret = SetupPskKey(ssl, psk, 0);
+                if (ret != 0)
+                    return ret;
+                ssl.options.pskNegotiated = true;
+            } else {
+                /* Use key share parameters for key exchange.
+                   This branch should invoke proper key share processing rather than defaulting to a zeroed buffer. */
+                int ret = SetupKeyShare(ssl, keyShare);
+                if (ret != 0)
+                    return ret;
+                ssl.options.pskNegotiated = false;
+            }
+            ssl.keys.encryptionOn = true;
+            ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE;
+        }
+</repair>

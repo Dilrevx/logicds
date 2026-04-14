@@ -1,0 +1,25 @@
+The repair addresses a critical vulnerability in the DNSSEC key verification process within the `check_dnskey_sigs` method of the `KeyVerifier` class. This vulnerability could allow an attacker to inject malicious DNS data, bypassing DNSSEC validation, which is designed to ensure the authenticity and integrity of DNS responses.
+
+### Vulnerability Context
+
+The original code checks if the DNSKEY records are self-signed or signed by another key. It increments counters for active or standby keys based on these checks but does not perform a final DNSSEC signature verification step after finding a matching key in the security roots. This omission means that even if a key is found in the security roots, it might not actually be valid for the given DNS data, leading to potential acceptance of maliciously crafted DNSKEY records.
+
+### Key Points of the Repair
+
+1. **Security Root Check**: 
+   - The repair ensures that `vctx.secroots` is not null before proceeding. This is crucial because `vctx.secroots` contains the trusted keys used for DNSSEC validation. Without this check, the function might attempt to find a key in a null context, potentially leading to undefined behavior or skipping necessary validation steps.
+
+2. **DNSSEC Signature Verification**:
+   - After finding a matching key in the security roots, the repair adds a call to `Dnssec.dns_dnssec_verify(key, rdata, vctx.mctx)`. This function verifies that the DNSKEY record is correctly signed by the trusted key found in the security roots. Only if this verification passes is the key considered valid and trusted.
+   - The addition of this verification step ensures that the DNSKEY record has not been tampered with and is indeed signed by a key that the resolver trusts. This prevents an attacker from substituting a valid-looking but malicious DNSKEY record.
+
+3. **Handling Verification Failure**:
+   - If the DNSSEC signature verification fails, the repair returns `Commons.ISC_R_FAILURE`, indicating that the DNSKEY record should not be trusted. This stops the process and prevents the use of the potentially malicious DNS data.
+   - This change ensures that only DNSKEY records that pass all validation steps are accepted, enhancing the security of the DNS resolution process.
+
+4. **Consistent Trust Setting**:
+   - The repair maintains the existing logic for setting the trust level of the DNS data (`Rdataset.dns_rdataset_settrust`) but only after successful DNSSEC verification. This ensures that the trust level is accurately set based on the validation outcome, providing consistent and secure behavior.
+
+### Conclusion
+
+By adding these checks and verifications, the repair significantly enhances the security of the DNSSEC implementation. It ensures that DNSKEY records are not only found in the security roots but also properly signed by trusted keys, effectively mitigating the risk of DNSSEC bypass attacks. This aligns with best practices in DNSSEC implementation and helps protect against sophisticated attacks that could otherwise exploit weaknesses in the DNS resolution process.

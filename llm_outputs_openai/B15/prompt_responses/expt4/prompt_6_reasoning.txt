@@ -1,0 +1,24 @@
+The repair modifies how the trust anchor is checked by ensuring that every candidate key node in the trust anchor table is fully verified instead of just taking the first one returned. Here’s how the changes work and why they fix the vulnerability:
+
+1. key extraction and setup:  
+   The function first extracts the DNSKEY from the RRset and sets up pointers to the active and standby keys. If zones verify as secure by self-signing or proper delegation, either the active or standby counters are incremented. This part remains unchanged from the original code.
+
+2. Trust anchor table check:  
+   The main vulnerability was in the trust anchor verification. Previously, the code would call the lookup function and take the first matching key node for validation. However, an attacker could exploit any incomplete match by replaying or substituting forged data that only partially matched a trust anchor.
+
+3. Iterative trust anchor lookup:  
+   The repair introduces a loop that repeatedly calls dns_keytable_findkeynode to retrieve all candidate key nodes corresponding to the provided key’s algorithm and ID. For each node, the code uses dst_key_compare to perform a complete comparison between the provided key (from rdata) and the key stored in the trust anchor candidate. This explicit comparison ensures that only an exact match is accepted as a trusted key.
+
+4. Detaching non-matching nodes:  
+   If the key stored in the trust anchor does not exactly match, the key node is detached from the trust anchor table. This step is important because it guarantees that the same mismatched node is not reconsidered in future iterations, preventing any potential for partial or repeated matches that might be exploited.
+
+5. Confirming a valid match:  
+   When the loop finds an exact key match, the function detaches that key node, then marks the DNSKEY RRsets (the keyset and corresponding signature set) as secure by setting their trust levels to secure. It also sets a flag (goodkey) to inform the rest of the system that the key can be trusted, thereby finalizing the successful validation of data.
+
+6. Fallback mechanism:  
+   Regardless of whether a key node is found, if no exact match is encountered (the loop finishes without matching), the function still returns success. This allows the system to fallback to traditional recursion—a critical behavior if mirror zone data validation fails. However, without an exact match, the datasets are not upgraded to a secure trust status, preventing the use of potentially forged data.
+
+7. Resource management:  
+   Finally, the code ensures that any key structure allocated during the process is freed with dst_key_free, avoiding memory leaks or resource mismanagement.
+
+Overall, by iteratively searching all candidate trust anchor key nodes and requiring an exact match via a detailed comparison, the repair prevents an attacker from exploiting a loophole in the previous partial check. This guarantees that only fully validated keys—those that exactly match the configured trust anchors—are permitted, thus closing the vulnerability related to mirror zone data replacement.

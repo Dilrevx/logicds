@@ -1,0 +1,21 @@
+Below is one acceptable repair. In the original code the reuse‐flag is set too early – even when the certificate‐verify message isn’t present. That can allow an attacker to trigger reuse of a previous handshake message (or otherwise mis‐interpret which message is being processed). In our fix we move the assignment so that we only mark the message for reuse when we’ve actually received a valid certificate–verify message. (See discussion below.)
+
+<repair>
+        if (s.s3.tmp.message_type != Constants.SSL3_MT_CERTIFICATE_VERIFY) {
+            if (peer != null && (type & Constants.EVP_PKT_SIGN) != 0) {
+                al = Constants.SSL_AD_UNEXPECTED_MESSAGE;
+                Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+                        Constants.SSL_R_MISSING_VERIFY_MESSAGE);
+                Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);
+                return ret;
+            }
+            return 1;
+        }
+        /* Only now do we mark the message for reuse as we have received a proper CertificateVerify */
+        s.s3.tmp.reuse_message = 1;
+</repair>
+
+Explanation:
+• We first check whether the incoming message is really a CertificateVerify message.
+• If it isn’t and a certificate (with a signing key) is in use, we send an alert and fail.
+• Only if we actually have the expected message do we mark it to be reused later. This prevents an attacker from “faking” the certificate‐verify message via reuse of earlier handshake records.

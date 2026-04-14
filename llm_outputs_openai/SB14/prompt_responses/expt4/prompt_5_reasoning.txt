@@ -1,0 +1,13 @@
+The primary change in the repair was the explicit closure of the underlying TCP connection by configuring the socket’s SO_LINGER option. Here’s a walkthrough:
+
+1. After validating the input and extracting the socket (sock) and handle objects, the repair immediately attempts to close the TCP connection associated with the socket. This step proactively prevents the connection from remaining in the CLOSE_WAIT state—which was the reported vulnerability.
+
+2. Setting SO_LINGER to true with a timeout of 0 forces the operating system to close the connection abruptly. Normally, a graceful TCP shutdown might allow the connection to linger, waiting for any remaining data to be acknowledged. However, this lingering behavior was exploited by crafted TCP streams. With SO_LINGER set to 0, the pending data is discarded and an RST (reset) packet is sent, thus eliminating any possibility for indefinite CLOSE_WAIT status.
+
+3. The try-catch block around the socket closure ensures that any exceptions during socket configuration or closure do not prevent the subsequent cleanup and event handling. Even if an error occurs, the code logs the exception (if logging is enabled) and continues with the rest of the detachment process.
+
+4. After closing the TCP connection, the code carries out the standard flow of detachment. It checks whether the detachment callback should be invoked directly (if the thread IDs match) or if the event should be enqueued for later processing. This ensures that the intended cleanup or event propagation mechanism remains intact.
+
+By managing the socket’s lifecycle more explicitly and terminating the TCP connection immediately, the repair minimizes the window during which a hostile stream might cause the connection to remain in CLOSE_WAIT. Instead of waiting for a graceful closure that may leave resources hanging in the system indefinitely, the immediate shutdown forces the connection to be cleaned up by the operating system.
+
+In summary, the update directly targets the vulnerability by ensuring that crafted TCP streams cannot exploit the graceful closure mechanism to force a lingering connection in CLOSE_WAIT. The added socket management code is careful to handle any exceptions and does not interfere with the original detachment logic, thereby repairing the vulnerability while preserving the intended functionality of the code.

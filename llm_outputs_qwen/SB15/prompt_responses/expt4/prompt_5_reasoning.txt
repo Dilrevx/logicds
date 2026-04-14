@@ -1,0 +1,39 @@
+The repair addresses a critical vulnerability in the DNSSEC validation process within the `check_dnskey_sigs` function, which is part of the BIND DNS software. This vulnerability arises from the potential for an attacker to inject malicious DNSKEY records into the DNS resolution process, leading to the acceptance of forged DNS data. The core issue lies in the insufficient validation of DNSKEY signatures before they are considered trustworthy.
+
+### Vulnerability Analysis
+
+In the original code, the function checks whether the DNSKEY record is self-signed or signed by another key (`Dnssec.dns_dnssec_selfsigns` and `Dnssec.dns_dnssec_signs`). However, it does not handle cases where neither condition is met appropriately. Specifically, the function increments the `standby_keys` counter and returns `ISC_R_SUCCESS` even if the DNSKEY is not properly validated. This allows potentially malicious DNSKEY records to pass through without proper scrutiny, posing a significant security risk.
+
+### Repair Strategy
+
+The repair introduces a more robust validation mechanism by ensuring that DNSKEY records must be either self-signed or signed by another key before they are accepted as valid. If neither condition is satisfied, the function now returns `ISC_R_FAILURE`, indicating that the DNSKEY record should not be trusted.
+
+#### Key Changes
+
+1. **Validation Check**: The repair adds a conditional block to check if the DNSKEY is neither self-signed nor signed by another key:
+   ```java
+   boolean selfSigned = Dnssec.dns_dnssec_selfsigns(rdata,
+           vctx.origin, vctx.keyset, vctx.keysigs, false, vctx.mctx);
+   boolean signed = !is_ksk && Dnssec.dns_dnssec_signs(rdata,
+           vctx.origin, vctx.soaset, vctx.soasigs, false, vctx.mctx);
+
+   if (!selfSigned && !signed) {
+       if ((standby_keys[dnskey.algorithm] & 0xFF) != 255) {
+           standby_keys[dnskey.algorithm]++;
+       }
+       return Commons.ISC_R_FAILURE; // Return failure if no valid signature found
+   }
+   ```
+   - **Self-Signed Check**: This verifies if the DNSKEY is signed by itself, which is a common practice for KSKs (Key Signing Keys).
+   - **Signed Check**: For ZSKs (Zone Signing Keys), this checks if the DNSKEY is signed by a trusted KSK.
+   - **Failure Handling**: If neither condition is met, the function increments the `standby_keys` counter but immediately returns `ISC_R_FAILURE`, effectively rejecting the DNSKEY record.
+
+2. **Incrementing Active Keys**: If the DNSKEY is valid (either self-signed or signed by another key), the `active_keys` counter is incremented. This step ensures that only validated keys are counted towards the active set, maintaining the integrity of the key management system.
+
+3. **Security Roots Check**: The repair retains the existing logic for handling security roots, ensuring that valid DNSKEY records are properly integrated into the key table and marked as secure.
+
+4. **Return Values**: The function now clearly distinguishes between success (`ISC_R_SUCCESS`) and failure (`ISC_R_FAILURE`) scenarios, providing a clear signal to the calling code about the validity of the DNSKEY record.
+
+### Conclusion
+
+By implementing these changes, the repair significantly enhances the security of the DNSSEC validation process. It ensures that only DNSKEY records that have been properly signed by a trusted authority are accepted, thereby mitigating the risk of accepting forged DNS data. This approach aligns with best practices in DNSSEC implementation, where rigorous validation is essential to maintain the integrity and security of DNS responses.

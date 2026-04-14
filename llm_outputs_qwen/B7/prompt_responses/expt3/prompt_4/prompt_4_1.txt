@@ -1,0 +1,52 @@
+To address the vulnerability described, we need to ensure that any errors encountered during the leaf certificate verification process are properly stored and returned. Specifically, if the `x509_verify_cert_valid` or `x509_verify_cert_hostname` functions fail, we should capture the error and return it appropriately rather than just returning `0`.
+
+Here's the revised code snippet with the necessary changes:
+
+```c
+if (!x509_verify_ctx_validate_legacy_chain(ctx, chain, depth))
+    return 0;
+
+/*
+ * In the non-legacy code, extensions and purpose are dealt
+ * with as the chain is built.
+ *
+ * The non-legacy api returns multiple chains but does not do
+ * any revocation checking (it must be done by the caller on
+ * any chain they wish to use)
+ */
+
+if ((ctx->chains[ctx->chains_count] = x509_verify_chain_dup(chain)) == NULL) {
+    return x509_verify_cert_error(ctx, last, depth,
+        X509_V_ERR_OUT_OF_MEM, 0);
+}
+
+// Store the result of leaf certificate validation
+int valid_result = x509_verify_cert_valid(ctx, leaf, NULL);
+if (!valid_result) {
+    // Capture the error from the context
+    int error_code = ctx->error;
+    int error_depth = ctx->error_depth;
+    return x509_verify_cert_error(ctx, leaf, error_depth, error_code, 0);
+}
+
+// Store the result of hostname verification
+int hostname_result = x509_verify_cert_hostname(ctx, leaf, name);
+if (!hostname_result) {
+    // Capture the error from the context
+    int error_code = ctx->error;
+    int error_depth = ctx->error_depth;
+    return x509_verify_cert_error(ctx, leaf, error_depth, error_code, 0);
+}
+
+ctx->chains_count++;
+ctx->error = X509_V_OK;
+ctx->error_depth = depth;
+return 1;
+```
+
+### Explanation:
+1. **Error Handling in Leaf Validation**: After calling `x509_verify_cert_valid`, we check if it returns `0` (indicating failure). If it does, we capture the error code and depth from the context and call `x509_verify_cert_error` to return the specific error.
+
+2. **Error Handling in Hostname Verification**: Similarly, after calling `x509_verify_cert_hostname`, we check for failure. If it fails, we again capture the error details from the context and return them using `x509_verify_cert_error`.
+
+This ensures that any specific errors encountered during the verification process are correctly propagated and can be handled appropriately by the caller.

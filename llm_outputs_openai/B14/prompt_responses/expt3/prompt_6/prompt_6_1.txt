@@ -1,0 +1,40 @@
+Below is an example of a fixed code snippet. In the original buggy code, the decision to immediately detach the socket's handle was based solely on whether the current thread was the network manager thread. In the repair, we add an extra check to ensure that the socket’s close-handle callback pointer is NULL before performing the immediate detachment. This prevents multiple or conflicting detach operations that could leave the connection in a lingering CLOSE_WAIT state.
+
+Below is an illustrative C-style pseudocode showing the repair:
+
+--------------------------------------------------
+/* Example of the original buggy logic:
+
+if (socket->thread_id == net_mgr_thread_id) {
+    // Immediately detach the handle.
+    detach_callback(socket);
+} else {
+    // Queue for asynchronous detachment.
+    queue_async_detach_event(socket);
+}
+
+--------------------------------------------------*/
+
+/* Revised logic to fix the vulnerability: */
+if ((socket->thread_id == net_mgr_thread_id) && (socket->close_handle_callback == NULL)) {
+    // The current thread is the network manager and there is no pending close callback.
+    // Safe to perform an immediate detachment.
+    detach_callback(socket);
+} else {
+    // Either the thread context is not correct or an asynchronous close callback is already set.
+    // Queue the detachment for asynchronous processing.
+    queue_async_detach_event(socket);
+}
+
+--------------------------------------------------
+Explanation:
+
+1. The if statement now checks two conditions:
+   - The socket’s current thread matches the network manager thread.
+   - The socket doesn’t already have an associated close-handle callback (i.e., it is NULL).
+
+2. This ensures that the immediate detach (via detach_callback) occurs only when no asynchronous cleanup is pending.
+   
+3. If either condition fails, the socket is enqueued (via queue_async_detach_event) for deferred processing, preventing any chance of leaving the connection in a CLOSE_WAIT state.
+
+By adding the extra check on socket->close_handle_callback, this fix prevents the scenario where specially crafted TCP streams might cause lingering CLOSE_WAIT states, ensuring that the detach logic handles all cases correctly.

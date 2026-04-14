@@ -1,0 +1,19 @@
+The repair enhances the conditional check in the initialization function to properly identify and handle ciphers created by the legacy custom method. Originally, the function only checked if specific pointers (such as ctx->engine, tmpimpl, or impl) were non-null to decide if legacy handling was needed. However, this logic failed to account for cases where a legacy custom cipher was used and its identifier (NID) was set to NID_undef. Since OpenSSL could mistakenly match this to the NULL cipher from the providers, an attacker could exploit this to cause plaintext to be passed as ciphertext.
+
+In the repaired code, two extra conditions have been added:
+
+1. The first new condition checks if the primary cipher pointer (ctx->cipher) is non-null and if its NID is NID_undef. This condition implies that the cipher was likely created using legacy custom functions that may have set the NID to an undefined value. 
+
+2. The second new condition handles the case where ctx->cipher is NULL but the backup pointer, ctx->fetched_cipher (which might hold a previously retrieved provider cipher), is non-null and also has an NID of NID_undef. This ensures that even if the primary cipher pointer is empty, any associated legacy prepared cipher is checked.
+
+When either of these conditions is true, the code enters the "legacy" branch. Before doing so, it releases any conflicting or redundant state by freeing the fetched cipher (using EVP_CIPHER_free) and setting the corresponding pointer to NULL. This cleanup is crucial for ensuring that the function doesn’t mistakenly use a valid provider cipher that happens to match a legacy custom cipher’s undefined identifier.
+
+By explicitly checking for a legacy cipher (via the NID being NID_undef), the repair prevents OpenSSL from inadvertently fetching the NULL cipher from the provider. This stops the logic that would otherwise process a ‘NULL’ cipher as if it were a proper encryption algorithm. Consequently, the repair mitigates the risk where plaintext could be mistakenly treated as ciphertext due to an improper association with the NULL cipher.
+
+Overall, the repair improves security by:
+
+• Robustly identifying legacy custom ciphers using their NID (undefined marker).
+• Cleaning up any state that might lead to using a potentially dangerous provider cipher.
+• Redirecting the control flow to a dedicated legacy handling branch that is designed to correctly process legacy custom ciphers.
+
+The net effect is that only ciphers with a proper identifier are allowed to fetch a corresponding provider cipher, thereby avoiding the vulnerability where an undefined cipher (NID_undef) could be misinterpreted as a valid, albeit insecure, cipher.

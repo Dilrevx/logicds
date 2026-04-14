@@ -1,0 +1,68 @@
+The original code snippet from `srsRAN` contains a significant security vulnerability related to the handling of NAS (Non-Access Stratum) messages with specific security header types. The vulnerability arises because the code does not perform an integrity check on messages that are supposed to be integrity protected and optionally ciphered using a new EPS (Evolved Packet System) security context. This omission allows an attacker to potentially inject or manipulate messages without detection, leading to unauthorized access or other security breaches.
+
+### Vulnerability Analysis
+
+In the original code, the `switch` statement handles different security header types (`sec_hdr_type`) for NAS messages. The problematic cases are:
+
+1. **LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT**
+2. **LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT**
+
+For these cases, the code simply breaks out of the switch statement without performing any integrity checks. This means that any message received with these security header types is processed as if it were valid, regardless of whether its integrity has been verified.
+
+### Repair Strategy
+
+To address this vulnerability, the repair strategy involves ensuring that integrity checks are performed for all messages that claim to be integrity protected, regardless of whether they use the new EPS security context or not. This ensures that only messages that have passed the integrity check are processed further, thereby maintaining the security of the communication.
+
+### Detailed Repair Implementation
+
+The repair involves modifying the `switch` statement to include integrity checks for the two problematic cases. Here's how the repair is implemented:
+
+1. **Introduce Integrity Checks for New EPS Security Context Cases:**
+   - For both `LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT` and `LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT`, the code now includes a call to `integrity_check(pdu.get())`.
+   - If the integrity check fails, an error is logged, and the function returns immediately, preventing further processing of the message.
+
+2. **Cipher Decryption for Ciphered Messages:**
+   - If the message is both integrity protected and ciphered (i.e., `LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT`), the code calls `cipher_decrypt(pdu.get())` after the successful integrity check to decrypt the message content.
+
+3. **Maintain Existing Functionality:**
+   - The existing functionality for other security header types remains unchanged. Messages with plain NAS headers or service requests are processed without integrity checks, as they are not expected to be integrity protected.
+   - Messages that are only integrity protected (without the new EPS security context) continue to be checked for integrity before processing.
+
+### Code Explanation
+
+```cpp
+switch (sec_hdr_type) {
+  case LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS:
+  case LIBLTE_MME_SECURITY_HDR_TYPE_SERVICE_REQUEST:
+    break;
+  case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY:
+  case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED:
+    if ((integrity_check(pdu.get()))) {
+      if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED) {
+        cipher_decrypt(pdu.get());
+      }
+      break;
+    } else {
+      logger.error("Not handling NAS message with integrity check error");
+      return;
+    }
+  case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT:
+  case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT:
+    if ((integrity_check(pdu.get()))) {
+      if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT) {
+        cipher_decrypt(pdu.get());
+      }
+      break;
+    } else {
+      logger.error("Not handling NAS message with integrity check error");
+      return;
+    }
+  default:
+    logger.error("Not handling NAS message with SEC_HDR_TYPE=%02X", sec_hdr_type);
+    return;
+}
+```
+
+### Conclusion
+
+By implementing these changes, the code now correctly enforces integrity checks for all messages that claim to be integrity protected, regardless of the security context used. This repair significantly enhances the security of the `srsRAN` implementation by preventing the processing of potentially malicious or tampered messages, thus mitigating the identified vulnerability.

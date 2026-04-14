@@ -1,0 +1,51 @@
+<repair>
+    if (rr->type == SSL3_RT_CHANGE_CIPHER_SPEC)
+    {
+        /* Only accept a ChangeCipherSpec if we are in the proper state. */
+        if (s->state != SSL3_ST_SR_CCS) {
+            al = SSL_AD_UNEXPECTED_MESSAGE;
+            SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+            goto f_err;
+        }
+
+        /* Reject duplicate ChangeCipherSpec messages */
+        if (s->s3->change_cipher_spec) {
+            al = SSL_AD_UNEXPECTED_MESSAGE;
+            SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+            goto f_err;
+        }
+
+        /* 'Change Cipher Spec' is just a single byte, so we know
+         * exactly what the record payload has to look like */
+        if ((rr->length != 1) || (rr->off != 0) ||
+            (rr->data[0] != SSL3_MT_CCS))
+        {
+            al = SSL_AD_ILLEGAL_PARAMETER;
+            SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_BAD_CHANGE_CIPHER_SPEC);
+            goto f_err;
+        }
+
+        /* Check that a new cipher has been negotiated.
+         * A NULL new_cipher indicates that the CCS message arrived too early.
+         */
+        if (s->s3->tmp.new_cipher == NULL)
+        {
+            al = SSL_AD_UNEXPECTED_MESSAGE;
+            SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+            goto f_err;
+        }
+
+        /* Mark record as consumed */
+        rr->length = 0;
+
+        if (s->msg_callback)
+            s->msg_callback(0, s->version, SSL3_RT_CHANGE_CIPHER_SPEC, rr->data, 1, s, s->msg_callback_arg);
+
+        /* Set flag to ensure we only process one CCS message */
+        s->s3->change_cipher_spec = 1;
+        if (!ssl3_do_change_cipher_spec(s))
+            goto err;
+        else
+            goto start;
+    }
+</repair>

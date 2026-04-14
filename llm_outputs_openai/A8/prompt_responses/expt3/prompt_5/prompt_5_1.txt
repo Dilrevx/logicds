@@ -1,0 +1,47 @@
+Below is one example of a repair that hardens the key‐exchange phase. In this version the code not only compares the client and server algorithms (as before) but also verifies that the chosen algorithms belong to a predefined “strict” group. That extra check ensures that when the key exchange is negotiated, the session flag strict_kex is enabled to enforce tighter integrity and sequence‐number validations during later message exchanges.
+
+In our patched code we assume that a helper function (here called is_strict_kex_algorithm()) is available. It takes an algorithm name (string) and returns true if that algorithm supports the “strict” checks (i.e. in our security policy group). Depending on whether the client or the server is in control, the code then sets a flag in the session state. (In a real system you might replace the helper function with your own group–membership test logic.)
+
+Below is the modified source code:
+
+------------------------------------------------
+    if (first_kex_packet_follows || session->send_first_kex_follows) {
+        char **client_methods = crypto->client_kex.methods;
+        char **server_methods = crypto->server_kex.methods;
+
+        /* Original guess comparison */
+        session->first_kex_follows_guess_wrong =
+            cmp_first_kex_algo(client_methods[SSH_KEX],
+                               server_methods[SSH_KEX]) ||
+            cmp_first_kex_algo(client_methods[SSH_HOSTKEYS],
+                               server_methods[SSH_HOSTKEYS]);
+        SSH_LOG(SSH_LOG_DEBUG, "The initial guess was %s.",
+                session->first_kex_follows_guess_wrong ? "wrong" : "right");
+
+        /* --- Additional strict key exchange check --- */
+        bool strict_enabled = false;
+        /* Check if server is driving the key exchange and supports strict mode */
+        if (server_methods && server_methods[SSH_KEX] &&
+            is_strict_kex_algorithm(server_methods[SSH_KEX])) {
+            strict_enabled = true;
+            SSH_LOG(SSH_LOG_DEBUG, "Strict key exchange enabled (server method).");
+        }
+        /* Otherwise, if client is negotiating, verify its algorithm */
+        else if (client_methods && client_methods[SSH_KEX] &&
+                 is_strict_kex_algorithm(client_methods[SSH_KEX])) {
+            strict_enabled = true;
+            SSH_LOG(SSH_LOG_DEBUG, "Strict key exchange enabled (client method).");
+        }
+        /* Update the session state with the strict flag */
+        session->strict_kex = strict_enabled;
+    }
+------------------------------------------------
+
+Explanation of the repair:
+1. The code first compares the key exchange and host key methods as before.
+2. Then it checks which party (server or client) is active by examining whether server methods exist.
+3. The helper function is_strict_kex_algorithm() is invoked to determine if the negotiated key‐exchange algorithm is among the set that supports “strict” mode.
+4. If a match is found, the session flag strict_kex is set to true. This flag may later be used to enforce stricter message integrity and sequence-number checks.
+5. Debug logging is added to trace which mode (server or client) enabled strict key exchange.
+
+By following this strategy, even if an attacker attempts to omit or tamper with part of the key exchange negotiation, subsequent messages will be handled under a mode enforcing tighter security checks, thus mitigating the Terrapin attack vulnerability.

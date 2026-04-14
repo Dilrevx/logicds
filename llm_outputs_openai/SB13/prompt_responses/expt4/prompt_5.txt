@@ -1,0 +1,93 @@
+<repair>
+    public static int dns_message_signer(DNSMessage msg, DNSName signer) {
+        int result = Commons.ISC_R_SUCCESS;
+        RData rdata = new RData();
+
+        // Basic parameter and state checks.
+        if (!DNSMessage.isValid(msg))
+            return Commons.ISC_R_FAILURE;
+        if (signer == null)
+            return Commons.ISC_R_FAILURE;
+        if (msg.fromToWire != Commons.DNS_MESSAGE_INTENTPARSE)
+            return Commons.ISC_R_FAILURE;
+        if (msg.tsig == null && msg.sig0 == null)
+            return Commons.ISC_R_NOTFOUND;
+        if (msg.verifyAttempted == 0)
+            return Commons.DNS_R_NOTVERIFIEDYET;
+
+        // Ensure signer has a buffer assigned.
+        if (!DNSName.hasBuffer(signer)) {
+            Allocator.BufferHolder holder = new Allocator.BufferHolder();
+            result = Allocator.allocate(msg.mctx, 512, holder);
+            if (result != Commons.ISC_R_SUCCESS)
+                return result;
+            DNSName.setBuffer(signer, holder.buf);
+            DNSMessage.takeBuffer(msg, holder.buf);
+        }
+
+        // Process TSIG or SIG(0) records.
+        if (msg.sig0 != null) {
+            Sig0Record sig = new Sig0Record();
+            result = RDataset.first(msg.sig0);
+            assert result == Commons.ISC_R_SUCCESS;
+            RDataset.current(msg.sig0, rdata);
+            result = RDataConverter.toStruct(rdata, sig);
+            if (result != Commons.ISC_R_SUCCESS)
+                return result;
+            if (msg.verifiedSig && msg.sig0status == Commons.dns_rcode_noerror)
+                result = Commons.ISC_R_SUCCESS;
+            else
+                result = Commons.DNS_R_SIGINVALID;
+            DNSName.clone(sig.signer, signer);
+            RDataConverter.freeStruct(sig);
+        } else {
+            TsigRecord tsig = new TsigRecord();
+            result = RDataset.first(msg.tsig);
+            assert result == Commons.ISC_R_SUCCESS;
+            RDataset.current(msg.tsig, rdata);
+            result = RDataConverter.toStruct(rdata, tsig);
+            if (result != Commons.ISC_R_SUCCESS)
+                return result;
+            if (msg.tsigstatus != Commons.dns_rcode_noerror)
+                result = Commons.DNS_R_TSIGVERIFYFAILURE;
+            else if (tsig.error != Commons.dns_rcode_noerror)
+                result = Commons.DNS_R_TSIGERRORSET;
+            else
+                result = Commons.ISC_R_SUCCESS;
+            RDataConverter.freeStruct(tsig);
+
+            if (msg.tsigkey == null) {
+                // If there's no associated key, TSIG verification must fail.
+                assert result != Commons.ISC_R_SUCCESS;
+            } else {
+                DNSName identity = msg.tsigkey.identity();
+                if (identity == null) {
+                    if (result == Commons.ISC_R_SUCCESS)
+                        result = Commons.DNS_R_NOIDENTITY;
+                    identity = msg.tsigkey.name;
+                }
+                DNSName.clone(identity, signer);
+            }
+        }
+
+        // --- Added ACL Validation to Mitigate TSIG‐only Authentication Vulnerability ---
+        // To prevent attackers from abusing valid TSIG key names to request zone transfers (AXFR)
+        // or send bogus NOTIFY packets, check that the remote requester is explicitly authorized 
+        // for these sensitive operations. The ACL check is performed only if the message operation 
+        // indicates a zone transfer or NOTIFY message.
+        //
+        // Note: msg.opcode is assumed to indicate the type of request (e.g. Commons.DNS_OPCODE_AXFR
+        // for zone transfer and Commons.DNS_OPCODE_NOTIFY for NOTIFY). Also, msg.remoteAddress is assumed
+        // to contain the source IP address. The TsigACL.checkAuthorization() function should verify that 
+        // the requester is allowed to use TSIG for these operations.
+        if (result == Commons.ISC_R_SUCCESS &&
+            (msg.opcode == Commons.DNS_OPCODE_AXFR || msg.opcode == Commons.DNS_OPCODE_NOTIFY)) {
+            int aclResult = TsigACL.checkAuthorization(msg.remoteAddress, signer);
+            if (aclResult != Commons.ISC_R_SUCCESS)
+                return aclResult;
+        }
+        // --- End of ACL Validation Addition ---
+
+        return result;
+    }
+</repair>

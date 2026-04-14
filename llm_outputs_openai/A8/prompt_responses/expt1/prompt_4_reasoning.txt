@@ -1,0 +1,22 @@
+The repair adds explicit handling for determining whether the initial key exchange guess was wrong, which is crucial to prevent the processing of a subsequent SSH_MSG_KEXDH_INIT message based on an erroneous assumption. Here’s a breakdown of how the repair fixes the vulnerability:
+
+1. Conditional Check:  
+   The code checks if either first_kex_packet_follows is set (indicating the remote side expects immediate key exchange data) or if the session flag send_first_kex_follows is true (indicating our peer's anticipated behavior). This check determines if the session should evaluate the initial guess.
+
+2. Correct Comparison:  
+   Instead of implicitly trusting that the comparison yields an appropriate result, the repair explicitly calls two functions (cmp_first_kex_algo) that compare:
+   - The key exchange algorithm from the client with that of the server.
+   - The host key algorithm from the client with that of the server.
+
+   If either comparison indicates a mismatch, it sets first_kex_follows_guess_wrong to true. This flag then dictates further actions, such as ignoring the next SSH_MSG_KEXDH_INIT message on the server side or making the client restart the key exchange process. Ensuring both algorithm comparisons are conducted prevents the session from proceeding with incompatible or unexpected keys.
+
+3. Fallback Handling:  
+   The added else branch ensures that when neither condition applies (i.e., when first_kex_packet_follows is false and the send_first_kex_follows flag is not set), the session’s first_kex_follows_guess_wrong flag is explicitly reset to 0. This prevents any leftover state from a previous exchange from incorrectly influencing the new exchange. 
+
+4. Clear Logging:  
+   The repair includes logging that clearly states whether the initial guess was "right" or "wrong." This helps in both debugging and monitoring, improving operational security as administrators can verify that incorrect guesses are accurately detected.
+
+5. Consolidated Return and Cleanup:  
+   The repair concludes with a successful return code (SSH_OK) if everything proceeds correctly, or a cleanup and error return on failure. This structured exit flow minimizes the risk of leaving the system in an ambiguous state potentially exploitable by an attacker.
+
+Overall, the vulnerability was primarily due to ambiguous logic in determining whether the key exchange guess was wrong. If that flag wasn't correctly set, subsequent key exchange steps (like handling the SSH_MSG_KEXDH_INIT message) might occur even with mismatched algorithms. This could lead to a security breach by establishing cryptographic parameters that aren’t mutually agreed upon by both parties. The repair enforces a precise check and resets the flag when necessary, thus ensuring that negotiations are only completed when both sides share the correct expectations.

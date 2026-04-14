@@ -1,0 +1,39 @@
+Below is one example of how the patched code might look. The key repair is to add an explicit check that the message’s TSIG signature was verified (for example, via a new flag such as msg->tsig_verified) before comparing the TSIG status and error fields. That way, the code only accepts messages that have passed all tests—and it otherwise rejects messages even if the TSIG status/error fields appear “clean.”
+
+For example, the fixed code might be:
+
+-----------------------------------------------------------
+	/* Convert TSIG RDATA into structured form. */
+	result = dns_rdata_tostruct(&rdata, &tsig, NULL);
+	INSIST(result == ISC_R_SUCCESS);
+
+	/* First, ensure that the TSIG signature was verified. */
+	if (!msg->tsig_verified) {
+		result = DNS_R_TSIGVERIFYFAILURE;
+	}
+	/* Even if the signature verification flag is set,
+	   double-check that the TSIG status field indicates no error.
+	   If an error was recorded in the status field, abort processing. */
+	else if (msg->tsigstatus != dns_rcode_noerror) {
+		result = DNS_R_TSIGVERIFYFAILURE;
+	}
+	/* Next, check that the contained TSIG error field indicates no error.
+	   If there is a nonzero error, ensure that this inconsistency is flagged. */
+	else if (tsig.error != dns_rcode_noerror) {
+		INSIST(tsig.error != dns_rcode_noerror);
+		result = DNS_R_TSIGERRORSET;
+	}
+	/* Only if all three conditions pass is the TSIG handling deemed successful. */
+	else {
+		result = ISC_R_SUCCESS;
+	}
+-----------------------------------------------------------
+
+Step by step explanation:
+1. Call dns_rdata_tostruct to fill in the TSIG structure. An assertion checks that the conversion succeeds.
+2. Check that the message’s signature verification flag (msg->tsig_verified) is true. If it isn’t, the message is rejected immediately.
+3. Next, verify that the TSIG status field indicates no error. If an error is flagged here, the process aborts by setting result to DNS_R_TSIGVERIFYFAILURE.
+4. Then the code checks the TSIG error field. If the error code isn’t “no error” (even though the prior checks passed), it triggers a sanity check (using INSIST) and returns a distinct error code DNS_R_TSIGERRORSET.
+5. If none of the above conditions trigger an error, the result is set to ISC_R_SUCCESS, signifying that the TSIG validation as a whole passed.
+
+This layered check ensures that the module does not proceed unless the TSIG signature is verified and all related fields indicate a successful transmission, thus mitigating the risk of an attacker bypassing TSIG authentication.

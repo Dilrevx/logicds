@@ -1,0 +1,36 @@
+Below is one acceptable repair. Notice that the original code only compared the lengths and—if nonzero—the byte‐contents. That means that if one “parameters” field were an omitted (NULL) pointer with len zero while the other was an actual encoded “NULL” (or even another “empty” representation with a non‐NULL pointer), they could compare as “equal” even though the data did not match exactly. The fix here is to distinguish an omitted field from an explicit encoding by checking not only that the lengths match but also that the underlying pointers are consistent. For example, one repair is as follows:
+
+------------------------------------------------------------
+/* First, check that the signature OIDs match */
+if ( crt.sigOid.len != sig_oid2.len
+     || !equalOids(crt.sigOid.p, sig_oid2.p, crt.sigOid.len)
+     ||
+     /* Next, ensure that the algorithm parameters match exactly.
+        They must have the same length and, importantly, if the length is zero,
+        then both pointers must be NULL (i.e. both truly “absent”) rather than
+        one being an encoded (NULL) value. */
+     (sig_params1.len != sig_params2.len)
+     ||
+     (sig_params1.len == 0 && (sig_params1.p != NULL || sig_params2.p != NULL))
+     ||
+     (sig_params1.len != 0 && !equalBytes(sig_params1.p, sig_params2.p, sig_params1.len))
+   )
+{
+    Err.x509crtFree(crt);
+    return Constants.MBEDTLS_ERR_X509_SIG_MISMATCH;
+}
+------------------------------------------------------------
+
+Let’s explain step by step:
+
+1. The first two conditions check that the signature OID (object identifier) values match exactly.
+
+2. We then check that the lengths of the parameters are equal. If they differ, the algorithm parameters are not the same and we abort.
+
+3. Next, if the length is zero (indicating “no parameters”), we require that the pointer also be NULL in both cases. This prevents a situation where one field is an actual encoded “NULL” (which might be stored as a non‐NULL pointer to an empty array or even to the DER encoding for ASN.1 NULL) and the other field is simply absent.
+
+4. Finally, if the length is not zero, we compare the bytes.
+
+This way we guarantee that any difference in the “algorithm parameters” – including the subtle difference between a missing entry and one that encodes a NULL – will cause a mismatch and the certificate will be rejected.
+
+Any repair that makes an explicit distinction between an absent algorithm parameters entry and an empty “real” parameters value addresses the vulnerability described.

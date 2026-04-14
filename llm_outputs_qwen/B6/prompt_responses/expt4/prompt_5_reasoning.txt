@@ -1,0 +1,28 @@
+The original code snippet contains a vulnerability related to how it verifies the Common Name (CN) against the certificate's Subject Alternative Names (SANs). Specifically, the issue arises because the code does not differentiate between types of SAN entries when performing the comparison. This allows an attacker to potentially match an IP address (IPv4 or IPv6) in the SAN field to a domain name specified as the expected CN, which could lead to a successful man-in-the-middle attack if the attacker controls the IP address.
+
+### Vulnerability Analysis
+
+In the original code, when the `subject_alt_names` extension is present, the code iterates through each entry in this extension without checking the type of each entry. The function `x509_crt_check_cn` is called on each SAN entry, and if a match is found, the loop breaks, indicating a successful verification. However, this approach does not consider the type of SAN entry (e.g., DNS name, IP address), allowing for mismatches between the expected domain name and the actual SAN entry type.
+
+### Repair Explanation
+
+The repair involves modifying the logic to ensure that only SAN entries of type DNS name (tag value `MBEDTLS_ASN1_CONTEXT_SPECIFIC | MBEDTLS_ASN1_CONSTRUCTED | 2`) are considered during the verification process. This change ensures that the verification is strictly limited to domain names, preventing any potential confusion with other types of SAN entries such as IP addresses.
+
+#### Key Changes:
+
+1. **Type Checking for SAN Entries**:
+   - Before calling `x509_crt_check_cn`, the code now checks if the current SAN entry (`cur->buf`) is of type DNS name by examining its tag.
+   - The condition `cur->buf.tag == MBEDTLS_ASN1_CONTEXT_SPECIFIC | MBEDTLS_ASN1_CONSTRUCTED | 2` ensures that only DNS names are considered for comparison. This tag value corresponds to the ASN.1 encoding for DNS names in the SAN extension.
+
+2. **Introduction of `found` Variable**:
+   - A boolean variable `found` is introduced to track whether a valid match has been found during the iteration over SAN entries or subject names.
+   - This variable simplifies the logic by avoiding multiple return points and makes the code easier to read and maintain.
+
+3. **Consistent Verification Logic**:
+   - The same logic for verifying the CN is applied in both scenarios: when the SAN extension is present and when it is not.
+   - In both cases, the code checks for a match between the provided CN and the relevant entries in the certificate (either SAN or subject name), and sets the `found` flag accordingly.
+   - If no match is found after iterating through all relevant entries, the `MBEDTLS_X509_BADCERT_CN_MISMATCH` flag is set, indicating a mismatch.
+
+### Conclusion
+
+By ensuring that only DNS names are considered during the verification process, the repaired code effectively mitigates the risk of an attacker using a certificate with a SAN entry of a different type (such as an IP address) to impersonate a domain name. This change aligns with best practices for certificate validation and enhances the security of applications relying on this verification logic.

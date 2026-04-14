@@ -1,0 +1,53 @@
+Based on the provided repair description, here is a code snippet illustrating how the vulnerability can be fixed in the wolfSSL library. This snippet assumes you have some familiarity with the wolfSSL codebase and the structure of its TLS 1.3 handshake process.
+
+```c
+// Assume we are in the function handling the TLS 1.3 handshake after parsing the ServerHello
+int HandleServerHello(WOLFSSL* ssl)
+{
+    // ... existing code for handling PSK ...
+    // Check for a chosen PSK
+    if (ssl->options.haveSessionId) {
+        int pskFound = 0;
+        for (int i = 0; i < ssl->options.pskCount; i++) {
+            if (ssl->options.psk[i].idLen == ssl->session.psk_identity_hint_len &&
+                XMEMCMP(ssl->options.psk[i].id, ssl->session.psk_identity_hint,
+                        ssl->session.psk_identity_hint_len) == 0) {
+                pskFound = 1;
+                break;
+            }
+        }
+
+        if (!pskFound) {
+            ssl->options.pskNegotiated = 0;
+            ssl->options.pskKeySz = 0;
+            XMEMSET(ssl->options.pskKey, 0, MAX_PSK_ID_LEN);
+        }
+    }
+
+    // ... existing code for handling Key Share ...
+
+    // New validation step introduced by the repair
+    if (!ssl->options.pskNegotiated && ssl->session.namedGroup == 0) {
+        WOLFSSL_MSG("Neither PSK nor Key Share extension found, terminating handshake");
+        return EXT_MISSING; // Assuming EXT_MISSING is defined in your constants
+    }
+
+    // If we reach here, either PSK or Key Share is valid, continue handshake
+    ssl->keys.encryptionOn = 1;
+    ssl->options.serverState = SERVER_HELLO_COMPLETE;
+
+    // ... rest of the handshake processing ...
+
+    return 0; // Indicating successful processing of ServerHello
+}
+```
+
+### Explanation of the Code Changes
+
+1. **PSK Handling**: The code first checks if there is a session ID and then iterates through the pre-shared keys to see if one matches the hint provided by the server. If no matching PSK is found, it resets the PSK-related options and clears the PSK key array.
+
+2. **Validation Step**: After handling the PSK, the code checks if neither a PSK was negotiated (`ssl->options.pskNegotiated == 0`) nor a named group was set (`ssl->session.namedGroup == 0`). If both conditions are true, it means the server did not provide necessary key material, and the function returns `EXT_MISSING`, which should be defined as an error code indicating a missing extension.
+
+3. **Handshake Continuation**: If either a PSK is negotiated or a valid named group is present, the handshake continues by enabling encryption and updating the server state.
+
+This modification ensures that the TLS 1.3 handshake will not proceed with a default, predictable IKM, thus mitigating the described vulnerability.

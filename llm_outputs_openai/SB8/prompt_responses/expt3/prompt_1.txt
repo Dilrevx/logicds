@@ -1,0 +1,36 @@
+<repair>
+        if (extMsgType[0] == CommonsConstants.server_hello) {
+            PreSharedKey psk = null;
+            TlsExtension ext = TLSX.find(ssl.extensions, CommonsConstants.TLSX_PRE_SHARED_KEY);
+            if (ext != null)
+                psk = (PreSharedKey) ext.data;
+            while (psk != null && !psk.chosen)
+                psk = psk.next;
+            if (psk == null) {
+                /* 
+                 * In TLS 1.3 both a PSK and a key share extension are required to
+                 * securely compute the IKM from which the master secret is derived.
+                 * Falling back to a default predictable IKM (e.g. an all-zeros buffer)
+                 * would lead to an insecure session. Therefore, if we detect that
+                 * no PSK (and by implication no valid key share, which is handled elsewhere)
+                 * was negotiated and we are operating in TLS 1.3, we must abort the handshake.
+                 */
+                if (ssl.version == CommonsConstants.VERSION_TLS13) {
+                    return CommonsConstants.TLS_ALERT_HANDSHAKE_FAILURE;
+                }
+                /* For legacy TLS versions, falling back to a non-resumed session is acceptable. */
+                ssl.options.resuming = false;
+                ssl.arrays.psk_keySz = 0;
+                for (int i = 0; i < ssl.arrays.psk_key.length; i++) {
+                    ssl.arrays.psk_key[i] = 0;
+                }
+            } else {
+                ret = SetupPskKey(ssl, psk, 0);
+                if (ret != 0)
+                    return ret;
+                ssl.options.pskNegotiated = true;
+            }
+            ssl.keys.encryptionOn = true;
+            ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE;
+        }
+</repair>

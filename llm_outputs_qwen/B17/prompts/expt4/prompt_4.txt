@@ -1,0 +1,88 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags. Do not provide any extra text explanation.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+An issue was discovered in tls_verify_crl. Failure to check for the appropriate field of a CRL entry (checking twice for subject, rather than once for subject and once for issuer) prevents some valid CRLs from being taken into account, and can allow clients whose certificates have been revoked to proceed with a connection to the server.
+</vulnerability_description>
+Source code:
+Context code:
+<context_code>
+### contrib/mod_tls.c ###
+static int tls_verify_crl(int ok, X509_STORE_CTX *ctx) {
+  register int i = 0;
+  X509_NAME *subject = NULL, *issuer = NULL;
+  X509 *xs = NULL;
+  STACK_OF(X509_CRL) *crls = NULL;
+  X509_STORE_CTX *store_ctx = NULL;
+  int n, res;
+
+............
+extern pr_response_t *resp_list, *resp_err_list;
+extern session_t session;
+extern xaset_t *server_list;
+extern int ServerUseReverseDNS;
+
+static const char *trace_channel = "tls";
+
+static DH *get_dh(BIGNUM *p, BIGNUM *g) {
+  DH *dh;
+
+  dh = DH_new();
+  if (dh == NULL) {
+    return NULL;
+  }
+
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  if (DH_set0_pqg(dh, p, NULL, g) != 1) {
+    pr_trace_msg(trace_channel, 3, "error setting DH p/q parameters: %s",
+      ERR_error_string(ERR_get_error(), NULL));
+    DH_free(dh);
+    return NULL;
+  }
+#else
+  dh->p = p;
+  dh->g = g;
+#endif /* OpenSSL 1.1.x and later */
+
+  return dh;
+}
+
+............
+
+</context_code>
+Buggy source code:
+
+<buggy_code>
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, subject);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair addresses a critical flaw in the way Certificate Revocation Lists (CRLs) are verified during the TLS handshake process, specifically in the `tls_verify_crl` function. This function plays a vital role in ensuring that only certificates that have not been revoked by the issuing Certificate Authority (CA) are considered valid for establishing secure connections.
+
+In the original buggy source code, the function incorrectly retrieves CRLs using the `subject` of the certificate instead of the `issuer`. The `subject` refers to the entity to which the certificate was issued, while the `issuer` is the CA that signed the certificate. To properly validate a certificate against a CRL, one must check the revocation status of the certificate based on its issuer, not the subject.
+
+The vulnerability arises because the function checks for CRL entries associated with the wrong field—twice for the `subject` instead of once for both `subject` and `issuer`. As a result, the function might miss valid CRLs that could indicate a certificate has been revoked, thereby allowing revoked certificates to pass validation and establish connections. This poses a significant security risk, as it enables malicious actors to use expired or compromised certificates to impersonate legitimate services or entities.
+
+To fix this issue, the repair modifies the parameter passed to the functions responsible for retrieving CRLs from the X509 store. Instead of using the `subject`, it uses the `issuer`. This change ensures that the correct CRLs are fetched and checked against the certificate's issuer, accurately reflecting the certificate's revocation status.
+
+The repair involves updating the conditional compilation blocks that handle different versions of OpenSSL. For OpenSSL versions 1.1.x and later, the function `X509_STORE_CTX_get1_crls` is used, and for versions 1.0.x, the function `X509_STORE_get1_crls` is used. In both cases, the parameter that specifies which CRLs to retrieve is changed from `subject` to `issuer`.
+
+This adjustment ensures that the system correctly identifies and applies the relevant CRLs, preventing revoked certificates from being accepted as valid. By making this simple yet crucial change, the vulnerability is mitigated, enhancing the security of the TLS connection process.
+
+Additionally, the comment advising users to upgrade their OpenSSL version if they are using a version prior to 1.0.0 remains unchanged, reinforcing the importance of maintaining up-to-date cryptographic libraries to protect against known vulnerabilities and take advantage of security improvements.
+
+In summary, the repair focuses on correcting the logical error in how CRLs are retrieved and applied during the certificate verification process, ensuring that the integrity and security of TLS connections are maintained.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

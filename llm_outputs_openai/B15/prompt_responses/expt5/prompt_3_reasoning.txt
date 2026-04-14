@@ -1,0 +1,13 @@
+The repair modifies the flow to ensure that only keys that fully validate as trust anchors are accepted. Here’s how the changes address the vulnerability:
+
+1. In the original code, when dns_keytable_findkeynode returned DNS_R_PARTIALMATCH or ISC_R_NOTFOUND (indicating that the key was not a complete trust anchor), the result was overridden to ISC_R_SUCCESS. This means that even if the mirror zone data did not fully validate, the code would act as though it were secure. This allowed a malicious attacker, positioned in the network path, to inject forged root zone data which would then be erroneously trusted.
+
+2. In the repaired version, we check if the result is exactly ISC_R_SUCCESS. Only in that case – when the supplied key is a fully validated trust anchor – do we mark the key as good by setting *goodkey to true and secure the trust on the keyset and keysigs datasets. This prevents any partially matched or missing data from triggering secure behavior.
+
+3. If the result is anything other than a full match (ISC_R_SUCCESS), the repair sets *goodkey to false and does not override the error code. By doing so, the recursive resolver will not inadvertently trust data that hasn’t been validated. It now properly falls back to secure recursion rather than accepting unvalidated mirror zone data.
+
+4. The cleanup operation with dst_key_free remains intact, ensuring that key management resources are appropriately freed regardless of the outcome.
+
+Thus, by only accepting a fully validated key (a complete match) and propagating non-success statuses, the repair mitigates the vulnerability where attackers might otherwise be able to replace trusted zone data with malicious data. This aligns the code with the secure design approach: ensuring that only trust anchors explicitly configured and validated are used, in accordance with RFC 5011 dynamic trust anchor management principles.
+
+In summary, the repair prevents the fallback to insecurely validated mirror zone data by no longer treating DNS_R_PARTIALMATCH or ISC_R_NOTFOUND as ISC_R_SUCCESS. Only a complete match results in the trust anchor being marked as good. This elimination of the dangerous fallback mechanism effectively closes the security gap associated with mirror zone validation.

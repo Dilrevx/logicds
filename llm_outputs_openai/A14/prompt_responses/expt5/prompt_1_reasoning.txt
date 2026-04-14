@@ -1,0 +1,23 @@
+The repair adds a preliminary check to ensure that the Change Cipher Spec (CCS) message is received only when the connection is expecting it and that it has not already been processed. Here’s a breakdown of the changes and how they fix the vulnerability:
+
+1. State Verification:
+ • At the start of the CCS handling block, we now check if the connection state (s->state) is exactly at the expected stage (for example, SSL3_ST_SR_CCS) and that no CCS has been received before (s->s3->change_cipher_spec == 0).
+ • This ensures that a CCS message is only processed when the protocol expects it, preventing an attacker from replaying or injecting a CCS message at an inappropriate time. Without this check, it would be possible to process an unexpected or duplicate change, which could potentially lead to de-synchronization or loss of security guarantees.
+
+2. Duplicate and Out-of-Sequence Protection:
+ • By verifying that s->s3->change_cipher_spec is not already set, the code ensures the CCS message is not processed more than once.
+ • This protects against vulnerabilities where an attacker might intentionally send a duplicate or an out-of-sequence CCS message to manipulate the cipher state of the session.
+
+3. Consistent Error Handling:
+ • When either the connection state is not as expected or a duplicate CCS is detected, the code sets the alert (al) to SSL_AD_UNEXPECTED_MESSAGE and raises a specific error via SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY). This clearly distinguishes unexpected behavior from other types of errors.
+ • This precise error handling aids in both debugging and maintaining protocol integrity by distinguishing early CCS receipt from other issues such as malformed CCS.
+
+4. Retaining Core CCS Validations:
+ • The changes do not remove or alter the existing checks on the CCS message content. The code still verifies that the CCS record length is exactly one byte, the offset is zero, and the byte matches the expected value for CCS.
+ • This ensures that any genuine protocol functionality is preserved while adding extra security to avoid misuse.
+
+5. Transition and Cipher Change Execution:
+ • Once the validations are complete and the CCS message is verified, the code marks the CCS as received and calls ssl3_do_change_cipher_spec(s). This function performs the necessary actions to change the cipher state.
+ • By adding the preliminary checks, the code guarantees that these critical state changes occur only under conditions that are safe and expected.
+
+Overall, the repair mitigates the vulnerability by enforcing strict state conditions and preventing mishandling of CCS messages. It protects against scenarios where an attacker might inject, replay, or duplicate CCS messages to subvert the security of the SSL/TLS connection.

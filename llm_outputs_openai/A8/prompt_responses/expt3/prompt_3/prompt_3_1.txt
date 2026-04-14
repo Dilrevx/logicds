@@ -1,0 +1,40 @@
+Below is one way to repair this code so that an initial “first‐kex” guess error forces an immediate abort rather than letting the connection continue with mismatched sequence numbers. In this example the fix disables use of the “first kex packet follows” behavior when the negotiated algorithms do not match—thus preventing Terrapin‐style downgrade attacks. (Note that the names of functions and error‐handling routines may differ in your codebase.) 
+
+──────────────────────────────
+/* Proposed patched code snippet */
+if (first_kex_packet_follows || session->send_first_kex_follows) {
+    char **client_methods = crypto->client_kex.methods;
+    char **server_methods = crypto->server_kex.methods;
+
+    /* Check that both the key exchange algorithm and host key algorithm are agreed upon. */
+    session->first_kex_follows_guess_wrong =
+         cmp_first_kex_algo(client_methods[SSH_KEX],
+                            server_methods[SSH_KEX]) ||
+         cmp_first_kex_algo(client_methods[SSH_HOSTKEYS],
+                            server_methods[SSH_HOSTKEYS]);
+
+    SSH_LOG(SSH_LOG_DEBUG, "The initial guess was %s.",
+            session->first_kex_follows_guess_wrong ? "wrong" : "right");
+
+    /* If we had negotiated that we could send the first KEX packet, but our guess is wrong,
+       then the connection must be aborted to avoid a downgrade attack.
+       (The Terrapin attack relies on having mismatched sequence numbers, so we do not continue.)
+    */
+    if (session->send_first_kex_follows && session->first_kex_follows_guess_wrong) {
+        SSH_LOG(SSH_LOG_ERROR, "First key exchange guess mismatch detected. Aborting connection to prevent downgrade attack.");
+        /* Terminate the connection; how you do this depends on your error handling. */
+        packet_disconnect(ssh, "protocol error: mismatched first kex guess");
+        return;
+    }
+}
+──────────────────────────────
+
+Explanation of the changes:
+
+1. The original code computed a “guess wrong” flag and logged it. In the repair the code now checks immediately: if the session was supposed to use the “first kex packet follows” extension (session->send_first_kex_follows is true) but the negotiated algorithms do not match, the connection is aborted immediately. This prevents the attacker from taking advantage of mismatched sequence numbers or omitted packets.
+
+2. By aborting the connection when session->first_kex_follows_guess_wrong is true, we ensure that no transport is allowed to continue with a potentially downgraded (or inconsistent) set of negotiated algorithms.
+
+3. (Optionally, in some environments you may choose to disable “first_kex_packet_follows” altogether for protocols known to be vulnerable – for example, when using chacha20-poly1305@openssh.com or CBC-etm MAC algorithms.)
+
+This repair forces a strict validation of the key exchange negotiation and prevents a remote attacker from exploiting the Terrapin vulnerability.

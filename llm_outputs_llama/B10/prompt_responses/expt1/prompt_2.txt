@@ -1,0 +1,184 @@
+<repair>
+            if (args->sz > (word32)outSz) {
+                WOLFSSL_MSG("Oops, want to write past output buffer size");
+                ERROR_OUT(BUFFER_E, exit_buildmsg);
+            }
+
+            if (args->sz < (word32)outSz) {
+                WOLFSSL_MSG("Oops, output buffer size is too large");
+                ERROR_OUT(BUFFER_E, exit_buildmsg);
+            }
+
+            if (args->idx > (word32)outSz) {
+                WOLFSSL_MSG("Oops, want to write past output buffer size");
+                ERROR_OUT(BUFFER_E, exit_buildmsg);
+            }
+
+            if (args->headerSz > (word32)outSz) {
+                WOLFSSL_MSG("Oops, want to write past output buffer size");
+                ERROR_OUT(BUFFER_E, exit_buildmsg);
+            }
+
+            if (args->digestSz > (word32)outSz) {
+                WOLFSSL_MSG("Oops, want to write past output buffer size");
+                ERROR_OUT(BUFFER_E, exit_buildmsg);
+            }
+
+            if (args->ivSz > (word32)outSz) {
+                WOLFSSL_MSG("Oops, want to write past output buffer size");
+                ERROR_OUT(BUFFER_E, exit_buildmsg);
+            }
+
+            if (args->pad > (word32)outSz) {
+                WOLFSSL_MSG("Oops, want to write past output buffer size");
+                ERROR_OUT(BUFFER_E, exit_buildmsg);
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_HEADER;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_HEADER:
+        {
+            /* write header */
+            if (ssl->options.dtls) {
+                /* DTLS header */
+                if (ssl->options.dtls == DTLS_CLIENT) {
+                    args->header[0] = (byte)DTLS ContentType;
+                    args->header[1] = (byte)DTLS_VERSION_MAJOR;
+                    args->header[2] = (byte)DTLS_VERSION_MINOR;
+                }
+                else {
+                    args->header[0] = (byte)DTLS ContentType;
+                    args->header[1] = (byte)DTLS_VERSION_MAJOR;
+                    args->header[2] = (byte)DTLS_VERSION_MINOR;
+                }
+                args->header[3] = (byte)((ssl->epoch << 3) & 0xFF);
+                args->header[4] = (byte)(ssl->epoch >> 5);
+                args->header[5] = (byte)((ssl->sequence[0] >> 8) & 0xFF);
+                args->header[6] = (byte)(ssl->sequence[0] & 0xFF);
+                args->header[7] = (byte)((ssl->sequence[1] >> 8) & 0xFF);
+                args->header[8] = (byte)(ssl->sequence[1] & 0xFF);
+                args->header[9] = (byte)((ssl->sequence[2] >> 8) & 0xFF);
+                args->header[10] = (byte)(ssl->sequence[2] & 0xFF);
+                args->header[11] = (byte)((ssl->sequence[3] >> 8) & 0xFF);
+                args->header[12] = (byte)(ssl->sequence[3] & 0xFF);
+                args->header[13] = (byte)((ssl->sequence[4] >> 8) & 0xFF);
+                args->header[14] = (byte)(ssl->sequence[4] & 0xFF);
+                args->header[15] = (byte)((ssl->sequence[5] >> 8) & 0xFF);
+                args->header[16] = (byte)(ssl->sequence[5] & 0xFF);
+            }
+            else {
+                /* TLS header */
+                args->header[0] = (byte)TLS ContentType;
+                args->header[1] = (byte)TLS_MAJOR_VERSION_1_2;
+                args->header[2] = (byte)TLS_MINOR_VERSION_1_2;
+                args->header[3] = (byte)((args->sz >> 8) & 0xFF);
+                args->header[4] = (byte)(args->sz & 0xFF);
+            }
+
+            XMEMCPY(output, args->header, args->headerSz);
+
+            ssl->options.buildMsgState = BUILD_MSG_DATA;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_DATA:
+        {
+            /* write data */
+            XMEMCPY(output + args->headerSz, input, inSz);
+
+            ssl->options.buildMsgState = BUILD_MSG_MAC;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_MAC:
+        {
+            /* write mac */
+            if (ssl->specs.cipher_type!= aead) {
+                if (ssl->options.tls1_2 && ssl->options.tls1_2_mac == TLS_MAC_SHA384) {
+                    ret = wc_HmacSha384(ssl->mac_key, ssl->mac_key_sz,
+                                        output, args->idx,
+                                        output + args->idx, &args->digestSz);
+                }
+                else {
+                    ret = wc_HmacSha256(ssl->mac_key, ssl->mac_key_sz,
+                                        output, args->idx,
+                                        output + args->idx, &args->digestSz);
+                }
+                if (ret!= 0)
+                    ERROR_OUT(ret, exit_buildmsg);
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_DONE;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_DONE:
+        {
+            /* write IV */
+            if (ssl->specs.cipher_type == block) {
+                if (ssl->options.tls1_1) {
+                    if (ssl->options.tls1_1_iv == TLS_CBC_IV) {
+                        ret = wc_GenerateIV(ssl->keys.encryptIV, args->ivSz);
+                        if (ret!= 0)
+                            ERROR_OUT(ret, exit_buildmsg);
+                    }
+                    else if (ssl->options.tls1_1_iv == TLS_EXPLICIT_IV) {
+                        ret = wc_GenerateIV(ssl->keys.encryptIV, args->ivSz);
+                        if (ret!= 0)
+                            ERROR_OUT(ret, exit_buildmsg);
+                        XMEMCPY(output + args->idx, ssl->keys.encryptIV, args->ivSz);
+                        args->idx += args->ivSz;
+                    }
+                }
+            }
+
+            /* write pad */
+            if (ssl->specs.cipher_type == block) {
+                if (args->pad > 0) {
+                    output[args->idx] = (byte)args->pad;
+                    for (i = 1; i < args->pad; i++) {
+                        output[args->idx + i] = (byte)0;
+                    }
+                    args->idx += args->pad;
+                }
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_BEGIN;
+        }
+        FALL_THROUGH;
+        default:
+            WOLFSSL_MSG("Unknown build message state");
+            ERROR_OUT(BAD_STATE_E, exit_buildmsg);
+        }
+
+        if (hashOutput) {
+            if (ssl->specs.cipher_type!= aead) {
+                if (ssl->options.tls1_2 && ssl->options.tls1_2_mac == TLS_MAC_SHA384) {
+                    ret = wc_HmacSha384(ssl->mac_key, ssl->mac_key_sz,
+                                        output, args->idx,
+                                        output + args->idx, &args->digestSz);
+                }
+                else {
+                    ret = wc_HmacSha256(ssl->mac_key, ssl->mac_key_sz,
+                                        output, args->idx,
+                                        output + args->idx, &args->digestSz);
+                }
+                if (ret!= 0)
+                    ERROR_OUT(ret, exit_buildmsg);
+            }
+        }
+
+        if (asyncOkay) {
+            ret = wolfSSL_AsyncPush(ssl, &ssl->options.buildMsgState,
+                                    (void*)args, sizeof(BuildMsgArgs));
+            if (ret!= 0)
+                ERROR_OUT(ret, exit_buildmsg);
+        }
+
+        return ret;
+
+exit_buildmsg:
+        if (asyncOkay) {
+            wolfSSL_AsyncPop(ssl, &ssl->options.buildMsgState);
+        }
+        return ret;
+    }
+</repair>

@@ -1,0 +1,19 @@
+The repair introduces an additional explicit access control check for operations that are considered sensitive (like AXFR and NOTIFY). Here's a walkthrough of the changes:
+
+1. TSIG Verification:  
+   The original code checks whether the TSIG verification succeeded by examining tsigstatus and tsig.error. If either check fails, it sets an error result. This part remains unchanged, ensuring that if the cryptographic verification of the TSIG fails, the request is immediately rejected.
+
+2. New ACL Check:  
+   After confirming that TSIG verification is successful, the repair adds an extra condition. This new condition checks if the DNS message is for an operation that requires heightened scrutiny (specifically AXFR, which is a full zone transfer, or NOTIFY messages).  
+   
+   The function isAXFRRequest(msg) or isNotifyRequest(msg) is assumed to determine whether the incoming message is such a request. If yes, the code then calls isAuthorizedClient(msg.remoteAddress) to validate that the remote client making the request is explicitly allowed per the server's access control list (ACL).
+
+3. Mitigation of the Vulnerability:  
+   The vulnerability highlighted that an attacker, knowing a valid TSIG key name and possibly capable of sending and receiving messages directly to an authoritative DNS server, might bypass TSIG authentication for specific requests like AXFR. In environments that rely solely on TSIG, this could mean that an unauthorized client might be able to perform a zone transfer or the server might act upon bogus NOTIFY requests.  
+   
+   By integrating the explicit client authorization check, the repair mitigates this risk. Even if an attacker successfully forges a valid TSIG (e.g., by knowing the key name or exploiting some other weakness), they will still be subject to the ACL. If they are not coming from an authorized IP address (or otherwise not meeting the ACL criteria), the request will be denied with Commons.DNS_R_ACCESSDENIED. This layered security approach (TSIG plus ACL) greatly reduces the attack surface by ensuring that zone transfers and notifications are both cryptographically and network-access controlled.
+
+4. Fallback Success:  
+   If the message passes both the TSIG checks and the new ACL validation, then the code sets the result to ISC_R_SUCCESS, signaling that the request is authenticated and authorized.
+
+In summary, the repair fixes the vulnerability by adding a safeguard that prevents unauthorized clients from leveraging a forged or misused TSIG key name to perform sensitive operations. This extra layer of checking helps ensure that even if TSIG verification can be bypassed, the attacker's IP or identity must still be explicitly permitted, keeping the server's critical functions secure.

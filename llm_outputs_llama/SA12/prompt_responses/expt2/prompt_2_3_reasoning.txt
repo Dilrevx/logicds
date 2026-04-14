@@ -1,0 +1,36 @@
+The repair provided addresses the vulnerability in the TLS v1.3 server code by introducing additional checks to enforce mutual authentication. The vulnerability allows a malicious client to bypass mutual authentication by not sending the certificate_verify message, even if the server requires a client certificate.
+
+The first step in the repair is to check if the server requires mutual authentication. This is done by verifying if the server is acting as the server end and if mutual authentication is enabled or if the server is set to fail if no client certificate is provided. This is achieved through the following condition:
+
+```c
+if (ssl.options.side == WOLFSSL_SERVER_END && (ssl.options.verifyPeer || ssl.options.failNoClientCert))
+```
+
+This condition checks if the server is acting as the server end (`ssl.options.side == WOLFSSL_SERVER_END`) and if mutual authentication is enabled (`ssl.options.verifyPeer`) or if the server is set to fail if no client certificate is provided (`ssl.options.failNoClientCert`). If either of these conditions is true, it means the server requires mutual authentication.
+
+The next step is to verify if the client has sent a certificate verify message. This is done by checking if the peer verify option is set (`ssl.options.peerVerify & WOLFSSL_VERIFY_PEER`) and if the connection is not being resumed (`!ssl.tls1_3 &&!ssl.resuming`). If the peer verify option is not set and the connection is not being resumed, it means the client has not sent a certificate verify message. This is achieved through the following condition:
+
+```c
+if ((ssl.options.peerVerify & WOLFSSL_VERIFY_PEER) &&!ssl.tls1_3 &&!ssl.resuming)
+```
+
+If the client has not sent a certificate verify message and the server requires mutual authentication, the server needs to terminate the connection. This is done by sending a fatal alert to the client and returning an error code indicating that no peer certificate was provided:
+
+```c
+ssl.error = SSL_FATAL_ALERT_HANDSHAKE_FAILURE;
+WOLFSSL_LEAVE("DoTls13Finished", ssl.error);
+return ssl.error;
+```
+
+This ensures that the server enforces mutual authentication and terminates the connection if the client does not provide a valid certificate.
+
+Finally, the server proceeds with the original buffer size check to ensure that the incoming data does not exceed the available buffer space:
+
+```c
+if (inOutIdx[0] + size + ssl.keys.padSz > totalSz)
+    return Constants.BUFFER_E;
+```
+
+This check is necessary to prevent buffer overflow attacks and ensure the integrity of the server.
+
+In summary, the repair introduces additional checks to enforce mutual authentication in the TLS v1.3 server code. It verifies if the server requires mutual authentication, checks if the client has sent a certificate verify message, and terminates the connection if the client does not provide a valid certificate. The repair also ensures that the server performs the original buffer size check to prevent buffer overflow attacks.

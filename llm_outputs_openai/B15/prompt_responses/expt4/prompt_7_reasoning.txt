@@ -1,0 +1,18 @@
+The repair changes the order and conditions under which the DNSKEY algorithm counter is incremented, ensuring that only keys that have passed trust anchor verification (when trust anchors are configured) are “accepted” with an update to the active keys counter. Here’s a step-by-step explanation:
+
+1. In the original code, as soon as the DNSKEY RRset was self‐signed (or met the secondary condition for non‐KSKs), the counter was incremented irrespective of whether the key was validated against a trusted anchor. This created a window where an attacker could inject self‐signed data (or use mirror zone behavior) and cause the counter to be updated based on forged zone data.
+
+2. The first change in the repair is to check if trust anchors are configured (vctx->secroots != NULL). If no trust anchors are set, the code simply increments the counter (if it isn’t already maxed out) and marks the key as good. This path remains similar to the original behavior since self‐signed keys are acceptable when there’s no external trust anchor.
+
+3. However, when trust anchors are configured, rather than immediately updating the counter when the DNSKEY RRset is self‐signed, the repair first extracts the key from the RRset (using dns_dnssec_keyfromrdata) and then performs a lookup in the trust anchor table (via dns_keytable_findkeynode). Only if this check confirms that the key is a trusted anchor (ISC_R_SUCCESS returned) does the code then update the active keys counter and mark the key as good.
+
+4. Also, the repair ensures that if the trust anchor lookup fails or returns only a partial match, the system does not mistakenly treat the forged data as valid. That way, even if an attacker is in a position to forge self‐signed data, the counter will not be updated unless the forged data can also pass the critical trust anchor test.
+
+5. The secondary condition (handling DNSSEC signatures for non-ksk mentioned in the else-if) still increments the counter if the data has valid DNSSEC signatures, but this is handled separately. The repair fails safe by not processing further if validation via a trust anchor isn’t completed for self‐signed data.
+
+By restructuring the code in this way:
+• The repair prevents the premature acceptance of mirror zone data that wasn’t validated against a trust anchor.
+• It ensures that the counters (active_keys) only reflect successful, trusted validations.
+• Consequently, an on-path attacker cannot simply replace trusted data with forged data and then manipulate the algorithm counters to make the forged data appear valid.
+
+This reordering of operations essentially aligns the behavior with the intended DNSSEC security model, where only keys validated against a trusted configuration (if any exist) are counted as fully validated, thereby mitigating the vulnerability inherent in mirror zones.

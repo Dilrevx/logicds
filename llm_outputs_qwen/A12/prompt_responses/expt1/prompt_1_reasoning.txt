@@ -1,0 +1,47 @@
+The provided repair addresses several potential vulnerabilities and issues within the `DoTls13Finished` function, ensuring it operates securely and robustly. Let's break down each part of the repair and the reasoning behind it:
+
+### 1. **Null Pointer Checks**
+```c
+if (ssl == NULL || input == NULL || inOutIdx == NULL) {
+    return BAD_FUNC_ARG;
+}
+```
+**Reasoning:** Before proceeding with any operations, it is crucial to verify that the pointers passed to the function are not `NULL`. Dereferencing a `NULL` pointer can lead to undefined behavior, which may cause the application to crash or behave unpredictably. By checking these pointers at the beginning of the function, we prevent such issues.
+
+### 2. **Buffer Overflow Protection**
+```c
+if (*inOutIdx + FINISHED_SZ > totalSz) {
+    return BUFFER_ERROR;
+}
+```
+**Reasoning:** This check ensures that the operation does not exceed the bounds of the buffer. The variable `totalSz` represents the total size of the buffer pointed to by `input`, while `FINISHED_SZ` is the expected size of the data to be processed. If the sum of `*inOutIdx` and `FINISHED_SZ` exceeds `totalSz`, attempting to access memory beyond the buffer's bounds could result in a buffer overflow, leading to security vulnerabilities such as arbitrary code execution or data corruption. By performing this check, we ensure that all memory accesses remain within valid bounds.
+
+### 3. **Determine Secret Based on Connection Side**
+```c
+secret = (ssl->options.side == WOLFSSL_CLIENT_END) ? ssl->session->clientFinishedSecret : ssl->session->serverFinishedSecret;
+```
+**Reasoning:** In TLS 1.3, the Finished message contains a hash of the handshake messages up to that point, using a secret derived from the key exchange. The correct secret depends on whether the current side is the client or the server. By selecting the appropriate secret based on `ssl->options.side`, we ensure that the hash calculation uses the correct cryptographic material, maintaining the integrity and security of the handshake process.
+
+### 4. **Hash Calculation and Verification**
+```c
+ret = wc_HashFinish(&ssl->hsHashes->hashes[ssl->specs.macAlgorithm], mac, &finishedSz);
+if (ret != 0) {
+    return ret;
+}
+
+if (XMEMCMP(input + *inOutIdx, mac, finishedSz) != 0) {
+    return VERIFY_FINISHED_ERROR;
+}
+```
+**Reasoning:**
+- **Hash Calculation:** The `wc_HashFinish` function completes the hash computation using the specified MAC algorithm. This step is critical because the Finished message includes a hash of all previous handshake messages, ensuring that no messages have been altered or tampered with during the handshake.
+- **Error Handling:** After attempting to finish the hash, we check the return value `ret`. If `ret` is not zero, it indicates an error occurred during the hashing process. Returning this error immediately prevents further processing with potentially invalid data.
+- **Verification:** The `XMEMCMP` function compares the computed hash (`mac`) with the hash received in the Finished message (`input + *inOutIdx`). If they do not match, it indicates that the handshake has been compromised, possibly due to a man-in-the-middle attack or data corruption. In such cases, returning `VERIFY_FINISHED_ERROR` stops the handshake and alerts the application to the issue.
+
+### 5. **Increment Index**
+```c
+*inOutIdx += finishedSz;
+```
+**Reasoning:** After successfully verifying the Finished message, we update the `inOutIdx` to reflect the number of bytes processed. This is important for subsequent operations that depend on the current position within the input buffer. By incrementing `inOutIdx` by `finishedSz`, we ensure that future reads start from the correct location, maintaining the integrity of the parsing process.
+
+In summary, the repair enhances the `DoTls13Finished` function by adding necessary checks and verifications that prevent common vulnerabilities such as null pointer dereferences, buffer overflows, and integrity violations. These changes ensure that the function operates securely and reliably within the context of the TLS 1.3 handshake process.

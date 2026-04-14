@@ -1,0 +1,15 @@
+The repair splits the processing of the Finished message and the ChangeCipherSpec (CCS) message into two distinct stages. Originally, the code treated the state after sending the ClientHello as immediately expecting the Finished message, without clearly distinguishing when a CCS message should be accepted. This lack of clear order allowed an attacker to inject a CCS message prematurely, potentially triggering a zero-length master key scenario.
+
+In the repaired code, after sending the ClientHello (state 0), the handshake stage is set to SSL3_ST_CR_FINISHED_A. In this first stage (SSL3_ST_CR_FINISHED_A), the client expects the Finished message but explicitly checks if a CCS message has been received by inspecting a boolean flag (state.receivedCCS). If that flag is true at this point, the handshake is aborted by throwing an exception. This prevents the attacker from prematurely injecting a CCS message, thus stopping the possible exploitation.
+
+Once a valid Finished message is successfully processed (via the ssl3_get_finished() logic) in the SSL3_ST_CR_FINISHED_A stage, the repaired code then transitions into a new intermediary stage, SSL3_ST_CR_FINISHED_B. This stage is specifically designed to wait for the legitimate CCS message. Only when the CCS message is received (validated by checking state.receivedCCS) does the code move to the final handshake state (SSL_ST_OK).
+
+At state SSL3_ST_CR_FINISHED_B, if the expected CCS message is not present, the handshake is aborted with an exception. This clearly defines that the CCS message is only valid after a proper Finished message is received. Finally, after successfully processing the CCS message, the handshake moves to completion (SSL_ST_OK), marking the handshake as complete.
+
+This staged approach ensures that:
+
+1. If a CCS message is injected too early (i.e., during the Finished message phase), the handshake is immediately terminated.
+2. The proper sequencing of handshake messages (Finished first, then CCS) is enforced.
+3. The client prevents a scenario where an attacker can trigger an unsafe state by ensuring that no CCS message triggers an early transition to a secure state.
+
+In summary, the repair fixes the vulnerability by enforcing a strict order of message processing: the Finished message must be processed successfully and without any premature CCS message before the handshake can accept the CCS message. This prevents an attacker from injecting a rogue CCS message, which in the original code, could lead to critical security breaches such as a zero-length master key leading to session hijacking.

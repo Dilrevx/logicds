@@ -1,0 +1,13 @@
+The repair adds an extra condition so that the CA certificate check is only executed if no prior error was set by the elliptic curve parameter check. Here’s a step-by-step walkthrough:
+
+1. In the original code, when the strict flag was set and there was more than one certificate in the chain, the code checked for explicit elliptic curve parameters via the check_curve(x) function. It then set an error (either X509_V_ERR_UNSPECIFIED or X509_V_ERR_EC_KEY_EXPLICIT_PARAMS) based on the result.
+
+2. The vulnerability occurred because the next block of code unconditionally performed an additional CA certificate check when the certificate wasn’t marked as a CA (or had an improperly set path length). This second check, when the strict flag was used, would override any error set in the prior elliptic curve check. As a result, the intended strict rejection of non-CA certificates that improperly issue other certificates could be bypassed.
+
+3. The repair fixes this by augmenting the condition for the CA certificate check. The modified code now first checks whether ctx->error is equal to X509_V_OK (i.e., no previous error from the elliptic curve check). This ensures that if check_curve already flagged an error, that error isn’t overwritten by the CA certificate check.
+
+4. By only performing the CA certificate check when no error exists, the code preserves any error that might have been caused by the explicit elliptic curve parameters. This means that if an error occurs during the first check, the second check does not run, preventing the bug where a valid CA error could cancel out the more serious elliptic curve violation.
+
+5. Ultimately, this change maintains the proper security posture. The application still properly enforces that non-CA certificates must not issue other certificates, while also ensuring that explicit elliptic curve parameter errors aren’t overridden by subsequent checks.
+
+In summary, the repair prevents the vulnerability by ensuring that once an error is set (for example, because a certificate has explicit elliptic curve parameters), it won’t be replaced by an unrelated error from the CA certificate check. This preserves the security guarantees offered by the X509_V_FLAG_X509_STRICT flag while still allowing for proper validation of the certificate chain.

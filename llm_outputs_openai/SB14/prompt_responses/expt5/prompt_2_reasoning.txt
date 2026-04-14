@@ -1,0 +1,15 @@
+The repair adds a mechanism to force the socket to shut down and close immediately when the detach operation is executed on a socket that is not handled by the local thread. In the original code, when a socket was attached to a different thread (sock.tid did not equal NodeManager.nmTid()), the detach event was enqueued and processed asynchronously. This could allow the socket to linger in the CLOSE_WAIT state if maliciously crafted TCP streams prevented timely clean-up.
+
+Here’s what the repair does:
+
+1. When the socket is managed by the current thread, nothing fundamentally changes—the detach callback is called synchronously, which means the clean-up is immediate.
+
+2. For sockets associated with other threads, before enqueuing the detach event, the code now explicitly checks if the socket is still open (using sock.isClosed()). If the socket hasn’t been closed, it calls sock.shutdown(). This immediate shutdown call enforces the disconnection of the underlying connection (performing a full duplex shutdown), ensuring that the protocol state is reset, and the connection does not linger in CLOSE_WAIT.
+
+3. After the shutdown, the socket is explicitly closed using sock.close(). This release of socket resources ensures that there is no remaining file descriptor or open connection that could be exploited to keep the connection in an indefinite state.
+
+4. Finally, the original steps of creating a detach event, passing it, and enqueuing it to be processed by the appropriate worker thread remain unchanged. This ensures that further processing or application-specific handling of the detached connection can occur without risking lingering TCP states.
+
+By performing an immediate shutdown and close before submitting the detach event, the repair prevents the vulnerability where an attacker could craft TCP streams that force connections to hang in CLOSE_WAIT indefinitely. This guarantees that resources are released promptly and the connection is fully terminated regardless of the target thread's event queue state.
+
+In summary, the fix hurries the clean-up process by forcibly shutting down and closing any socket that’s not directly managed by the local thread. This immediate action reduces the window in which an attacker might exploit the asynchronous event processing mechanism to keep TCP connections in a semi-open state, thereby mitigating the reported vulnerability.

@@ -1,0 +1,18 @@
+The repair fixes the vulnerability by carefully tracking the certificate chain’s state, ensuring proper memory cleanup, and managing the “untrusted” index correctly when modifying the chain.
+
+1. Self-Signed Certificate Handling:
+When the certificate is self-signed, the code distinguishes whether it is the only element in the chain. If it is the only element, it uses get_issuer(x) to check the issuer. If the issuer check fails or if the issuer differs from the last known issuer, the error state is set appropriately and the callback is invoked. Otherwise, the certificate is replaced with the trusted lastIssuer. The repair adds an update to the last_untrusted index by setting it to the chain’s current size, ensuring that the index accurately reflects the state after the certificate replacement.
+
+2. Removing Problematic Self-Signed Certificates:
+If the self-signed certificate is not the only one, meaning there is a chain present, the code removes the problematic self-signed certificate from the chain. The repair also frees the memory for the removed certificate and then explicitly updates the last_untrusted index to match the modified chain size. This prevents the scenario in which the index could incorrectly indicate extra, possibly untrusted, certificates as part of the chain.
+
+3. Alternative Chain Loop:
+For handling intermediate certificates, the logic loops through certificates, calling get_issuer(x) for each one. The addition of new certificates to the chain is straightforward here. The repair ensures that the chain is consistently processed without reassigning or indirectly modifying the chain container. This keeps the chain’s integrity intact and avoids any accidental corruption or misinterpretation of its state.
+
+4. Correcting the Alternative Chain Verification Process:
+When the assembled chain is not trusted, the modified code enters a loop to try alternative chain paths by checking earlier certificates. In this loop, it calls get_issuer(candidateCert) on potential candidates for forming a valid chain. If a valid candidate is found, the repair frees the temporary issuer immediately and removes certificates that were appended beyond the valid candidate. This cleanup process removes invalid branches from the chain and ensures that no extraneous or untrusted certificates remain. The last_untrusted index is then updated to reflect the new chain size.
+
+5. Final State Adjustment:
+After exiting the main loop (do-while), the last_untrusted index is updated one last time to ensure that it accurately represents the finalized chain’s size. This final adjustment is vital as it guarantees that subsequent trust verifications operate on an accurate chain state, eliminating the risk of unintended acceptance of an alternative chain if the index were inconsistent.
+
+Overall, these changes address vulnerabilities by ensuring that each modification to the chain (such as additions or removals) is immediately followed by updates to state variables, meticulous memory cleanup via Helper.free, and prevention of indirect chain container manipulation. Such steps help minimize risks like memory leaks, dangling pointers, or inaccurate trust assessments that could otherwise allow malicious certificates to bypass security checks.

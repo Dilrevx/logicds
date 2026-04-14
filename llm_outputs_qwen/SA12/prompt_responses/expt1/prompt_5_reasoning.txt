@@ -1,0 +1,29 @@
+The repair addresses a logical vulnerability in the `DoTls13Finished` function within a TLS 1.3 implementation using the WolfSSL library. The core issue identified is that a TLS 1.3 server requiring mutual authentication could be bypassed by a malicious client that fails to send the `CertificateVerify` message. This allows the client to establish a connection without presenting a certificate, even when the server explicitly requires one.
+
+### Original Context
+
+In the original code snippet, the function starts by preparing to process the `Finished` message from the TLS handshake. It initializes variables such as `ret`, `finishedSz`, `secret`, and `mac`. It then proceeds to check if the buffer size constraints are respected. However, it does not include any logic to verify whether mutual authentication was required and whether the `CertificateVerify` message was received from the client.
+
+### The Vulnerability
+
+TLS 1.3 supports mutual authentication, where both the client and server authenticate each other. When mutual authentication is required, the client must send a `CertificateVerify` message, which is signed with the private key corresponding to its certificate. This message serves as proof of possession of the private key associated with the provided certificate.
+
+If the server does not enforce the receipt of this message, a malicious client can skip sending it, thus bypassing the mutual authentication requirement. This can lead to security breaches, as the server might assume that the client has been properly authenticated when it actually has not.
+
+### The Repair
+
+The repair introduces a check to ensure that mutual authentication is enforced correctly. Specifically, it adds a condition at the beginning of the function to verify two critical aspects:
+
+1. **Mutual Authentication Requirement**: The server must have set the `mutualAuthRequired` flag in the `ssl.handshake` structure to `true`. This flag indicates that mutual authentication is mandatory for the current session.
+
+2. **Receipt of CertificateVerify Message**: The server must have received the `CertificateVerify` message from the client. This is checked by evaluating the `receivedCertVerify` flag in the `ssl.handshake` structure. If this flag is `false`, it means the `CertificateVerify` message was not received.
+
+If both conditions are met—mutual authentication is required and the `CertificateVerify` message was not received—the function immediately returns an error code (`Constants.MUTUAL_AUTH_FAILED`). This prevents the server from proceeding with the handshake and establishing a connection with an unauthenticated client.
+
+### Ensuring Secure Handshakes
+
+By incorporating this check, the function ensures that the server only completes the handshake if mutual authentication requirements are satisfied. This is crucial for maintaining the integrity and security of the connection. The repair effectively closes the vulnerability window, preventing potential attacks where a client could bypass mutual authentication.
+
+### Conclusion
+
+The repair demonstrates the importance of enforcing security policies within cryptographic implementations. By adding a straightforward conditional check, the function now correctly handles mutual authentication requirements, thereby enhancing the security of the TLS 1.3 handshake process. This change ensures that the server adheres to its security configuration and does not inadvertently allow insecure connections.

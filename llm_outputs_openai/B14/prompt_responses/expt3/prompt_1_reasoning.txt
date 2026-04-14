@@ -1,0 +1,18 @@
+The repair removes the asynchronous detachment path and forces the handle to be detached synchronously by always invoking nmhandle_detach_cb. Here’s a step-by-step explanation:
+
+1. Vulnerability Origin:  
+   The original code attempted to perform a deferred cleanup by first checking if the socket’s thread (sock->tid) is equal to isc_nm_tid(). If it wasn’t, the cleanup was scheduled asynchronously by enqueuing an event. Under crafted TCP streams, an attacker might manipulate the sequence of events (or the loading conditions) so that the event isn’t processed promptly. This delay could leave the connection stuck in the CLOSE_WAIT state indefinitely even after the client disconnects.
+
+2. Asynchronous vs. Synchronous Cleanup:  
+   The design of the original code assumed that the asynchronous cleanup would eventually be processed by a worker thread. However, if the necessary event processing is delayed, the connection cleanup gets postponed. The vulnerability description indicates that this scheduling delay can be exploited by an attacker who creates highly controlled conditions, causing resources to be held longer than necessary.
+
+3. The Repair’s Approach:  
+   The repair simplifies the cleanup procedure by always calling the nmhandle_detach_cb function synchronously. This means that the handle is immediately detached rather than relying on a possibly delayed asynchronous callback.
+
+4. Impact on the Vulnerability:  
+   By removing the reliance on worker thread scheduling (i.e., the queuing of an asynchronous event), the repair ensures that the connection’s cleanup happens promptly. This prevents TCP connections from inadvertently remaining in the CLOSE_WAIT state for extended periods. The connection’s resources are released immediately, mitigating the risk that an attacker can keep the connection open longer than intended.
+
+5. Summary:  
+   In essence, the vulnerability was due to deferred clean-up operations that depended on asynchronous processing. The repair directly invokes the clean-up function, nmhandle_detach_cb, regardless of the worker thread’s context. With this change, the execution path no longer allows an attacker to exploit the timing or the scheduling of asynchronous events to keep resources allocated after the client disconnects.
+
+This approach simplifies the control flow, reduces timing-based vulnerabilities, and ensures that persistent TCP states such as CLOSE_WAIT are promptly resolved, thereby addressing the security risk identified in the vulnerability description.

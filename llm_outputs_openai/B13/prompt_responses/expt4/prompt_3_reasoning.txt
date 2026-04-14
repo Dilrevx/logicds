@@ -1,0 +1,21 @@
+The original code separately checked the message’s TSIG status (msg->tsigstatus) and the TSIG record’s error field (tsig.error). Even though it returned failure if either wasn’t no error, this approach did not require consistency between these two fields. A mismatch between these statuses might allow an attacker to craft a message that bypasses TSIG authentication when one of the fields appears correct while the other does not. This is particularly dangerous when the DNS server relies solely on TSIG for protection, as it might lead to unauthorized AXFR zone transfers or acceptance of bogus NOTIFY messages.
+
+In the repair, we combine these checks into one compound condition:
+
+  if (msg->tsigstatus != dns_rcode_noerror ||  
+    tsig.error != dns_rcode_noerror ||  
+    msg->tsigstatus != tsig.error)
+
+Each part of this condition serves an important role:
+
+1. The first two checks ensure that both the overall message’s TSIG status and the TSIG record’s error field are exactly equal to dns_rcode_noerror. This confirms that neither the message processing nor the TSIG record itself registered any errors.
+   
+2. The additional third check (msg->tsigstatus != tsig.error) ensures that both fields are consistent with each other. This consistency check is crucial because an attacker might be able to manipulate part of the TSIG authentication process. For example, if only one of the two were verified against strict standards, it might be possible to introduce subtle discrepancies that could be exploited to bypass the TSIG check.
+
+By enforcing that both fields must not only be error-free but also identical, the repaired code reduces the risk that an attacker could exploit any discrepancy between the two. This extra layer of verification makes it much harder for an attacker to send a specially crafted packet that could trick the system into thinking TSIG verification has succeeded when it has not.
+
+In effect, the patch tightens TSIG authentication by ensuring that:
+ • Any divergence in status between the overall message and the TSIG record is treated as a verification failure.
+ • There is no room for manipulation where one of the statuses might be misleadingly “correct.”
+
+Thus, the repair hardens the code against a vulnerability where an attacker with the ability to manipulate DNS messages, and who may have knowledge of a valid TSIG key name, could otherwise bypass TSIG authentication. This effectively mitigates risks associated with unauthorized zone transfers (AXFR) and deceptive NOTIFY packet injections.

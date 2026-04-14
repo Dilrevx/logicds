@@ -1,0 +1,40 @@
+Below is one example of a patch that fixes the issue. In our scenario the problem is that when a legacy custom cipher is registered with an “undefined” NID (NID_undef), the code later “matches” the built‐in NULL cipher from the provider and uses it. This causes the encryption functions to emit plaintext instead of real ciphertext. The fix is to check before falling back that the fetched cipher does not use NID_undef, and if it does, to treat this as an error rather than blindly falling back.
+
+Below is one way to modify the snippet:
+
+-------------------------------------------------
+/* Before using the fetched cipher, ensure it wasn’t created with NID_undef */
+if (ctx->fetched_cipher != NULL &&
+    EVP_CIPHER_nid(ctx->fetched_cipher) == NID_undef) {
+    /* Report an error (using your library’s error reporting mechanism)
+       and prevent using the provider’s NULL cipher. */
+    EVPerr(EVP_F_EVP_CIPHERINIT_EX2, EVP_R_INVALID_CIPHER_NID);
+    EVP_CIPHER_free(ctx->fetched_cipher);
+    ctx->fetched_cipher = NULL;
+    return 0;  /* or goto an error handling label */
+}
+
+if (ctx->engine != NULL
+#if !defined(OPENSSL_NO_ENGINE) && !defined(FIPS_MODULE)
+    || tmpimpl != NULL
+#endif
+    || impl != NULL)
+{
+    if (ctx->cipher == ctx->fetched_cipher)
+        ctx->cipher = NULL;
+    EVP_CIPHER_free(ctx->fetched_cipher);
+    ctx->fetched_cipher = NULL;
+    goto legacy;
+}
+-------------------------------------------------
+
+Step by step explanation:
+
+1. We insert a check for a non-NULL fetched cipher. If it exists, we call EVP_CIPHER_nid() on it.
+2. If its NID is NID_undef (meaning the custom cipher was set up with an “undefined” NID), we report an error 
+   (here using a placeholder EVPerr() call with appropriate function and reason codes). Then we free the fetched cipher, clear the pointer, and return an error. This ensures that we never fall back to the provider’s cipher (which would be the NULL cipher).
+3. Only if the fetched cipher did not have a NID of NID_undef does the existing logic run. That is, if one of the “engine” or implementation pointers is not NULL, then if the fetched cipher is the same as the original, we clear it and free it, before going to legacy handling.
+
+This patch prevents a malicious (or mistakenly misconfigured) use of NID_undef to trigger fallback to the provider’s plaintext “NULL cipher,” thus fixing the vulnerability.
+
+Note that in your actual application you should replace the error reporting (EVPerr) and error codes with those used in your environment.

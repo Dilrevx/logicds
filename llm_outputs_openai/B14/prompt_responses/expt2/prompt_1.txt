@@ -1,0 +1,36 @@
+<repair>
+	sock = handle->sock;
+
+	/*
+	 * To prevent a malicious TCP stream from keeping the socket in a
+	 * perpetual CLOSE_WAIT state, we force the underlying TCP connection
+	 * to shut down immediately.  This ensures that even if the detach
+	 * callback is delayed, the OS will not keep the connection open indefinitely.
+	 */
+	if (sock->fd != -1) {
+		/* Shut down both reads and writes */
+		shutdown(sock->fd, SHUT_RDWR);
+		close(sock->fd);
+		sock->fd = -1;
+	}
+
+	/*
+	 * Now, to dispose of our last private reference, we invoke the detach
+	 * callback.  If we are already in the network manager thread, we do it
+	 * synchronously; otherwise we enqueue an asynchronous event.
+	 */
+	if (sock->tid == isc_nm_tid()) {
+		nmhandle_detach_cb(&handle FLARG_PASS);
+	} else {
+		isc__netievent_detach_t *event =
+			isc__nm_get_netievent_detach(sock->mgr, sock);
+		/*
+		 * Note: we are using an implicit "attach" as the last reference on
+		 * the handle.  The asynchronous callback will destroy it.
+		 */
+		event->handle = handle;
+		FLARG_IEVENT_PASS(event);
+		isc__nm_enqueue_ievent(&sock->mgr->workers[sock->tid],
+				       (isc__netievent_t *)event);
+	}
+</repair>

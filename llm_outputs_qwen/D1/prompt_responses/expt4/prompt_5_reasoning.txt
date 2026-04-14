@@ -1,0 +1,50 @@
+The provided repair addresses a critical security vulnerability in the `srtp_rtp_cb` function of the PJSIP library, specifically focusing on preventing the incorrect switch from Secure Real-time Transport Protocol (SRTP) to Real-time Transport Protocol (RTP) during SRTP restarts. This vulnerability could allow attackers to intercept and manipulate media streams, leading to potential eavesdropping or data corruption.
+
+### Analysis of the Vulnerability
+
+The original code processes incoming RTP packets and attempts to unprotect them using SRTP. If the unprotection fails due to errors like `srtp_err_status_replay_old` or `srtp_err_status_replay_fail`, indicating issues with sequence numbers or replay attacks, the code restarts the SRTP session. However, there was no explicit check to ensure that the restart operation did not inadvertently cause a fallback to plain RTP instead of SRTP. This could happen if the restart failed or if the session was improperly configured post-restart.
+
+Additionally, if the unprotection fails with `srtp_err_status_auth_fail`, the code adjusts the Roll-Over Counter (ROC) and retries the unprotection. Again, there was no mechanism to ensure that the session remained in SRTP mode post-retry.
+
+### Key Changes in the Repair
+
+1. **Conditional SRTP Restart**:
+   - **Before**: The SRTP session was restarted whenever `srtp_unprotect()` returned `srtp_err_status_replay_old` or `srtp_err_status_replay_fail`.
+   - **After**: The restart now only occurs when `srtp->probation_cnt > 0`. This counter is typically used to allow a certain number of initial packets to pass without SRTP protection while the session initializes. By checking `probation_cnt`, we ensure that the restart is only attempted during the initialization phase, reducing the risk of falling back to RTP later.
+   - **Code Change**:
+     ```c
+     if ((err == srtp_err_status_replay_old || err == srtp_err_status_replay_fail) &&
+         srtp->probation_cnt > 0)
+     ```
+
+2. **Error Handling Post-Restart**:
+   - **Before**: After restarting SRTP, the code immediately attempted to unprotect the packet again without checking if the restart was successful.
+   - **After**: The code now checks the status of the `pjmedia_transport_srtp_start()` call. If the restart fails (`status != PJ_SUCCESS`), the function logs an error and exits without further processing the packet.
+   - **Code Change**:
+     ```c
+     if (status != PJ_SUCCESS) {
+         PJ_LOG(5,(srtp->pool->obj_name, "Failed to restart SRTP, err=%s",
+                   get_libsrtp_errstr(err)));
+     } else {
+         err = srtp_unprotect(srtp->srtp_rx_ctx, (pj_uint8_t*)pkt, &len);
+     }
+     ```
+
+3. **Preventing Further Processing on Unprotect Failure**:
+   - **Before**: Even if `srtp_unprotect()` failed, the code would continue to attempt to process the packet, potentially bypassing SRTP protection.
+   - **After**: If `srtp_unprotect()` fails, the function logs the error and exits immediately, ensuring that the packet is not processed further without SRTP protection.
+   - **Code Change**:
+     ```c
+     if (err != srtp_err_status_ok) {
+         PJ_LOG(5,(srtp->pool->obj_name,
+                   "Failed to unprotect SRTP, pkt size=%d, err=%s",
+                   size, get_libsrtp_errstr(err)));
+         // Ensure we do not process the packet further if SRTP protection fails
+         pj_lock_release(srtp->mutex);
+         return;
+     }
+     ```
+
+### Conclusion
+
+These changes significantly enhance the security of the `srtp_rtp_cb` function by ensuring that the session remains in SRTP mode throughout its lifecycle, even after handling errors like sequence number mismatches or authentication failures. By carefully managing the SRTP restart process and properly handling errors, the repair mitigates the risk of inadvertently switching to plain RTP, thereby protecting against potential eavesdropping and data manipulation attacks.

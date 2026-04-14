@@ -1,0 +1,49 @@
+The provided code snippet is part of the OpenSSL library's handling of `ChangeCipherSpec` (CCS) messages during a TLS handshake. The vulnerability described is related to improper handling of `ChangeCipherSpec` messages, which could allow an attacker to inject a CCS message in a way that leads to the use of a zero-length master key.
+
+To mitigate this vulnerability, it's crucial to ensure that the `ChangeCipherSpec` message is processed correctly and in the expected context. The patch should include checks to prevent misuse of the `ChangeCipherSpec` message, especially ensuring that it is received at the appropriate time in the handshake process.
+
+Here’s a revised version of the code snippet with additional checks to help prevent the CCS Injection vulnerability:
+
+```c
+if (rr->type == SSL3_RT_CHANGE_CIPHER_SPEC) {
+    /* 'Change Cipher Spec' is just a single byte, so we know
+     * exactly what the record payload has to look like */
+    if ((rr->length != 1) || (rr->off != 0) || (rr->data[0] != SSL3_MT_CCS)) {
+        al = SSL_AD_ILLEGAL_PARAMETER;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_BAD_CHANGE_CIPHER_SPEC);
+        goto f_err;
+    }
+
+    /* Check we have a cipher to change to */
+    if (s->s3->tmp.new_cipher == NULL) {
+        al = SSL_AD_UNEXPECTED_MESSAGE;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+        goto f_err;
+    }
+
+    /* Additional check to ensure CCS is received after ServerHelloDone/ClientKeyExchange */
+    if (!(s->s3->flags & SSL3_FLAGS_CCS_OK)) {
+        al = SSL_AD_UNEXPECTED_MESSAGE;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+        goto f_err;
+    }
+
+    rr->length = 0;
+
+    if (s->msg_callback)
+        s->msg_callback(0, s->version, SSL3_RT_CHANGE_CIPHER_SPEC, rr->data, 1, s, s->msg_callback_arg);
+
+    s->s3->change_cipher_spec = 1;
+    if (!ssl3_do_change_cipher_spec(s))
+        goto err;
+    else
+        goto start;
+}
+```
+
+### Key Changes:
+1. **Additional Flag Check**: Added a check to ensure that the `ChangeCipherSpec` message is received at the correct time in the handshake sequence. This is done by checking the `SSL3_FLAGS_CCS_OK` flag, which should be set only when the handshake state allows for a `ChangeCipherSpec` message.
+   
+2. **Error Handling**: If the `ChangeCipherSpec` message is received out of order, an error is raised with `SSL_AD_UNEXPECTED_MESSAGE`.
+
+These changes help to ensure that the `ChangeCipherSpec` message is handled securely and according to the expected protocol flow, mitigating the risk of the CCS Injection vulnerability. Note that the actual implementation details might vary based on the specific version of OpenSSL and its internal state management, so it's important to refer to the latest OpenSSL documentation or patches for comprehensive fixes.

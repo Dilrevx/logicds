@@ -1,0 +1,16 @@
+The repair modifies the conditional check so that the DTLS client generates a new client random value during an initial handshake when no hello verify request has been processed. Here's how the fix works:
+
+1. In the original code, the condition was structured in a way that inadvertently skipped generating a random value for DTLS sessions when no hello verify request had yet been received. In the prior logic, the check for DTLS was paired with “hello verify requests == 0” inside a negation, which ended up evaluating to false of it should generate a new random value (i.e., the client erroneously re-used 32 null bytes).
+
+2. The repair changes the relevant part of the compound condition. The revised check now uses:
+  !(IS_DTLS(session) && session->internals.dtls.hsk_hello_verify_requests != 0)
+   This inverted the test inside the conditional. It now makes the decision as follows:
+  – For any non-DTLS session, the IS_DTLS(session) condition is false, so the inner parentheses evaluate to false. The negation then makes that part true, allowing the client to generate a new random.
+  – For DTLS sessions, the function checks if the number of hello verify requests is not zero. If that’s the case (i.e., a hello verify request had already been processed), then the inner expression becomes true and its negation will yield false, meaning the client random is not re-generated.
+  – Critically, if a DTLS session has not processed any hello verify request (i.e., the count is exactly 0), then the expression inside the parentheses is false because “0 != 0” is false. The negation then turns it true, allowing the generation of a secure and fresh random value.
+
+3. By switching the check from “== 0” to “!= 0” for DTLS sessions, the repair ensures that the client always generates fresh randomness in the case of an initial DTLS handshake (when no hello verify requests have been processed). This behavior is vital since failing to generate a new random value would leave the client using a fixed value of 32 null bytes, thereby undermining the entropy required by the DTLS protocol.
+
+4. Additionally, the comment block in the repair clearly articulates the logic: it specifies that the client random generation occurs when the handshake has not received a hello verify response, or for non-DTLS sessions. Only in the case where DTLS is already past the initial verification (i.e., hello verify has been processed) should the function avoid regenerating the client random.
+
+Overall, this change fixes the vulnerability by ensuring that whenever it is required (especially during the insecure initial DTLS handshake), a secure random value is generated. This strengthens the protocol's cryptographic guarantees and prevents the potential exploitation of weak, predictable random data in the handshake process.

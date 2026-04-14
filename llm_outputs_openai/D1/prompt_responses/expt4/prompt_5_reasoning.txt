@@ -1,0 +1,21 @@
+The repair focuses on ensuring that after a restart, if SRTP unprotection fails the second time, the code does not fall back to using basic RTP (which would send media insecurely). Here’s a walkthrough of the key changes:
+
+1. SRTP Restart Handling:  
+   When the function detects replay-related errors (for example, srtp_err_status_replay_old or srtp_err_status_replay_fail) during the probation period (indicating a possible SRTP restart), it stops SRTP and then attempts to restart it. In the revised code, after calling pjmedia_transport_srtp_start(), the return status is explicitly checked.  
+   
+   • If the restart fails (i.e. status != PJ_SUCCESS), the code logs the error, sets the error to a failure value (srtp_err_status_fail), and DOES NOT fall back to processing the packet in plain RTP mode.  
+   
+   • Only if the restart succeeds does it reattempt to unprotect the packet using srtp_unprotect(). This ensures that if SRTP cannot be re-established correctly, the packet is dropped instead of being processed over an insecure transport.
+
+2. Explicit Packet Dropping on Failure:  
+   The code now checks if err != srtp_err_status_ok after the unprotection attempts. When unprotection still fails, the function logs the error, releases the lock immediately, and returns. By doing so, it prevents inadvertently calling the registered RTP callbacks that might process or forward the packet using basic RTP. This is fundamental in preventing the insecure behavior described in the vulnerability.
+
+3. Consistent Retry Mechanism:  
+   The patch makes sure that the code never “hides” an unprotection failure by falling back to insecure callback paths. By guarding the callback execution behind an error check and making sure that a packet is processed only if unprotection has succeeded, we ensure that media is never sent insecurely even during SRTP restarts.
+
+In summary, the fix addresses the vulnerability by:  
+- Ensuring that if an SRTP restart fails, the packet is dropped instead of falling back to unsigned RTP, thus preventing insecure media transmission.
+- Adding explicit error handling after the SRTP restart attempt to prevent any progression towards insecure processing.
+- Maintaining the integrity of the SRTP context by enforcing that any packets processed beyond the callback are only the ones that have been successfully unprotected.  
+
+By implementing these changes, the revised function guarantees that under all conditions, packets are never processed under an insecure (basic RTP) state, thereby fixing the vulnerability where SRTP could mistakenly be bypassed during a restart.

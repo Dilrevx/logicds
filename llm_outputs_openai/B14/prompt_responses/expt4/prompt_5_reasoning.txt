@@ -1,0 +1,19 @@
+The fix targets the issue where malicious TCP streams cause sockets to linger in CLOSE_WAIT by ensuring the underlying socket is forcefully closed as part of the detach process.
+
+Here’s what the repair does:
+
+1. After obtaining the handle and socket pointers, the code checks if the socket pointer (sock) is non-null, and then further checks if the internal socket field (assumed to be sock->socket) is not null. This helps ensure we’re working with a valid and active socket before proceeding.
+
+2. The added call to isc_socket_close(sock->socket) is the key change. By explicitly closing the socket, we shut down the underlying file descriptor. This operation not only cleans up socket resources but also triggers a proper TCP shutdown sequence on our side. That means if the remote client has already closed its writing end (leading our connection to remain in CLOSE_WAIT), we proactively close our side. This prevents the connection from staying open indefinitely.
+
+3. After ensuring the socket is closed, the function continues with its original logic to handle asynchronous detachment. Depending on the thread identifier (tid) of the socket, it either calls the synchronous callback nmhandle_detach_cb() or enqueues an indirect detach event for processing by worker threads.
+
+Why It Fixes the Vulnerability:
+
+• CLOSE_WAIT Condition Prevention: In the original code, the connection could linger in CLOSE_WAIT if the remote socket closed its writing end, but the application never explicitly closed its own side. By adding the explicit socket close call, the operating system is notified to fully tear down the connection, removing it from CLOSE_WAIT state.
+
+• Resource Release: Prolonged connections in CLOSE_WAIT format can lead to resource exhaustion over time, as they hold on to system resources like file descriptors. The immediate closure ensures that resources are freed promptly.
+
+• Improved Security Posture: Since an attacker might deliberately keep connections in a vulnerable state to exhaust system resources or evade cleanup, closing the socket directly mitigates this vector by reducing the attack surface through proactive resource management.
+
+Thus, by forcing the closure of the underlying socket before continuing with the standard detachment process, the modified function ensures that potentially harmful TCP streams do not leave dangling connections that contribute to resource leaks or denial-of-service conditions.

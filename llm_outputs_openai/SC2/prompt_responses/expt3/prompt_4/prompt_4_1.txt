@@ -1,0 +1,25 @@
+Below is one acceptable fix. In the buggy code the EC curve check (inside the “if (strict && num > 1)” block) sets an error code on the context regardless of whether a prior CA‐certificate validation error had already been flagged. That means that a valid error (for example, one coming from a failed “non‐CA” check) can be overwritten by the explicit‐curve error. One way to fix this is to only update the error field with the EC key failure if no previous error has already been set (or, equivalently, perform the CA check before running the curve check). For example, you can change the code as follows:
+
+-------------------------------------------------------
+            /* First, check that if the certificate is not a CA it cannot sign other certificates. */
+            if ((x.ex_flags & X509.EXFLAG_CA) == 0 && x.ex_pathlen != -1 && strict) {
+                ctx.error = X509StoreCtx.X509_V_ERR_INVALID_EXTENSION;
+                ret = 0;
+            }
+
+            /* Only if no CA‐error was set, perform the explicit EC parameters check. */
+            if (strict && num > 1 && ctx.error == 0) {
+                ret = CheckCurve.checkCurve(x);
+                if (ret < 0) {
+                    ctx.error = X509StoreCtx.X509_V_ERR_UNSPECIFIED;
+                    ret = 0;
+                } else if (ret == 0) {
+                    ctx.error = X509StoreCtx.X509_V_ERR_EC_KEY_EXPLICIT_PARAMS;
+                    /* ret remains unchanged because the error will be picked up by the caller */
+                }
+            }
+-------------------------------------------------------
+
+In this patch the CA check is executed first so that if the certificate fails because it is not allowed to sign other certificates then that error is set. The curve check is only run (and its error potentially set) if no CA‐error was recorded (ctx.error == 0). In this way the result of the CA check is not overwritten, thereby repairing the vulnerability.
+
+An alternative fix would be to simply check before updating ctx.error in the EC curve check (i.e. “if (ctx.error == 0) { … }”). Either method ensures that a CA-violation isn’t lost.

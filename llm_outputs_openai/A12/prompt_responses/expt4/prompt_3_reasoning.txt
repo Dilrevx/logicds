@@ -1,0 +1,28 @@
+The repair adds an explicit check to ensure that in scenarios requiring client authentication (i.e., mutual authentication), the TLS handshake does not continue unless the client has properly sent its certificate_verify message. This message is crucial for authenticating the client in a mutual TLS (mTLS) setup. Without this check, a malicious client could bypass the intended certificate verification step simply by omitting the certificate_verify message, which, in turn, could allow unauthorized access.
+
+Specifically, the repair introduces the following code segment:
+
+------------------------------------------------------------
+    if (ssl->options.verifyPeer && !ssl->gotCertVerify) {
+        WOLFSSL_LEAVE("DoTls13Finished", BAD_CERTIFICATE);
+        return BAD_CERTIFICATE;
+    }
+------------------------------------------------------------
+
+Here’s what happens in this segment:
+
+1. The condition ssl->options.verifyPeer checks if the server has requested a client certificate. In many TLS implementations, the verifyPeer flag indicates that the verification of the peer’s (client's) certificate is required.
+
+2. The ssl->gotCertVerify flag is assumed to be set when a valid certificate_verify message has been received during the handshake. If this flag is not true, it implies that the certificate_verify message has not been processed.
+
+3. If both conditions hold true (i.e., the server requires verification and the certificate_verify message is missing), the code immediately exits the function by calling WOLFSSL_LEAVE and returning a BAD_CERTIFICATE error code.
+
+This mechanism prevents the handshake from completing if a client bypass attempts to omit the certificate_verify message. By performing this check early in the processing of the Finished message, the server ensures that the critical step of validating the client's certificate is not inadvertently skipped.
+
+Thus, this repair directly addresses the vulnerability by:
+
+• Enforcing mandatory mutual authentication: The server will only derive the Finished secret and proceed with the handshake if both client authentication is required and the certificate_verify message has indeed been received.
+
+• Preventing bypass attacks: A malicious client attempting to exploit the vulnerability by omitting the certificate_authenticate phase will now trigger an error, blocking the handshake and protecting the server from unauthorized access.
+
+In summary, the repair secures the TLS session by ensuring that, under mutual authentication requirements, the Finished message is only processed if the certificate_verify step has been properly executed, closing the vulnerability that allowed certificate verification bypass.

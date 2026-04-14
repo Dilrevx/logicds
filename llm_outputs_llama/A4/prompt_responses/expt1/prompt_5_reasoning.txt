@@ -1,0 +1,53 @@
+The provided buggy code snippet is vulnerable to a logical vulnerability in the OpenSSL 3.0 implementation of the RC4-MD5 ciphersuite. The vulnerability arises from the incorrect use of the AAD (Additional Authenticated Data) as the MAC (Message Authentication Code) key, making the MAC key trivially predictable. This allows an attacker to perform a man-in-the-middle attack, modifying the data being sent from one endpoint to an OpenSSL 3.0 recipient, while still passing the MAC integrity check.
+
+The repair aims to address this vulnerability by ensuring that the AAD data is not used directly as the MAC key. Instead, a copy of the AAD data is created, and this copy is used for the MAC key generation. This prevents the original AAD data from being used as the MAC key, thus mitigating the vulnerability.
+
+Here's a step-by-step explanation of the repair:
+
+1.  **Memory Allocation**: The first step in the repair is to allocate memory for a copy of the AAD data using `OPENSSL_malloc`. This is necessary to create a separate copy of the AAD data that can be used for the MAC key generation.
+
+    ```c
+unsigned char *aad_data = OPENSSL_malloc(p->data_size);
+```
+
+    If the memory allocation fails, an error is raised, and the function returns.
+
+    ```c
+if (aad_data == NULL) {
+    ERR_raise(ERR_LIB_PROV, ERR_R_MALLOC_FAILURE);
+    return 0;
+}
+```
+
+2.  **Copying AAD Data**: Once the memory is allocated, the AAD data is copied into the newly allocated memory using `memcpy`.
+
+    ```c
+memcpy(aad_data, p->data, p->data_size);
+```
+
+    This creates a separate copy of the AAD data that can be used for the MAC key generation.
+
+3.  **MAC Key Generation**: The copied AAD data is then passed to the `tls_init` function to generate the MAC key.
+
+    ```c
+sz = GET_HW(ctx)->tls_init(&ctx->base, aad_data, p->data_size);
+```
+
+    This ensures that the MAC key is generated using the copied AAD data, rather than the original AAD data.
+
+4.  **Memory Deallocation**: After the MAC key generation, the allocated memory is freed using `OPENSSL_free` to prevent memory leaks.
+
+    ```c
+OPENSSL_free(aad_data);
+```
+
+5.  **Error Handling**: Finally, the repair checks if the MAC key generation was successful. If it fails, an error is raised, and the function returns.
+
+    ```c
+if (sz == 0) {
+    ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_DATA);
+    return 0;
+}
+```
+
+By creating a copy of the AAD data and using it for MAC key generation, the repair ensures that the original AAD data is not used as the MAC key, thus mitigating the logical vulnerability in the OpenSSL 3.0 implementation of the RC4-MD5 ciphersuite.

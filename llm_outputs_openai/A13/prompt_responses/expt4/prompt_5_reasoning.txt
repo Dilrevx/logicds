@@ -1,0 +1,13 @@
+The repair adds an explicit check for DLZ zones when one is found in the zone table. In the original code, if a DLZ zone was found by matching the question name in the zone table, the DLZ-specific ACL checks (i.e. calling dns_dlzallowzonexfr) were not applied. This could let unauthorized zone transfers through if the DLZ’s writable property wasn’t protected by its ACL.
+
+Key changes include:
+
+1. When a zone is found in the zone table, the repair checks whether its type is dns_zone_dlz. If so, it calls the dns_dlzallowzonexfr method with the request parameters (question name and peer address) to ensure that the ACLs specific to DLZ transfers are enforced. If that call returns ISC_R_NOPERM, the request is denied immediately, and an appropriate failure message is logged.
+
+2. Immediately after the check for a DLZ zone (and before proceeding), the repair sets the is_dlz flag to true to indicate that further processing should treat this as a DLZ request. It then retrieves the current version of the DLZ database by calling dns_db_currentversion, ensuring that subsequent operations (like creating the SOA tuple) use the correct version data.
+
+3. For zones that are not DLZ, the original ACL and database retrieval logic is preserved. This means that non-DLZ zones still have their ACLs checked via ns_client_checkacl, while DLZ zones now rely on the additional check provided by dns_dlzallowzonexfr.
+
+4. The rest of the transfer initialization (creating SOA/diff tuples, selecting the xfr stream etc.) remains unchanged. The repair ensures that once the zone (or DLZ) has passed the ACL check, processing continues normally.
+
+Overall, the vulnerability was that DLZ zones could inadvertently bypass crucial ACL checks because the allowzonexfr method wasn’t invoked when a DLZ record was found via the primary zone table lookup. By adding a specific branch that detects DLZ zones (using dns_zone_gettype(zone) == dns_zone_dlz) and then explicitly calling dns_dlzallowzonexfr, the repair guarantees that DLZ ACLs are properly enforced. This correction prevents unauthorized zone transfers against writable DLZ zones while still letting legitimate transfers proceed, thereby fixing the vulnerability.

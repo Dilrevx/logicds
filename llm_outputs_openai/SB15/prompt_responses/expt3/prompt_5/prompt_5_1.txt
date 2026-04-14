@@ -1,0 +1,60 @@
+Below is one example of a repair that implements the intended validation and cleanup. In this revised version the function first verifies that the overall result is a success – if not, it immediately frees the key resources and returns a safe value. Then it iterates through all the key nodes (rather than assuming the first entry is valid) and, for each key node, uses a secure comparison (here represented by a call to secure_key_compare) to check if it exactly matches the expected trusted key. When a match is found the valid key is detached and trusted DNSSEC flags are set, and then any still‐pending key nodes (which might include forged keys) are detached as a secondary cleanup measure. Finally, the key memory is freed and a success status is returned. (Note: The following pseudocode is written in a C‐style syntax similar to the original, with some example function names and control structures.) 
+
+────────────────────────────
+/* Revised (repaired) code snippet */
+if (result != Commons.ISC_R_SUCCESS) {
+    // Early exit: if we did not start with a full success, do not process further.
+    Dst.dst_key_free(keyOut);
+    return Commons.ISC_R_SUCCESS;  // return success status to avoid processing unvalidated data
+}
+
+boolean foundGoodKey = false;
+
+// Assuming knOut is an array of key nodes with count "nKnNodes".
+for (int i = 0; i < nKnNodes; i++) {
+    Keynode currentNode = knOut[i];
+
+    // Securely compare the current key node against the expected trusted key.
+    if (secure_key_compare(currentNode, expected_key)) {
+        // Detach the matching key and mark it as trusted.
+        Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[]{ currentNode });
+        Rdataset.dns_rdataset_settrust(vctx.keyset,  Commons.dns_trust_secure);
+        Rdataset.dns_rdataset_settrust(vctx.keysigs, Commons.dns_trust_secure);
+        goodkey[0] = true;
+        foundGoodKey = true;
+
+        // For extra safety, detach any remaining nodes that might follow.
+        for (int j = i + 1; j < nKnNodes; j++) {
+            Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[]{ knOut[j] });
+        }
+        break;  // Stop processing after a valid and trusted key is found.
+    } else {
+        // If the key does not match, immediately detach it to clean up potentially forged data.
+        Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[]{ currentNode });
+    }
+}
+
+// Free the memory associated with the key resources.
+Dst.dst_key_free(keyOut);
+
+// Return success now that either a valid key has been found and secured or all keys have been purged.
+return Commons.ISC_R_SUCCESS;
+────────────────────────────
+
+Explanation of Key Changes:
+
+1. Early Exit on Non-success Result
+   • The code first checks whether the result indicates full success. If not (including partial or not–found cases), it immediately frees the allocated key and returns. This stops any non–validated keys from getting processed.
+
+2. Iteration and Secure Comparison
+   • Instead of taking knOut[0] for granted, we loop through all available key nodes.
+   • Each node is compared with the expected trusted key using the secure_key_compare function.
+   • Only when a node passes the secure comparison is it marked as validated and then detached from the key table.
+
+3. Cleanup of Remaining Entries
+   • After a good key is found, any entries still in the array are explicitly detached. This ensures that any forged or extra keys do not remain in memory.
+
+4. Final Resource Cleanup
+   • Finally, the memory for key resources is freed and a success status is returned, ensuring that only properly validated data is used for further DNSSEC operations.
+
+This approach prevents an attacker from injecting forged keys into the mirror zone data and meets the security goals described in the repair description.

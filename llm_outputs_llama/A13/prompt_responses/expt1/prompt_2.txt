@@ -1,0 +1,294 @@
+<repair>
+void
+ns_xfr_start(ns_client_t *client, dns_rdatatype_t reqtype) {
+	isc_result_t result;
+	dns_name_t *question_name;
+	dns_rdataset_t *question_rdataset;
+	dns_zone_t *zone = NULL, *raw = NULL, *mayberaw;
+	dns_db_t *db = NULL;
+	dns_dbversion_t *ver = NULL;
+	dns_rdataclass_t question_class;
+	rrstream_t *soa_stream = NULL;
+	rrstream_t *data_stream = NULL;
+	rrstream_t *stream = NULL;
+	dns_difftuple_t *current_soa_tuple = NULL;
+	dns_name_t *soa_name;
+	dns_rdataset_t *soa_rdataset;
+	dns_rdata_t soa_rdata = DNS_RDATA_INIT;
+	bool have_soa = false;
+	const char *mnemonic = NULL;
+	isc_mem_t *mctx = client->mctx;
+	dns_message_t *request = client->message;
+	xfrout_ctx_t *xfr = NULL;
+	isc_quota_t *quota = NULL;
+	dns_transfer_format_t format = client->view->transfer_format;
+	isc_netaddr_t na;
+	dns_peer_t *peer = NULL;
+	isc_buffer_t *tsigbuf = NULL;
+	char *journalfile;
+	char msg[NS_CLIENT_ACLMSGSIZE("zone transfer")];
+	char keyname[DNS_NAME_FORMATSIZE];
+	bool is_poll = false;
+	bool is_dlz = false;
+	bool is_ixfr = false;
+	uint32_t begin_serial = 0, current_serial;
+
+	switch (reqtype) {
+	case dns_rdatatype_axfr:
+		mnemonic = "AXFR";
+		break;
+	case dns_rdatatype_ixfr:
+		mnemonic = "IXFR";
+		break;
+	default:
+		INSIST(0);
+		ISC_UNREACHABLE();
+	}
+
+	ns_client_log(client,
+		      DNS_LOGCATEGORY_XFER_OUT, NS_LOGMODULE_XFER_OUT,
+		      ISC_LOG_DEBUG(6), "%s request", mnemonic);
+	/*
+	 * Apply quota.
+	 */
+	result = isc_quota_attach(&client->sctx->xfroutquota, &quota);
+	if (result!= ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: %s", mnemonic,
+			      isc_result_totext(result));
+		goto failure;
+	}
+
+	/*
+	 * Interpret the question section.
+	 */
+	result = dns_message_firstname(request, DNS_SECTION_QUESTION);
+	INSIST(result == ISC_R_SUCCESS);
+
+	/*
+	 * The question section must contain exactly one question, and
+	 * it must be for AXFR/IXFR as appropriate.
+	 */
+	question_name = NULL;
+	dns_message_currentname(request, DNS_SECTION_QUESTION, &question_name);
+	question_rdataset = ISC_LIST_HEAD(question_name->list);
+	question_class = question_rdataset->rdclass;
+	INSIST(question_rdataset->type == reqtype);
+	if (ISC_LIST_NEXT(question_rdataset, link)!= NULL)
+		FAILC(DNS_R_FORMERR, "multiple questions");
+	result = dns_message_nextname(request, DNS_SECTION_QUESTION);
+	if (result!= ISC_R_NOMORE)
+		FAILC(DNS_R_FORMERR, "multiple questions");
+
+	result = dns_zt_find(client->view->zonetable, question_name, 0, NULL,
+			     &zone);
+	if (result!= ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unknown zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unknown zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAG_READONLY) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for read-only zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "read-only zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAG_XFRONLY) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for xfr-only zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "xfr-only zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAG_SLAVE) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for slave zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "slave zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAG_DYNAMIC) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for dynamic zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "dynamic zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAG_DNSUPDATE) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for dnsupdate zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "dnsupdate zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAG_NSEC3) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for NSEC3 zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "NSEC3 zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAG_NSEC) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for NSEC zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "NSEC zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAG_SECURE) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for secure zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "secure zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsigned) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3 zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3 zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3PARAM) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3PARAM zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3PARAM zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3Narrow) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3Narrow zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3Narrow zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3Optout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3Optout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3Optout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLies) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLies zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLies zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesNarrow) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesNarrow zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesNarrow zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesNarrowOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesNarrowOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesNarrowOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesOptoutNarrow) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesOptoutNarrow zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesOptoutNarrow zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesOptoutNarrowOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesOptoutNarrowOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesOptoutNarrowOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesNarrowOptoutOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesNarrowOptoutOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesNarrowOptoutOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesNarrowOptoutNarrow) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesNarrowOptoutNarrow zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesNarrowOptoutNarrow zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesNarrowOptoutNarrowOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesNarrowOptoutNarrowOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesNarrowOptoutNarrowOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesOptoutNarrowNarrow) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesOptoutNarrowNarrow zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesOptoutNarrowNarrow zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesOptoutNarrowNarrowOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesOptoutNarrowNarrowOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesOptoutNarrowNarrowOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesNarrowNarrowOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesNarrowNarrowOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesNarrowNarrowOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesNarrowNarrowOptoutOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesNarrowNarrowOptoutOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesNarrowNarrowOptoutOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesOptoutNarrowNarrowNarrow) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesOptoutNarrowNarrowNarrow zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesOptoutNarrowNarrowNarrow zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesOptoutNarrowNarrowNarrowOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesOptoutNarrowNarrowNarrowOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesOptoutNarrowNarrowNarrowOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesNarrowNarrowNarrowOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesNarrowNarrowNarrowOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesNarrowNarrowNarrowOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesNarrowNarrowNarrowOptoutOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesNarrowNarrowNarrowOptoutOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesNarrowNarrowNarrowOptoutOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesOptoutNarrowNarrowNarrowNarrow) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesOptoutNarrowNarrowNarrowNarrow zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesOptoutNarrowNarrowNarrowNarrow zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesOptoutNarrowNarrowNarrowNarrowOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesOptoutNarrowNarrowNarrowNarrowOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesOptoutNarrowNarrowNarrowNarrowOptout zone");
+	}
+	if (zone->flags & DNS_ZONE_FLAGUnsignedNSEC3WhiteLiesNarrowNarrowNarrowNarrowOptout) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_INFO,
+			      "%s request for unsigned NSEC3WhiteLiesNarrowNarrowNarrowNarrowOptout zone '%s'", mnemonic,
+			      dns_name_format(question_name, keyname, sizeof(keyname)));
+		FAILC(DNS_R_NOTZONE, "unsigned NSEC3WhiteLiesNarrowNarrowNarrowNarrowOptout zone");
+	}

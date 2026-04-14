@@ -1,0 +1,74 @@
+<repair>
+	result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+					  dst_key_alg(key), dst_key_id(key),
+					  &keynode);
+	switch (result) {
+	case ISC_R_SUCCESS:
+		/*
+		 * The supplied key is a trust anchor.
+		 */
+		dns_keytable_detachkeynode(vctx->secroots, &keynode);
+		dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+		dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+		*goodkey = true;
+		break;
+	case DNS_R_PARTIALMATCH:
+	case ISC_R_NOTFOUND:
+		/*
+		 * The supplied key is not present in the trust anchor table,
+		 * but other keys signing the DNSKEY RRset may be, so this is
+		 * not an error, we just do not set 'vctx->good[kz]sk'.
+		 */
+		result = ISC_R_SUCCESS;
+		break;
+	default:
+		/*
+		 * An error occurred while searching the trust anchor table,
+		 * return it to the caller.
+		 */
+		break;
+	}
+
+	/*
+	 * Additional check to prevent zone data replacement
+	 */
+	if (*goodkey && vctx->zone->type == dns_zone_mirror) {
+		dns_rdataset_t *zone_keys = NULL;
+		isc_result_t zone_result;
+
+		zone_result = dns_zone_getkeys(vctx->zone, &zone_keys);
+		if (zone_result == ISC_R_SUCCESS) {
+			dns_rdataset_iter_t *iter = NULL;
+			isc_result_t iter_result;
+
+			iter_result = dns_rdataset_iter_init(zone_keys, &iter);
+			if (iter_result == ISC_R_SUCCESS) {
+				dns_rdata_t *rdata = NULL;
+
+				while ((iter_result = dns_rdataset_iter_next(iter, &rdata)) == ISC_R_SUCCESS) {
+					if (dns_rdata_iszonekey(rdata)) {
+						dst_key_t *zone_key = NULL;
+
+						zone_key = dns_rdata_tostruct(rdata, &zone_key);
+						if (zone_key!= NULL) {
+							if (dst_key_id(zone_key)!= dst_key_id(key)) {
+								*goodkey = false;
+								break;
+							}
+							dst_key_free(&zone_key);
+						}
+					}
+				}
+				dns_rdataset_iter_detach(&iter);
+			}
+			dns_rdataset_disassociate(zone_keys);
+		}
+	}
+
+	/*
+	 * Clean up.
+	 */
+	dst_key_free(&key);
+
+	return (result);
+</repair>

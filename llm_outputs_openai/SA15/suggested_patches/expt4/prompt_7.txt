@@ -1,0 +1,71 @@
+package master;
+
+import common.*;
+
+public class EapPeap {
+    public static final int EAP_TLV_RESULT_SUCCESS = 1;
+    public static final int EAP_TLV_RESULT_FAILURE = 0;
+
+    public static int WPA_GET_BE16(int x){
+        return x;
+    }
+
+
+    public static int eap_tlv_process(EapSm sm, EapPeapData data,
+                                      EapMethodRet ret, WPABuf req, boolean force_failure) {
+        // The vulnerability allowed an attacker to bypass Phase 2 by sending an
+        // out‐of‐sequence TLV “success” packet. To fix this, we now require that
+        // Phase 2 authentication has been started before processing any TLV result.
+        if (!data.phase2Started) {
+            ret.decision = EapMethodRet.DECISION_FAIL;
+            ret.methodState = 1;
+            // Build a TLV failure response to avoid accepting the premature success.
+            WPABufUtil.eapTlvBuildResult(sm, data, false, 0, EAP_TLV_RESULT_FAILURE);
+            return ret.decision;
+        }
+ 
+        // Ensure that the request buffer has the expected TLV header (2 bytes for status)
+        if (req == null || WPABufUtil.len(req) < 2) {
+            ret.decision = EapMethodRet.DECISION_FAIL;
+            ret.methodState = 1;
+            WPABufUtil.eapTlvBuildResult(sm, data, false, 0, EAP_TLV_RESULT_FAILURE);
+            return ret.decision;
+        }
+ 
+        // Instead of unconditionally assuming success, extract the TLV status
+        int tlvStatus = WPABufUtil.getBe16(req);
+ 
+        int resp_status;
+        if (tlvStatus == EAP_TLV_RESULT_SUCCESS) {
+            if (force_failure) {
+                resp_status = EAP_TLV_RESULT_FAILURE;
+                ret.decision = EapMethodRet.DECISION_FAIL;
+            } else {
+                resp_status = EAP_TLV_RESULT_SUCCESS;
+                ret.decision = EapMethodRet.DECISION_UNCOND_SUCC;
+            }
+        } else {
+            // Any unexpected TLV status is treated as failure
+            resp_status = EAP_TLV_RESULT_FAILURE;
+            ret.decision = EapMethodRet.DECISION_FAIL;
+        }
+ 
+        ret.methodState = 1;
+        WPABufUtil.eapTlvBuildResult(sm, data, false, 0, resp_status);
+ 
+        return ret.decision;
+    }
+
+
+    public static boolean peapPhase2Sufficient(EapSm sm, EapPeapData data) {
+        if ((data.phase2Auth == EapPeapData.ALWAYS ||
+                (data.phase2Auth == EapPeapData.FOR_INITIAL &&
+                        !sm.tlsConnectionResumed() &&
+                        !data.ssl.clientCertConf) ||
+                data.phase2EapStarted) &&
+                !data.phase2EapSuccess) {
+            return false;
+        }
+        return true;
+    }
+}

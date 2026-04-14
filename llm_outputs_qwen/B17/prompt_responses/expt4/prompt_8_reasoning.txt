@@ -1,0 +1,54 @@
+The repair addresses a critical vulnerability in the `tls_verify_crl` function, which is integral to the process of validating Certificate Revocation Lists (CRLs) during the TLS handshake. This validation step ensures that client certificates, which might have been revoked by the Certificate Authority (CA), are correctly identified and rejected, thus maintaining the security of the connection.
+
+### Understanding the Vulnerability
+
+The original bug in the `tls_verify_crl` function stems from an incorrect parameter being passed to functions that retrieve CRLs from the store context. Specifically, the `subject` parameter was used instead of the `issuer`. In the context of CRL validation, it is crucial to identify the issuer of the certificate being verified because the CRL is issued by the CA (the issuer) and lists all certificates that have been revoked by this authority. Using the `subject` parameter would incorrectly fetch CRLs based on the end-entity certificate (the client's certificate), which does not contain the necessary information about revoked certificates issued by the same CA.
+
+### Identifying the Functions
+
+In the original buggy code, two different functions are used depending on the OpenSSL version:
+
+1. **For OpenSSL versions 1.1.x and later (`OPENSSL_VERSION_NUMBER >= 0x10100000L`)**: The function `X509_STORE_CTX_get1_crls()` is used.
+2. **For OpenSSL versions 1.0.x (`OPENSSL_VERSION_NUMBER >= 0x10000000L`)**: The function `X509_STORE_get1_crls()` is used.
+
+Both functions are intended to retrieve CRLs relevant to the certificate being verified. However, they require the correct parameter to function as expected.
+
+### Correcting the Parameter
+
+The core of the fix lies in changing the parameter passed to these functions from `subject` to `issuer`. The `issuer` parameter correctly identifies the CA that issued the certificate being verified, ensuring that the function retrieves the appropriate CRL that contains the list of revoked certificates issued by that CA. This change aligns with the standard procedure for CRL validation, where the issuer's CRL is necessary to determine if the client's certificate has been revoked.
+
+### Preserving Version-Specific Code
+
+The repair maintains the version-specific checks to ensure compatibility across different OpenSSL versions. The conditional compilation directives (`#if`, `#elif`, `#else`) are preserved to handle the differences in function calls between OpenSSL 1.1.x and 1.0.x. This approach ensures that the fix is applied consistently regardless of the OpenSSL version in use, as long as it meets the minimum required version.
+
+### Handling Older Versions
+
+For OpenSSL versions prior to 1.0.0, the code still sets `crls` to `NULL` and includes a comment recommending an upgrade. This part of the code remains unchanged, reflecting the same advice as in the original code. It emphasizes the importance of using a more recent version of OpenSSL, which includes important security fixes and improvements.
+
+### Ensuring Robustness
+
+By correcting the parameter passed to the CRL retrieval functions, the repair enhances the robustness of the TLS verification process. It ensures that only valid and non-revoked certificates are accepted, thereby protecting against man-in-the-middle attacks and other security threats associated with using revoked certificates.
+
+### Detailed Steps of the Repair
+
+1. **Initialization**: The function initializes necessary variables and checks if a CRL store exists. If not, it returns the original verification status `ok`.
+
+2. **Certificate Ingredients**: It retrieves the current certificate being verified and extracts its subject and issuer names.
+
+3. **CRL Retrieval for Signature Verification**:
+   - The function attempts to retrieve CRLs corresponding to the `subject` of the current certificate to verify the integrity of the CRL.
+   - The correct parameter here should be `issuer` to fetch the CRL issued by the CA.
+   - The function iterates over the retrieved CRLs, verifies their signatures, and checks their validity dates.
+
+4. **CRL Retrieval for Revocation Checking**:
+   - The function retrieves CRLs corresponding to the `issuer` of the current certificate to check if the certificate has been revoked.
+   - This is the critical step where the original code incorrectly used `subject`.
+   - The function iterates over the retrieved CRLs and checks if the serial number of the current certificate matches any serial numbers listed in the CRLs as revoked.
+
+5. **Error Handling**: If any CRL verification or revocation check fails, the function logs an error message, sets an appropriate error in the `X509_STORE_CTX`, and returns `FALSE` to indicate failure.
+
+6. **Cleanup**: Regardless of the outcome, the function cleans up the CRL stack and the store context to free allocated resources.
+
+### Conclusion
+
+The repair involves a straightforward yet critical change from using the `subject` to the `issuer` parameter when retrieving CRLs. This modification aligns with best practices for CRL validation and effectively mitigates the vulnerability described, ensuring secure and reliable TLS connections. By addressing this issue, the function now correctly identifies and processes the relevant CRLs, thereby preventing the acceptance of revoked certificates and enhancing overall security.

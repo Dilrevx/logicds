@@ -1,0 +1,35 @@
+The repair addresses a critical vulnerability in the implementation of the TLS 1.3 protocol, specifically concerning mutual authentication where both the client and server must authenticate each other using digital certificates. The vulnerability allows a malicious client to bypass the requirement of sending a `CertificateVerify` message, thereby connecting to the server without presenting a certificate, even when the server is configured to require mutual authentication.
+
+### Understanding the Vulnerability
+
+In TLS 1.3, mutual authentication involves several key steps:
+1. **Certificate Exchange**: Both the client and the server exchange their respective certificates.
+2. **Certificate Verification**: Each party verifies the certificate presented by the other to ensure it is valid and trusted.
+3. **CertificateVerify Message**: After verifying the peer's certificate, the client sends a `CertificateVerify` message that cryptographically signs a hash of the handshake messages up to that point using its private key. This proves possession of the private key corresponding to the public key in the certificate.
+4. **Finished Messages**: Both parties then send `Finished` messages, which are HMACs over all the handshake messages, including the `CertificateVerify` messages.
+
+The vulnerability arises because the original code does not enforce the receipt of the `CertificateVerify` message from the client. If the client omits this message, the server proceeds with the handshake as if nothing is amiss, leading to a security breach.
+
+### Analysis of the Original Code
+
+The provided code snippet is part of the `DoTls13Finished` function, which processes the `Finished` messages in the TLS 1.3 handshake. The function checks if the handshake is done (`ssl->options.handShakeDone`) and then derives the finished secret for the client. However, there is no check to ensure that the `CertificateVerify` message has been received from the client before proceeding.
+
+### Repair Implementation
+
+The repair involves adding a condition to check whether the `CertificateVerify` message has been received from the client. Here’s how the repair works:
+
+1. **Key Exchange Algorithm Check**: 
+   - The repair first checks the Key Exchange Algorithm (`kea`) used in the handshake. If the `kea` is either `psk_kea` (Pre-Shared Key) or `psk_psk_kea` (Pre-Shared Key with Pre-Shared Key), these key exchanges do not require client certificates, and thus, the `CertificateVerify` message is not expected. In this case, the code proceeds as originally intended.
+   
+2. **CertificateVerify Presence Check**:
+   - For other key exchange algorithms that require client certificates (such as RSA, ECDSA, etc.), the repair introduces a check to see if the `CertificateVerify` message has been received. This is done by checking the `ssl->receivedVerifyHash` flag.
+   - If `ssl->receivedVerifyHash` is `false`, indicating that the `CertificateVerify` message has not been received, the function logs an error message ("Missing CertificateVerify message") and returns `VERIFY_CERT_ERROR`. This prevents the handshake from progressing further without proper client authentication.
+   - If the `CertificateVerify` message is present, the function proceeds to derive the finished secret for the client as originally intended.
+
+### Security Implications
+
+By enforcing the receipt of the `CertificateVerify` message, the repair ensures that the client has authenticated itself to the server using its private key. This prevents man-in-the-middle attacks and other forms of impersonation where an attacker could connect to the server without providing a valid certificate. It strengthens the security of the TLS 1.3 handshake process, ensuring that only properly authenticated clients can establish a secure connection with the server.
+
+### Conclusion
+
+The repair effectively mitigates the vulnerability by adding a necessary check for the presence of the `CertificateVerify` message during the TLS 1.3 handshake process. This ensures that mutual authentication is enforced correctly, maintaining the integrity and security of the communication channel between the client and the server.

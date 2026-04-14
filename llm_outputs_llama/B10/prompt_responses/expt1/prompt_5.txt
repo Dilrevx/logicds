@@ -1,0 +1,103 @@
+<repair>
+            if (args->ivSz > 0) {
+                args->iv = (byte*)XMALLOC(args->ivSz, ssl->heap, DYNAMIC_TYPE_SALT);
+                if (args->iv == NULL)
+                    ERROR_OUT(MEMORY_E, exit_buildmsg);
+
+                ret = wc_RNG_GenerateBlock(ssl->rng, args->iv, args->ivSz);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+            }
+#endif
+
+            ssl->options.buildMsgState = BUILD_MSG_HEADER;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_HEADER:
+        {
+            if (ssl->options.dtls) {
+                if ((ret = BuildDtlsHeader(ssl, output, args->idx))!= 0)
+                    goto exit_buildmsg;
+                args->idx += DTLS_RECORD_EXTRA;
+            }
+            else {
+                if ((ret = BuildTlsHeader(ssl, output, args->idx, type))!= 0)
+                    goto exit_buildmsg;
+                args->idx += RECORD_HEADER_SZ;
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_DATA;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_DATA:
+        {
+            if (inSz > 0) {
+                XMEMCPY(output + args->idx, input, inSz);
+                args->idx += inSz;
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_MAC;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_MAC:
+        {
+            if (ssl->specs.cipher_type == aead) {
+                if ((ret = BuildAeadMac(ssl, output, args->idx, args->digestSz,
+                                        args->ivSz))!= 0)
+                    goto exit_buildmsg;
+                args->idx += args->digestSz;
+            }
+            else {
+                if ((ret = BuildMac(ssl, output, args->idx, args->digestSz))!= 0)
+                    goto exit_buildmsg;
+                args->idx += args->digestSz;
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_DONE;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_DONE:
+        {
+            if (ssl->specs.cipher_type == block) {
+                if (ssl->options.tls1_1) {
+                    if ((ret = BuildIV(ssl, output, args->idx, args->ivSz))!= 0)
+                        goto exit_buildmsg;
+                    args->idx += args->ivSz;
+                }
+
+                if ((ret = BuildPad(ssl, output, args->idx, args->pad))!= 0)
+                    goto exit_buildmsg;
+                args->idx += args->pad + 1; /* pad byte */
+            }
+            else if (ssl->specs.cipher_type == aead) {
+                if ((ret = BuildAeadIV(ssl, output, args->idx, args->ivSz))!= 0)
+                    goto exit_buildmsg;
+                args->idx += args->ivSz;
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_BEGIN;
+        }
+        default:
+            WOLFSSL_MSG("Bad state in BuildMessage");
+            ERROR_OUT(BAD_STATE_E, exit_buildmsg);
+        }
+
+        if (hashOutput) {
+            if ((ret = HashOutput(ssl, output, args->idx, args->digestSz))!= 0)
+                goto exit_buildmsg;
+        }
+
+        ret = args->idx;
+        goto exit_buildmsg;
+
+    exit_buildmsg:
+
+        if (args->iv!= NULL) {
+            XFREE(args->iv, ssl->heap, DYNAMIC_TYPE_SALT);
+            args->iv = NULL;
+        }
+
+        return ret;
+    }
+#endif
+</repair>

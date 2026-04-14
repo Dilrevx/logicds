@@ -1,0 +1,159 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags. Do not provide any extra text explanation.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+As an example, here is a vulnerability description of a buggy source code:
+<example_vulnerability_description>
+ChaCha20-Poly1305 is an AEAD cipher, and requires a unique nonce input for every encryption operation. RFC 7539 specifies that the nonce value (IV) should be 96 bits (12 bytes). OpenSSL allows a variable nonce length and front pads the nonce with 0 bytes if it is less than 12 bytes. However it also incorrectly allows a nonce to be set of up to 16 bytes. In this case only the last 12 bytes are significant and any additional leading bytes are ignored. It is a requirement of using this cipher that nonce values are unique. Messages encrypted using a reused nonce value are susceptible to serious confidentiality and integrity attacks. If an application changes the default nonce length to be longer than 12 bytes and then makes a change to the leading bytes of the nonce expecting the new value to be a new unique nonce then such an application could inadvertently encrypt messages with a reused nonce. 
+</example_vulnerability_description>
+Here is the buggy source code of the example:
+<example_buggy_code>
+    case EVP_CTRL_AEAD_SET_IVLEN:
+        if (arg <= 0 || arg > CHACHA_CTR_SIZE)
+            return 0;
+        actx->nonce_len = arg;
+        return 1;
+
+</example_buggy_code>
+Here is the fixed code of the example:
+<example_answer>
+<repair>
+    case EVP_CTRL_AEAD_SET_IVLEN:
+        if (arg <= 0 || arg > CHACHA20_POLY1305_MAX_IVLEN)
+            return 0;
+        actx->nonce_len = arg;
+        return 1;
+
+</repair>
+</example_answer>
+Here is the vulnerability description of the buggy source code we want to fix:
+<vulnerability_description>
+OpenSSL does not properly restrict processing of ChangeCipherSpec messages, which allows man-in-the-middle attackers to trigger use of a zero-length master key in certain OpenSSL-to-OpenSSL communications, and consequently hijack sessions or obtain sensitive information, via a crafted TLS handshake, aka the "CCS Injection" vulnerability.
+</vulnerability_description>
+Here is the buggy source code we want to fix:
+<buggy_code>
+		case SSL3_ST_SR_CERT_VRFY_B:
+
+			/* we should decide if we expected this one */
+			ret=ssl3_get_cert_verify(s);
+			if (ret <= 0) goto end;
+
+#if defined(OPENSSL_NO_TLSEXT) || defined(OPENSSL_NO_NEXTPROTONEG)
+			s->state=SSL3_ST_SR_FINISHED_A;
+#else
+			if (s->s3->next_proto_neg_seen)
+				s->state=SSL3_ST_SR_NEXT_PROTO_A;
+			else
+				s->state=SSL3_ST_SR_FINISHED_A;
+#endif
+			s->init_num=0;
+			break;
+
+#if !defined(OPENSSL_NO_TLSEXT) && !defined(OPENSSL_NO_NEXTPROTONEG)
+		case SSL3_ST_SR_NEXT_PROTO_A:
+		case SSL3_ST_SR_NEXT_PROTO_B:
+			ret=ssl3_get_next_proto(s);
+			if (ret <= 0) goto end;
+			s->init_num = 0;
+			s->state=SSL3_ST_SR_FINISHED_A;
+			break;
+#endif
+
+		case SSL3_ST_SR_FINISHED_A:
+		case SSL3_ST_SR_FINISHED_B:
+			ret=ssl3_get_finished(s,SSL3_ST_SR_FINISHED_A,
+				SSL3_ST_SR_FINISHED_B);
+			if (ret <= 0) goto end;
+			if (s->hit)
+				s->state=SSL_ST_OK;
+#ifndef OPENSSL_NO_TLSEXT
+			else if (s->tlsext_ticket_expected)
+				s->state=SSL3_ST_SW_SESSION_TICKET_A;
+#endif
+			else
+				s->state=SSL3_ST_SW_CHANGE_A;
+			s->init_num=0;
+			break;
+
+#ifndef OPENSSL_NO_TLSEXT
+		case SSL3_ST_SW_SESSION_TICKET_A:
+		case SSL3_ST_SW_SESSION_TICKET_B:
+			ret=ssl3_send_newsession_ticket(s);
+			if (ret <= 0) goto end;
+			s->state=SSL3_ST_SW_CHANGE_A;
+			s->init_num=0;
+			break;
+
+		case SSL3_ST_SW_CERT_STATUS_A:
+		case SSL3_ST_SW_CERT_STATUS_B:
+			ret=ssl3_send_cert_status(s);
+			if (ret <= 0) goto end;
+			s->state=SSL3_ST_SW_KEY_EXCH_A;
+			s->init_num=0;
+			break;
+
+#endif
+
+		case SSL3_ST_SW_CHANGE_A:
+		case SSL3_ST_SW_CHANGE_B:
+
+			s->session->cipher=s->s3->tmp.new_cipher;
+			if (!s->method->ssl3_enc->setup_key_block(s))
+				{ ret= -1; goto end; }
+
+			ret=ssl3_send_change_cipher_spec(s,
+				SSL3_ST_SW_CHANGE_A,SSL3_ST_SW_CHANGE_B);
+
+			if (ret <= 0) goto end;
+			s->state=SSL3_ST_SW_FINISHED_A;
+			s->init_num=0;
+
+			if (!s->method->ssl3_enc->change_cipher_state(s,
+				SSL3_CHANGE_CIPHER_SERVER_WRITE))
+				{
+				ret= -1;
+				goto end;
+				}
+
+			break;
+
+		case SSL3_ST_SW_FINISHED_A:
+		case SSL3_ST_SW_FINISHED_B:
+			ret=ssl3_send_finished(s,
+				SSL3_ST_SW_FINISHED_A,SSL3_ST_SW_FINISHED_B,
+				s->method->ssl3_enc->server_finished_label,
+				s->method->ssl3_enc->server_finished_label_len);
+			if (ret <= 0) goto end;
+			s->state=SSL3_ST_SW_FLUSH;
+			if (s->hit)
+				{
+#if defined(OPENSSL_NO_TLSEXT) || defined(OPENSSL_NO_NEXTPROTONEG)
+				s->s3->tmp.next_state=SSL3_ST_SR_FINISHED_A;
+#else
+				if (s->s3->next_proto_neg_seen)
+					s->s3->tmp.next_state=SSL3_ST_SR_NEXT_PROTO_A;
+				else
+					s->s3->tmp.next_state=SSL3_ST_SR_FINISHED_A;
+#endif
+				}
+			else
+				s->s3->tmp.next_state=SSL_ST_OK;
+			s->init_num=0;
+			break;
+
+
+</buggy_code>
+Here is a repair description to fix the buggy source code we want to fix
+<repair_description>
+The repair introduces a flag-setting mechanism to ensure that the ChangeCipherSpec messages are processed only when they are genuinely expected. In the vulnerable code, OpenSSL did not properly mark the transition states when processing ChangeCipherSpec messages, which could allow an attacker to manipulate the handshake and force the use of a zero-length master key. The repair addresses this by taking the following steps:
+
+First, the repair adds an instruction at the beginning of the branch that processes the certificate verification phase. This instruction sets a specific flag in the session state to indicate that processing of the ChangeCipherSpec (CCS) message is allowed. This change serves as a marker that the protocol negotiation is in the correct state, meaning that the CCS message the server might receive can safely be treated as valid. That flag is only set when the server is in a state where a CCS message is expected, thus countering the possibility of an attacker injecting an unsolicited CCS message.
+
+Next, after setting the flag at the entry point of the certificate verification stage, the routine continues as before by verifying the certificate. If there is an error during this process, the handshake is terminated. However, if successful, the state machine is advanced to expect either the finished message or, depending on specific options (such as Next Protocol Negotiation), another subsequent state. The setting of the flag ensures that the CCS is only accepted as part of the normal message sequence and not out-of-order.
+
+Later, when handling the finished messages stage from the server’s perspective, the repair again sets the same flag before calling the function that retrieves the finished message from the client. This reinforces the expectation that a CCS message is part of the handshake, after verifying that the certificate and handshake messages are as expected. This step further solidifies the control that the system has over the handshake sequence, ensuring that the finite state machine only transitions forward when the message order is correct.
+
+Additionally, when preparing to switch cipher states and perform the key exchange, the repair does not reconfigure the fundamental process, but it does ensure that all subsequent state transitions remain guarded by the flag. For example, during the generation and exchange of the ChangeCipherSpec and finished messages, the repair code maintains the expectation that any CCS message received is legitimate by referring back to the flag’s state. Thus, all branches of the state machine that might be vulnerable to a CCS injection check and use this flag appropriately.
+
+In summary, the primary protection implemented in this repair is the explicit marking of valid states for CCS processing via a flag. This measure effectively prevents a man-in-the-middle from exploiting a sequence deviation by injecting a forged CCS message, ensuring that all transitions in the handshake, particularly those related to key exchange and finished messages, occur only when the protocol state is properly synchronized. This carefully targeted change mitigates the "CCS Injection" vulnerability while preserving the rest of the protocol’s flow.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability we want to fix.

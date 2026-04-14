@@ -1,0 +1,26 @@
+The primary change in the repair is in how the function handles a failure in the certificate verification step. Originally, if the verification (ctx.verify()) failed (i.e., ret ≤ 0), the function would return a negative error code. This behavior is problematic because, according to the vulnerability description, a verification failure should return 0 (indicating a negative result, not a fatal error). Many users of the OCSP verification function assume a 0 return value for a verification failure; returning a negative value can cause misunderstandings and misinterpretations of the result, especially in security-critical contexts like OCSP responses.
+
+Here’s a step-by-step breakdown of the repair:
+
+1. Initialization and Setup:  
+   The code continues to set up the X509StoreContext and verify parameters. If memory allocation (ctx == null) or initialization (ctx.init(...)) fails, it raises errors and returns -1. These early exits have not been modified because they indicate more fundamental issues than certificate verification failures.
+
+2. Parameter Adjustments:  
+   The repair does not change the logic that sets flags based on provided input parameters (OCSP_PARTIAL_CHAIN, CRL_CHECK removal if the signer has a no-check extension, setting purpose and trust for the OCSP helper). Those flags configure how the verification operates.
+
+3. Verification Handling:  
+   After calling ret = ctx.verify(), the original code checked:
+   
+     if (ret <= 0) { ... return ret; }
+
+   In the repaired code, after a failed verification:
+   
+   - It retrieves the specific error using ctx.getError() for logging purposes.
+   - It raises an error with detailed information (error code and message).
+   - Crucially, it frees the context to avoid resource leaks.
+   - Then, instead of returning a negative error code (which implies a fatal error), the function returns 0. This change aligns the behavior with expectations: a verification failure should simply yield a "false" (0) result, not trigger downstream logic that is reserved for fatal errors.
+
+4. Chain Handling and Cleanup:  
+   If verification passes, the function proceeds to optionally propagate the verified chain and then free the context. This flow remains unchanged.
+
+By ensuring that a certificate verification failure results in a return value of 0 rather than a negative code, the repair minimizes the potential for misinterpretation of verification outcomes. This correction avoids a false-positive in some application scenarios (like the OpenSSL “ocsp” command-line tool), where a negative error code was misleadingly interpreting the situation as a fatal error rather than a simple “not verified” state.

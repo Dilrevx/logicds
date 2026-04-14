@@ -1,0 +1,19 @@
+The repaired code adds an explicit check to validate that a ChangeCipherSpec (CCS) record is only processed once and that the transport layer is in the appropriate state before processing the record. Here’s a step‐by‐step explanation:
+
+1. CCS Record Verification:  
+   The code first verifies that the incoming record is a valid CCS record by checking that the record’s length is exactly 1, its offset is 0, and its single data byte equals the expected CCS value (SSL3_MT_CCS). These checks ensure that the record payload conforms to the specification.
+
+2. Prevention of CCS Injection:  
+   The vulnerability arose because OpenSSL did not enforce restrictions on when a CCS record could be processed. An attacker could potentially send a malicious CCS record to manipulate the handshake state, leading to usage of a zero-length master key.  
+   In the repair, before the code continues with processing, it explicitly checks whether a CCS has already been processed by verifying if s->s3->change_cipher_spec is non-zero. If it is already set (indicating that CCS processing has occurred previously), the connection rejects the record by setting an error and aborting further processing. This additional guard prevents any CCS injection attacks by ensuring that a second (or unsolicited) CCS message cannot be accepted and processed.
+
+3. Confirmation of New Cipher:  
+   The code checks that there is a new cipher available (s->s3->tmp.new_cipher != NULL). This is required to ensure that the CCS message has the proper context in the SSL handshake. If no new cipher is set, then receiving a CCS at that point in the handshake is deemed unexpected, and the connection sufficiently rejects the CCS record.
+
+4. Record Processing and Callback Invocation:  
+   Once all validations pass, the record’s length is reset to zero, and if a message callback is defined, it is invoked to notify any event listeners that a CCS has been processed. Afterwards, the state flag s->s3->change_cipher_spec is set to indicate that a CCS has been accepted. This flag also prevents any further CCS records from being processed, ensuring that the CCS injection vulnerability is mitigated.
+
+5. Final State Transition:  
+   Lastly, the routine ssl3_do_change_cipher_spec() is called to complete the system’s internal state transition to the new cipher suite. If this transition fails, error handling is triggered. Otherwise, the handshake proceeds normally.
+
+In summary, the repair fixes the vulnerability by introducing a check against multiple CCS messages. This ensures that once a CCS record has been processed, any subsequent CCS is rejected, thereby preventing an attacker from injecting an extra CCS message. The fix ensures the handshake integrity by verifying state conditions before processing CCS messages and contributing to the overall robustness of the SSL/TLS implementation.

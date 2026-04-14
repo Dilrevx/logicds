@@ -1,0 +1,69 @@
+Certainly! The provided repair addresses a critical vulnerability in a TLS v1.3 server implementation, specifically related to mutual authentication. Mutual authentication ensures that both the client and the server verify each other's identities using digital certificates. The vulnerability arises when a malicious client can bypass the requirement to present a certificate by not sending the `certificate_verify` message, thus establishing a connection without proper authentication.
+
+### Step-by-Step Explanation of the Repair
+
+#### 1. Conditional Compilation Checks
+The repair begins with two conditional compilation directives: `#ifndef NO_CERTS` and `#ifndef WOLFSSL_NO_CLIENT_AUTH`. These checks ensure that the added logic is only compiled and executed when the system is configured to handle certificates and client authentication. This is important because the logic for verifying client certificates is unnecessary and potentially harmful if the system is not set up to use certificates.
+
+- **`#ifndef NO_CERTS`**: This directive checks if the `NO_CERTS` macro is not defined. If `NO_CERTS` is defined, the system is configured to disable certificate handling, and the additional logic should not be included.
+  
+- **`#ifndef WOLFSSL_NO_CLIENT_AUTH`**: This directive checks if the `WOLFSSL_NO_CLIENT_AUTH` macro is not defined. If `WOLFSSL_NO_CLIENT_AUTH` is defined, the system is configured to disable client authentication, and the additional logic should not be included.
+
+#### 2. Server-Side Verification Context
+The repair then checks if the current SSL context represents the server side (`ssl->options.side == WOLFSSL_SERVER_END`). This is crucial because the certificate verification step is only relevant on the server side when it needs to authenticate the client. The server is responsible for ensuring that the client presents a valid certificate before establishing a secure connection.
+
+```c
+if (ssl->options.side == WOLFSSL_SERVER_END) {
+```
+
+#### 3. Mutual Authentication Requirement Check
+Within the server-side context, the repair checks if mutual authentication is required (`ssl->options.mutualAuth`) or if the server is configured to fail connections where no certificate is presented (`ssl->options.failNoCert`). This ensures that the server enforces its security policies regarding client certificates.
+
+```c
+if ((ssl->options.mutualAuth || ssl->options.failNoCert) &&
+```
+
+#### 4. Certificate Presence Verification
+If mutual authentication is required or failing without a certificate is enforced, the repair proceeds to check if the server has successfully verified the client's certificate (`ssl->options.havePeerVerify`) or if the session is being resumed (`ssl->options.resuming`). In a resumed session, the certificate verification would have occurred during the initial handshake, so it doesn't need to be rechecked.
+
+```c
+!ssl->options.havePeerVerify && !ssl->options.resuming) {
+```
+
+- **`ssl->options.havePeerVerify`**: This flag indicates whether the server has successfully verified the client's certificate. If this flag is set, the server has already confirmed the client's identity, and no further action is needed.
+  
+- **`ssl->options.resuming`**: This flag indicates whether the current session is being resumed from a previous handshake. In resumed sessions, the certificate verification typically occurs during the initial handshake, so there is no need to recheck it.
+
+#### 5. Handling Missing Certificate
+If neither `havePeerVerify` nor `resuming` is true, indicating that the client did not present a certificate when required, the repair sets an error code `NO_PEER_CERT`. This error code signifies that the server encountered a violation of its security policy.
+
+```c
+int ret = NO_PEER_CERT;
+```
+
+#### 6. Sending Alert and Returning Error
+Upon detecting the absence of a required client certificate, the repair calls `DoCertFatalAlert(ssl, ret)` to send a fatal alert to the client, informing them of the protocol violation. Following the alert, the repair returns the error code `ret`, effectively terminating the handshake process and preventing the establishment of a secure connection with an unauthenticated client.
+
+```c
+DoCertFatalAlert(ssl, ret);
+return ret;
+```
+
+- **`DoCertFatalAlert(ssl, ret)`**: This function sends a fatal alert to the client, indicating that the server is terminating the connection due to a protocol violation. This alert helps the client understand why the connection was terminated and aids in debugging and logging.
+
+#### 7. Preserving Existing Logic
+After incorporating the new certificate verification logic, the repair ensures that the existing logic for checking buffer sizes and deriving finished secrets remains intact. This preserves the original functionality of the `DoTls13Finished` function while adding the necessary security enhancement.
+
+```c
+if (ssl->options.handShakeDone) {
+    ret = DeriveFinishedSecret(ssl, ssl->clientSecret,
+                               ssl->keys.client_write_MAC_secret);
+    if (ret != 0)
+        return ret;
+
+    secret = ssl->keys.client_write_MAC_secret;
+}
+```
+
+### Conclusion
+By following these steps, the repair ensures that a TLS v1.3 server correctly enforces its requirements for client certificate presentation during mutual authentication. This mitigation prevents malicious clients from bypassing the authentication process, thereby enhancing the security of the server and protecting sensitive data transmitted over the connection. The repair maintains the integrity of the existing codebase while addressing the specific vulnerability, ensuring that the server adheres to its security policies and maintains robust protection against unauthorized access.

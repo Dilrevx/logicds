@@ -1,0 +1,46 @@
+The provided repair addresses a critical vulnerability in the handling of TLS 1.3 handshakes within the wolfSSL library. The original code did not properly handle scenarios where neither a Pre-Shared Key (PSK) nor a Key Share Extension (KSE) was received from the server during the TLS 1.3 handshake process. This omission could lead to the use of a default, predictable buffer for the Initial Key Material (IKM), which is crucial for deriving the session master secret. An attacker could exploit this predictability to reconstruct the session keys, thereby compromising the confidentiality and integrity of the communication.
+
+### Detailed Analysis and Repair Explanation:
+
+#### Original Vulnerability Context:
+- **TLS 1.3 Handshake**: In TLS 1.3, the establishment of a secure session involves several steps, including the exchange of cryptographic parameters such as PSKs and key shares.
+- **PSK and KSE**: These extensions are essential for establishing a secure connection. A PSK is a pre-shared secret that can speed up the handshake process, while a KSE contains public keys used in key exchange algorithms like ECDHE.
+- **Predictable IKM**: If neither PSK nor KSE is provided, the code falls back to using a default buffer for the IKM. This buffer is predictable, meaning an attacker could guess its value and derive the session keys, leading to potential eavesdropping or tampering.
+
+#### Code Analysis:
+- **PSK Handling**: The code checks for the presence of a PSK extension and sets up the PSK if found. However, it does not enforce the presence of either PSK or KSE.
+- **Missing KSE Check**: There is no check for the presence of a KSE if the PSK is not found, which is crucial for ensuring that at least one method of key establishment is present.
+- **Fallback Mechanism**: The absence of both PSK and KSE leads to the use of a default IKM, which is the core issue.
+
+#### Repair Implementation:
+1. **Introduce KSE Check**:
+   - After checking for a PSK, the code now looks for a KSE extension.
+   ```c
+   KeyShareEntry* kse = NULL;
+   TLSX* ext_kse = TLSX_Find(ssl->extensions, TLSX_KEY_SHARE);
+   if (ext_kse != NULL)
+       kse = (KeyShareEntry*)ext_kse->data;
+   ```
+   - This addition ensures that the code attempts to locate a KSE if no suitable PSK is found.
+
+2. **Enforce Presence of Either PSK or KSE**:
+   - The code then checks if both `psk` and `kse` are `NULL`, indicating that neither a PSK nor a KSE was received.
+   ```c
+   if (psk == NULL && kse == NULL) {
+       WOLFSSL_MSG("No PSK or KSE received, aborting handshake");
+       return BAD_TLS13_STATE_ERROR; // Or another appropriate error code
+   }
+   ```
+   - If neither extension is present, the handshake is aborted with an error. This prevents the use of a default, predictable IKM and enforces the requirement for secure key establishment mechanisms.
+
+3. **Logging and Error Handling**:
+   - The `WOLFSSL_MSG` macro logs a message indicating the issue, which aids in debugging and monitoring.
+   - Returning `BAD_TLS13_STATE_ERROR` (or an equivalent error code) ensures that the handshake process terminates securely, preventing the establishment of an insecure session.
+
+#### Benefits of the Repair:
+- **Security**: By enforcing the presence of either PSK or KSE, the repair eliminates the risk of using a predictable IKM, significantly enhancing the security of TLS 1.3 sessions.
+- **Compliance**: The change aligns with the TLS 1.3 standard, which mandates the use of at least one key establishment mechanism.
+- **Robustness**: The code now handles unexpected conditions more gracefully, improving overall robustness and reliability.
+
+#### Conclusion:
+The repair effectively mitigates the vulnerability by ensuring that the TLS 1.3 handshake process only proceeds if a valid key establishment mechanism is in place. This change not only secures the communication but also maintains compliance with cryptographic standards, ensuring that users of the wolfSSL library can rely on secure connections.

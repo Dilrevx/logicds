@@ -1,0 +1,17 @@
+The repair separates the handling of the security header types more explicitly. Originally, some cases were falling through unintentionally or not applying the proper integrity check before decryption. This could let messages slip through without the required checks, exposing the system to potential attacks.
+
+Here’s what the repair does:
+
+1. For plain messages (like LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS and similar types), the code simply breaks out of the switch, as these messages don’t require further processing. This behavior remains unchanged.
+
+2. For messages flagged as integrity-only (LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY), the repair explicitly checks the integrity using an if-statement. If the integrity check fails, it logs an error with the specific security header type and returns immediately. This ensures that non-compliant messages are rejected, removing any chance of unauthorized or corrupt data being processed.
+
+3. For messages marked as both integrity-and-ciphered (LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED), the repair performs the integrity check first. Only if the check succeeds does the code then proceed to decrypt the message using cipher_decrypt(). If the integrity check fails, the message is rejected immediately with a detailed log message. This two-step verification (integrity check followed by decryption) is crucial since decrypting without verifying integrity could lead to processing maliciously tampered messages.
+
+4. For messages under LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT, the original implementation didn’t verify integrity before proceeding. This is a vulnerability because it exposes those messages to similar risks as the previous case. The repair adds an integrity check here as well and, on success, decrypts the message. This change ensures that all types of ciphered messages are uniformly validated before decryption.
+
+5. The default case logs an error for any unknown or unhandled security header type and returns immediately, ensuring no further processing happens for unexpected values.
+
+By ensuring that every security-sensitive path first confirms the message's integrity before proceeding to decrypt or further process sensitive information, the repair mitigates risks associated with integrity check bypasses. This structured handling prevents any accidental fall-through between cases, eliminating vulnerabilities where the absence of a proper check might lead to unauthorized message processing or potential injection of malicious data.
+
+Overall, the repair tightens the flow-control in the switch case, explicitly associating the required actions (integrity checking and decryption) with their respective security types and guarding against potential bugs where integrity verification could be skipped.

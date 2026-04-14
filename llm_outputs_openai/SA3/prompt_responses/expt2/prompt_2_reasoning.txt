@@ -1,0 +1,20 @@
+The repair adds additional checks to confirm that the cipher being processed truly comes from a legacy source before diverting to legacy handling. Originally, the code would just verify if certain engine or implementation objects were non-null and then call the legacy handling function. However, this may inadvertently allow a custom cipher with an undefined unique identifier (such as NID_undef) to be treated like a regular provider cipher. This could lead to the NULL cipher (which does no encryption) being selected—thus leaving the plaintext unprotected.
+
+Here’s how the repair fixes that:
+
+1. Additional Conditions:  
+   The modified if-statement now requires, beyond the engine and implementation checks, that either:  
+   - A cipher is explicitly provided and its origin is flagged as legacy (cipher.isLegacy() returns true), or  
+   - There is no explicit cipher provided (cipher is null) but there is one in the context whose origin is legacy (ctx.getCipher().isLegacy() returns true).  
+   This ensures that only truly legacy ciphers trigger the legacy handling code path.
+
+2. Prevention of Null Cipher Misuse:  
+   By verifying the cipher’s origin, if an application mistakenly uses a custom cipher with an undefined identifier, it won’t inadvertently be substituted with the NULL cipher from a provider. The new conditions require that if the cipher is legacy (or the context already has a legacy cipher), then the code will forcibly follow the legacy handling path. This stops the default provider behavior that might match the undefined cipher’s NID to the NULL cipher.
+
+3. Clean Up of Old Cipher State:  
+   Regardless of the conditions, if the legacy handling branch is activated, the code resets the context’s fetched cipher. If the context’s cipher equals the fetched cipher, it resets the context’s cipher to null before freeing the fetched cipher. This ensures that any incorrectly fetched or residual provider cipher doesn’t get used by mistake.
+
+4. Overall Safety:  
+   The new logic deliberately couples the decision of whether to use legacy handling with a check on the origin of the cipher. This means that an application’s clear intent to use a custom legacy cipher is respected. Only when the cipher is confirmed to be a legacy type (or no explicit cipher indicates that the context is already using a legacy cipher) does it get processed in the specialized legacy method. This avoids any fallback to insecure defaults like using the NULL cipher which was a significant vulnerability in the OpenSSL versions mentioned.
+
+In summary, the repair reinforces the decision to follow legacy handling by requiring an explicit legacy origin flag. This extra scrutiny prevents unintended fetching of insecure ciphers when an undefined NID is used, thereby mitigating the risk of an unencrypted (plaintext) output scenario.

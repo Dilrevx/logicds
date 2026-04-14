@@ -1,0 +1,22 @@
+The repair primarily reorders the operations so that the leaf certificate is verified (including its hostname) before duplicating the certificate chain. This ensures that any error encountered during leaf certificate verification is captured immediately and stored in the certificate chain's error array, rather than being potentially overwritten or lost later.
+
+Here's the step-by-step explanation:
+
+1. Verification before Duplication:  
+   The original code duplicated the entire certificate chain before verifying the leaf certificate. In the repaired version, the leaf certificate validation (using x509_verify_cert_valid and x509_verify_cert_hostname) takes place immediately after validating the legacy chain. By doing this earlier, if the leaf certificate fails verification, the error is captured and the function returns before the chain is duplicated.
+
+2. Recording the Error:  
+   In both verification checks (for validity and hostname), if the verifier sets an error in the context (ctx->error) and the error is not the expected "unable to get issuer" one (which is handled by clearing it earlier), the repair explicitly records this error into the chain's error list at the corresponding depth. This ensures that the problematic verification error is not lost even if a verification callback instructed the process to continue—as the error is now stored in the chain's error array.
+
+3. Chain Duplication after Successful Verification:  
+   Only after the leaf is verified (and any error properly recorded if verification failed) does the repair attempt to duplicate the chain. If duplicating the chain fails (e.g., due to memory allocation issues), an error for out-of-memory is correctly returned. This sequence avoids masking any earlier verification errors.
+
+4. Final Context Update:  
+   After successful duplication, the repaired code increments the chains count, and then it resets the context's overall error to X509_V_OK and updates the error depth. This indicates that the chain has been processed successfully and that any error regarding the leaf certificate was already recorded separately.
+
+In summary, the repair fixes the vulnerability by:
+• Reordering the operations to verify the leaf certificate’s validity and hostname before duplicating the chain.
+• Explicitly storing any verification errors from the leaf certificate into the chain's error array.  
+• Maintaining robust error handling so that, if any memory or other issues occur, the context returns the accurate error reflecting the true state of the certificate verification process.
+
+This approach ensures that if a verification callback causes the process to continue despite encountering an invalid certificate, the error is not overwritten or lost—thereby addressing the vulnerability where an incorrect or absent error could be returned by the verification process.

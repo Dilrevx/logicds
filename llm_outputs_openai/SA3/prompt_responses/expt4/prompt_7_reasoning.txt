@@ -1,0 +1,24 @@
+The repair focuses on preventing the use of an undefined cipher identifier (NID_UNDEF) from triggering a fallback to the NULL cipher. Here’s a walkthrough of how the changes address the vulnerability:
+
+1. Verification of the Cipher NID:  
+   In the original code, if the cipher’s provider (cipher.getProv()) was null, the code attempted to fetch a provider cipher. However, if the cipher’s NID was undefined (EvpCipher.NID_UNDEF), it would inadvertently retrieve the NULL cipher from the providers. In our repair, before attempting to fetch the provider cipher, we explicitly check:
+
+  if (cipher.getNid() == EvpCipher.NID_UNDEF) {  
+   Err.raise("EVP", "Invalid cipher: undefined NID");  
+   return 0;  
+  }
+
+This check prevents processing any cipher initialized with an undefined NID by immediately raising an error and aborting the initialization.
+
+2. Preventing Fallback to NULL Cipher:  
+   Since the vulnerability allowed the system to match the undefined cipher with the NULL cipher (resulting in the plaintext being emitted as ciphertext), our added check stops the initialization process at the very beginning when an undefined NID is detected. This ensures that an attacker cannot supply a cipher with NID_UNDEF and then accidentally (or maliciously) get the NULL cipher’s behavior applied.
+
+3. Handling the Provider Cipher Fetching:  
+   Only if the cipher’s NID is valid (i.e., not NID_UNDEF) does the code proceed to the logic that fetches a provider cipher using:
+  EvpCipher.fetch(null, Obj.nidToSn(cipher.getNid()), "");
+This guarantees that the correct cipher is fetched according to its string name (which is derived from a valid NID). This ensures that custom ciphers are correctly managed and don’t default to an insecure operation.
+
+4. Maintaining Legacy and Engine Handling:  
+   The rest of the code, which deals with potential scenarios involving legacy engines and engine-specific handling, remains unchanged. This retains the intended functionality while the vulnerability fix is isolated to preventing a misinterpretation of NID_UNDEF.
+
+In summary, by explicitly checking for an undefined cipher NID before attempting any further initialization, the repair stops the flawed logic that would otherwise fetch an unintended (NULL) provider cipher. This prevents an attacker from exploiting the initialization functions (EVP_EncryptInit_ex2, EVP_DecryptInit_ex2, etc.) to cause the plaintext to be output as ciphertext, thereby preserving the intended confidentiality and integrity of the encryption operations.

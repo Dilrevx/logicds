@@ -1,0 +1,79 @@
+<repair>
+static int evp_cipher_init_internal(EVP_CIPHER_CTX *ctx,
+                                    const EVP_CIPHER *cipher,
+                                    ENGINE *impl, const unsigned char *key,
+                                    const unsigned char *iv, int enc,
+                                    const OSSL_PARAM params[])
+{
+    int n;
+#if!defined(OPENSSL_NO_ENGINE) &&!defined(FIPS_MODULE)
+    ENGINE *tmpimpl = NULL;
+#endif
+
+    ctx->iv_len = -1;
+
+    if (enc == -1) {
+        if (ctx->encrypt == -1) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_NO_CIPHER_DIRECTION);
+            return 0;
+        }
+        enc = ctx->encrypt;
+    } else {
+        if (enc!= 0 && enc!= 1) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_OPERATION);
+            return 0;
+        }
+        ctx->encrypt = enc;
+    }
+
+    if (cipher == NULL && ctx->cipher == NULL) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_NO_CIPHER_SET);
+        return 0;
+    }
+
+    /* Code below to be removed when legacy support is dropped. */
+
+#if!defined(OPENSSL_NO_ENGINE) &&!defined(FIPS_MODULE)
+    if (ctx->engine && ctx->cipher
+        && (cipher == NULL || cipher->nid == ctx->cipher->nid))
+        goto skip_to_init;
+
+    if (cipher!= NULL && impl == NULL) {
+         /* Ask if an ENGINE is reserved for this job */
+        tmpimpl = ENGINE_get_cipher_engine(cipher->nid);
+    }
+#endif
+
+    /*
+     * If there are engines involved then we should use legacy handling for now.
+     */
+    if (cipher!= NULL && (impl!= NULL || tmpimpl!= NULL)) {
+        return evp_cipher_init_legacy(ctx, cipher, impl, key, iv, enc, params);
+    }
+
+    if (cipher == NULL) {
+        cipher = ctx->cipher;
+    }
+
+    if (cipher == NULL) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_NO_CIPHER_SET);
+        return 0;
+    }
+
+    if (cipher->init == NULL) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_NO_CIPHER_INIT);
+        return 0;
+    }
+
+    if (cipher->init(ctx, key, iv, enc, params) <= 0) {
+        return 0;
+    }
+
+    ctx->cipher = cipher;
+    ctx->key_len = cipher->key_len;
+    ctx->block_mask = cipher->block_size - 1;
+    ctx->flags |= EVP_CIPH_FLAG_CUSTOM_CIPHER;
+
+    return 1;
+}
+</repair>

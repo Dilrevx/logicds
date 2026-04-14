@@ -1,0 +1,54 @@
+The repair provided addresses a vulnerability in the `tls_verify_crl` function, which is responsible for verifying the Certificate Revocation List (CRL) of a client certificate. The vulnerability arises from the fact that the function checks for CRLs corresponding to the subject of the current certificate twice, instead of checking for CRLs corresponding to both the subject and the issuer of the certificate.
+
+The issue is in the following lines of code:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+   !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+     !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, subject);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+and
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+   !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+     !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, subject);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+In both cases, the function is checking for CRLs corresponding to the subject of the current certificate, instead of checking for CRLs corresponding to the issuer of the certificate in the second instance.
+
+The repair addresses this issue by changing the second instance to check for CRLs corresponding to the issuer of the certificate:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+  !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, issuer);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+By making this change, the function will now correctly check for CRLs corresponding to both the subject and the issuer of the certificate, which will prevent clients whose certificates have been revoked from proceeding with a connection to the server.
+
+The reasoning behind this repair is based on the fact that a CRL is typically issued by the issuer of a certificate, and it is the issuer's responsibility to revoke certificates that are no longer valid. By checking for CRLs corresponding to the issuer of the certificate, the function can determine whether the certificate has been revoked by the issuer.
+
+In addition to addressing the vulnerability, the repair also ensures that the function is correctly implementing the verification scheme described in the comments, which involves checking the signature of a CRL in each step when a CRL is found through the subject name of the current certificate, and checking the revocation list of a CRL in each step when a CRL is found through the issuer name of the current certificate.

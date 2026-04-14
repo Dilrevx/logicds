@@ -1,0 +1,38 @@
+Below is one way to repair the vulnerability. In OpenSSL’s legacy mode the problem was that an application could “mis‐register” a custom cipher by passing NID_undef when creating a new EVP_CIPHER_METHOD; then the legacy initialisation functions (such as EVP_EncryptInit_ex2()) would later look up a provider “equivalent” by NID and (mistakenly) retrieve the NULL cipher. The fix is to explicitly detect a custom cipher that was (mis)created with NID_undef before we “fall back” to legacy handling and to raise an error (or otherwise abort initialisation) rather than allowing the NULL cipher to be used.
+
+In the patched snippet below we assume that the variable “cipher” (or an equivalent object) has a getter method (here shown as getNid()) so that we can test whether the NID equals NID_UNDEF. If this is true we throw an error (or return an error code) instead of calling legacyHandling().
+
+Below is one example of a repair in Java‐like pseudocode:
+
+-------------------------------------------------
+        // Before doing legacy handling, make sure the custom cipher was not
+        // incorrectly registered with NID_undef. If it was then do not use it.
+        if (cipher != null && cipher.getNid() == NID_UNDEF) {
+            // Option 1: Throw an exception so that the calling code knows
+            // that an invalid cipher was provided.
+            throw new IllegalArgumentException("Custom cipher uses NID_undef, which is not allowed");
+            
+            // Option 2 (alternative): Return an error code (if your design expects error codes)
+            // return SOME_ERROR_CONSTANT;
+        }
+    
+        // Process legacy implementation if any of the following conditions is met.
+        if (ctx.getEngine() != null || (!OPENSSL_NO_ENGINE && !FIPS_MODULE && tmpImpl != null)
+                || impl != null) {
+
+            if (ctx.getCipher() == ctx.getFetchedCipher()) {
+                ctx.setCipher(null);
+            }
+            EvpCipher.free(ctx.getFetchedCipher());
+            ctx.setFetchedCipher(null);
+            return legacyHandling(ctx, cipher, impl, tmpImpl, enc);
+        }
+-------------------------------------------------
+
+Explanation of the repair:
+
+1. Before calling legacyHandling(), we explicitly check if the custom cipher has been created with an undefined NID (i.e. NID_undef or NID_UNDEF as defined in your codebase). If that is the case, the routine refuses to proceed. This prevents the later lookup that would erroneously match the NULL cipher.
+2. The rest of the code remains unchanged so that if the cipher is correctly registered, the normal legacy handling continues.
+3. Depending on your error-handling conventions you may either throw an exception (as shown) or return an error value. Adjust according to the needs of your application.
+
+This change directly repairs the vulnerability by ensuring that custom ciphers registered with an invalid identifier cannot be used to “accidentally” select the insecure NULL cipher.

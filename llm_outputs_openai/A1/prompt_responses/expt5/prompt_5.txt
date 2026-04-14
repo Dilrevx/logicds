@@ -1,0 +1,64 @@
+<repair>
+    if ((ctx->flags & EVP_CIPH_NO_PADDING) != 0) {
+        /*
+         * Preserve the no-padding setting from the original context.
+         */
+        if (!EVP_CIPHER_CTX_set_padding(ctx, 0))
+            return 0;
+    }
+
+#ifndef FIPS_MODULE
+    /*
+     * For non-FIPS builds only:
+     * Pre-process the OSSL_PARAM array to extract key and IV length settings,
+     * ensuring that these length parameters are applied BEFORE the cipher
+     * initialization to avoid potential truncation or overrun issues (CVE-2023-5363).
+     */
+    if (enc && params) {
+        /* Prepare a temporary parameters array to hold key length and IV length parameters.
+           We allow space for up to two parameters.
+        */
+        OSSL_PARAM tl_params[3] = { OSSL_PARAM_END, OSSL_PARAM_END, OSSL_PARAM_END };
+        int num_params = 0;
+        const OSSL_PARAM *p;
+
+        /* Attempt to locate the key length parameter */
+        p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_KEYLEN);
+        if (p != NULL) {
+            tl_params[num_params++] = *p;
+        }
+
+        /* Attempt to locate the IV length parameter.
+           If not found, check for the AEAD IV length parameter as a synonym.
+        */
+        p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_IVLEN);
+        if (p == NULL)
+            p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_AEAD_IVLEN);
+        if (p != NULL) {
+            tl_params[num_params++] = *p;
+        }
+
+        /* If any relevant parameters were found, apply them to update the context */
+        if (num_params > 0) {
+            if (!EVP_CIPHER_CTX_set_params(ctx, tl_params)) {
+                ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_LENGTH);
+                return 0;
+            }
+        }
+    }
+#endif
+
+    if (enc) {
+        if (ctx->cipher->einit == NULL) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+
+        return ctx->cipher->einit(ctx->algctx,
+                                  key,
+                                  key == NULL ? 0 : EVP_CIPHER_CTX_get_key_length(ctx),
+                                  iv,
+                                  iv == NULL ? 0 : EVP_CIPHER_CTX_get_iv_length(ctx),
+                                  params);
+    }
+</repair>

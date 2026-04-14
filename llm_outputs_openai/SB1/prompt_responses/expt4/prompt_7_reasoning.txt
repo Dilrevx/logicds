@@ -1,0 +1,16 @@
+The repair forces the CertificateVerify message to be mandatory whenever a client certificate is presented, regardless of the key type (including Diffie-Hellman certificates). In the original code, there was a conditional that only generated an error for certificates that the code recognized as "signing" (by checking (type & Constants.EVP_PKT_SIGN) != 0). This allowed certificates using Diffie-Hellman keys (which are not intended for signing) to bypass the certificate verification process entirely. An attacker could exploit this by using a Diffie-Hellman certificate from a trusted Certificate Authority and omitting the CertificateVerify message—thus potentially gaining unauthorized access.
+
+Here’s a breakdown of the key changes in the repair:
+
+1. Mandatory Error when CertificateVerify is Absent:
+  • In the patched code, when the message type in the handshake is not Constants.SSL3_MT_CERTIFICATE_VERIFY, the code now checks if a client certificate (peer != null) is present. If a certificate exists, the code immediately raises an error (via Helper.SSLerr), sends an alert, and returns a failure code.
+  • The original code only checked for signing certificates in this case, which meant that for certificates without the signing capability (like Diffie-Hellman), the certificate verify step could be bypassed. By removing that exception, the repair enforces the requirement uniformly.
+
+2. Consistent Handling of Client Certificates:
+  • The repair ensures that whenever a client certificate is provided (peer != null), the absence of a CertificateVerify message is treated as a fatal error. This prevents any certificate type from “reusing” a message—thus ensuring that the client genuinely proves possession of a corresponding private key via a signature.
+  • This change directly prevents an attacker from bypassing the authentication check with a DH certificate.
+
+3. Preservation of the Rest of the Verification Process:
+  • After the check for the CertificateVerify message, the rest of the logic (such as verifying the signature using EVP_Verify* routines or RSA/DSA/ECDSA-specific functions) remains unchanged. This maintains the proper processing of valid CertificateVerify messages while ensuring no certificate is accepted improperly.
+
+In summary, the repair closes the security hole by removing the bypass for non-signing certificates. Now, any client that presents a certificate must provide a valid CertificateVerify message, thereby ensuring that only a possessor of the correct private key (for signing, or in any case for proving possession) can successfully authenticate. This eliminates the previously exploitable scenario where DH certificates could be used to authenticate without the client actually proving possession of the private key.

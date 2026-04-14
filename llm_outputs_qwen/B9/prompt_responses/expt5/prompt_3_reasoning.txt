@@ -1,0 +1,35 @@
+The provided repair addresses the vulnerability described in the vulnerability description by ensuring that the signature algorithm specified in the `CertificateVerify` message matches one of the algorithms supported by the certificate presented by the peer. This is crucial for maintaining the integrity and security of the TLS handshake process.
+
+### Vulnerability Analysis
+
+The original code checks if the signature algorithm (`sigAlgo`) used in the `CertificateVerify` message corresponds to the type of public key present in the peer's certificate (e.g., ED25519, ED448, ECC, Falcon, RSA). However, it does not explicitly verify that the signature algorithm is one of those offered in the `signature_algorithms` extension or that it is compatible with the key in the certificate, as mandated by the specification.
+
+### Specification Compliance
+
+According to the specification, the signature algorithm used in the `CertificateVerify` message must meet several criteria:
+1. **Compatibility with Certificate**: The algorithm must be compatible with the key in the end-entity certificate.
+2. **Offered in Extensions**: For a server, the algorithm must be one offered in the client's `signature_algorithms` extension. For a client, it must be one of those present in the `supported_signature_algorithms` field of the `CertificateRequest` message from the server.
+3. **RSA Specifics**: RSA signatures must use an RSASSA-PSS algorithm, and SHA-1 must not be used in any signatures of `CertificateVerify` messages.
+
+### Repair Explanation
+
+The repair introduces a new function call `IsSigAlgoSupportedByCert(ssl, args->sigAlgo)` at the end of the existing checks. This function is responsible for verifying that the signature algorithm specified in the `CertificateVerify` message is both supported by the certificate and offered in the appropriate extension.
+
+#### Function `IsSigAlgoSupportedByCert`
+
+This hypothetical function would perform the following checks:
+- **Compatibility Check**: It would ensure that the signature algorithm is compatible with the public key type in the certificate (e.g., ECDSA keys should not be used with RSA signature algorithms).
+- **Extension Support Check**: It would verify that the signature algorithm is included in the `signature_algorithms` extension sent by the client (for server-side `CertificateVerify`) or the `supported_signature_algorithms` field in the `CertificateRequest` message (for client-side `CertificateVerify`).
+- **SHA-1 Exclusion**: It would ensure that SHA-1 is not used in any signatures, adhering to the specification's requirement that SHA-1 is not valid for `CertificateVerify` signatures.
+
+#### RSA-Specific Checks
+
+The repair also ensures that RSA signatures use an RSASSA-PSS algorithm by adding a check for `rsa_sa_algo` (PKCS#1.5). If the peer sends a PKCS#1.5 algorithm but does not have an RSA certificate, the handshake is terminated with an error. This aligns with the specification's mandate that RSA signatures must use RSASSA-PSS.
+
+#### Error Handling
+
+If any of these checks fail, the function returns `SIG_VERIFY_E`, and the handshake is terminated with a "decrypt_error" alert, as required by the specification. This ensures that only valid and secure signature algorithms are accepted, preventing potential attacks where an attacker might bypass certificate validation by using an unsupported or incompatible signature algorithm.
+
+### Conclusion
+
+By implementing these checks, the repair ensures that the `CertificateVerify` message is processed securely and in compliance with the TLS v1.3 specification. This prevents vulnerabilities where an attacker could potentially bypass certificate validation, thereby maintaining the security of the TLS handshake process.

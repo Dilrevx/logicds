@@ -1,0 +1,21 @@
+The repair addresses the logical vulnerability in the code block that checks whether the signatures used in the certificate are consistent.
+
+Originally, the code compared several fields: the lengths of the signature OIDs, the actual OID bytes using equalOids, and the lengths and content of the signature parameters buffers. The problem was in the check for the signature parameters: the call to equalBytes didn't pass the length to compare—this could allow a scenario where the byte-by-byte comparison might either overrun the buffer or compare incorrect data if lengths differ. This is crucial because the cryptographic signature must be verified against exactly the expected sequence of bytes.
+
+The fixed code now explicitly passes the required length (sig_params1.len) to the equalBytes method. This ensures that the comparison is done over the correct number of bytes. By doing so, the code makes certain that both the signature parameters have identical lengths and content. 
+
+Here’s a closer walkthrough:
+
+1. The first two conditions compare the lengths of the signature algorithm identifiers (OIDs) and then verify that the actual OID byte sequences match using equalOids. This ensures that the claimed signature algorithm correctly appears in both parts of the certificate (the tbsCertificate and the signature itself).
+
+2. Next, it checks that both signature parameters buffers have exactly the same length. When the length is non-zero, the repair now calls:
+   
+   !equalBytes(sig_params1.p, sig_params2.p, sig_params1.len)
+   
+   The key repair here is the addition of the length argument in equalBytes, which instructs the function exactly how many bytes to compare. Without this, the function might compare extra memory or fail to detect differences properly if it relies on external or default length information.
+
+3. If any of these checks fails, the certificate parsing is aborted by freeing the certificate structure (using Err.x509crtFree(crt)) and returning an error code (Constants.MBEDTLS_ERR_X509_SIG_MISMATCH). This prevents further processing of a certificate with inconsistent or tampered signature algorithm data, thereby mitigating a potential vulnerability where an invalid signature could be mistakenly accepted.
+
+4. Finally, if all checks pass, it proceeds to extract the signature using Helper.x509GetSig.
+
+By ensuring that the byte-by-byte comparison covers the correct range, the repaired code reduces the possibility of buffer overrun or mismatches that could cause incorrect parsing or cryptographic validation failure. In short, the repair fortifies the signature algorithm consistency check, which is critical for the security and integrity of the certificate verification process.

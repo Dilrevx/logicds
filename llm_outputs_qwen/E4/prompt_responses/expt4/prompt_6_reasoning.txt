@@ -1,0 +1,112 @@
+The repair implemented addresses a critical vulnerability in the handling of Security Mode Commands within the Network Access Stratum (NAS) layer of a 5G network. This vulnerability arises from the potential bypass of NAS layer security activation through the use of a prohibited integrity algorithm, specifically `NIA0_plain`, which signifies no integrity protection. The repair ensures that the system robustly validates the integrity algorithm before proceeding with any further security-related operations, thereby preventing unauthorized access and maintaining the integrity of the communication channel.
+
+### Step-by-Step Explanation of the Repair
+
+#### 1. Logging the Handling of Security Mode Command
+The repair begins with a logging statement that indicates the system is handling a Security Mode Command. This step is crucial for maintaining an audit trail and aiding in debugging and monitoring. It ensures that every instance of a Security Mode Command is recorded, providing visibility into the system's operations.
+
+```cpp
+logger.info("Handling Security Mode Command");
+```
+
+#### 2. Setting Ciphering and Integrity Algorithms
+The existing code correctly sets the ciphering and integrity algorithms based on the values received in the `security_mode_command`. This step remains unchanged in the repair process. It ensures that the system configures these critical security parameters according to the command, which is essential for establishing a secure communication channel.
+
+```cpp
+ctxt_base.cipher_algo =
+    (CIPHERING_ALGORITHM_ID_ENUM)security_mode_command.selected_nas_security_algorithms.ciphering_algorithm.value;
+ctxt_base.integ_algo =
+    (INTEGRITY_ALGORITHM_ID_ENUM)
+        security_mode_command.selected_nas_security_algorithms.integrity_protection_algorithm.value;
+```
+
+#### 3. Introducing a Check for Prohibited Integrity Algorithm Values
+A critical addition in the repair process is the check for prohibited values in the integrity algorithm. Specifically, the system now checks if the `integ_algo` is set to `NIA0_plain`, which corresponds to no integrity protection. If this condition is met, it indicates an attempt to bypass NAS layer security activation, which is a significant security risk. By adding this check, the system can immediately identify and reject such attempts.
+
+```cpp
+if (ctxt_base.integ_algo == INTEGRITY_ALGORITHM_ID_ENUM::NIA0_plain) {
+    logger.error("Prohibited integrity algorithm value detected in Security Mode Command");
+    send_security_mode_reject(cause_5gmm_t::cause_5gmm_type_::options::protocol_error);
+    return SRSRAN_ERROR;
+}
+```
+
+This check is vital because it prevents the establishment of a security context without integrity protection, which could allow an attacker to inject or modify messages undetected. The use of `NIA0_plain` is explicitly prohibited in secure communications to ensure that all data transmitted over the network is protected against tampering.
+
+#### 4. Logging and Returning Error on Prohibited Values
+When the system detects a prohibited value for the integrity algorithm, it logs an error message indicating that a prohibited value was found in the Security Mode Command. This logging helps in maintaining an audit trail of security incidents. Following the log entry, the system returns an error (`SRSRAN_ERROR`), effectively halting further processing of the command and preventing any potential security breaches.
+
+```cpp
+logger.error("Prohibited integrity algorithm value detected in Security Mode Command");
+send_security_mode_reject(cause_5gmm_t::cause_5gmm_type_::options::protocol_error);
+return SRSRAN_ERROR;
+```
+
+This dual action of logging and returning an error ensures that the incident is recorded and that the system does not proceed with insecure configurations. The `send_security_mode_reject` function sends a rejection message to the User Equipment (UE), informing it that the security mode command has been rejected due to a protocol error.
+
+#### 5. Continuing with Existing Security Capability Checks
+After the new integrity algorithm check, the system proceeds with the existing logic to verify replayed UE security capabilities. This ensures that the system maintains its robustness against other types of attacks while also addressing the specific vulnerability related to bypassing NAS security activation.
+
+```cpp
+if (!check_replayed_ue_security_capabilities(security_mode_command.replayed_ue_security_capabilities)) {
+    logger.warning("Sending Security Mode Reject due to security capabilities mismatch");
+    send_security_mode_reject(cause_5gmm_t::cause_5gmm_type_::ue_security_capabilities_mismatch);
+    return SRSRAN_ERROR;
+}
+```
+
+This step is crucial for ensuring that the UE's security capabilities match those expected by the network, preventing mismatches that could lead to security vulnerabilities.
+
+#### 6. Handling Initial Security Commands
+If the command being processed is an initial security command, the system resets the key generation node count and transaction count. This step is essential for establishing a secure baseline for communication between the network and the UE when initiating a new security context.
+
+```cpp
+if (initial_sec_command) {
+    set_k_gnb_count(0);
+    ctxt_base.tx_count  = 0;
+    initial_sec_command = false;
+}
+```
+
+Resetting these counts ensures that the security context starts fresh, reducing the risk of replay attacks and other security issues associated with reused keys or counters.
+
+#### 7. Generating NAS Keys
+The system then generates the NAS keys using the configured ciphering and integrity algorithms. This step is critical for establishing a secure communication channel, as the generated keys are used for encrypting and authenticating NAS messages.
+
+```cpp
+usim->generate_nas_keys_5g(
+    ctxt_5g.k_amf, ctxt_base.k_nas_enc, ctxt_base.k_nas_int, ctxt_base.cipher_algo, ctxt_base.integ_algo);
+logger.info(ctxt_base.k_nas_enc, 32, "NAS encryption key - k_nas_enc");
+logger.info(ctxt_base.k_nas_int, 32, "NAS integrity key - k_nas_int");
+```
+
+Logging the generated keys provides visibility into the security context and aids in debugging and monitoring.
+
+#### 8. Performing Integrity Check
+Before accepting the Security Mode Command, the system performs an integrity check on the received PDU. This ensures that the command has not been tampered with during transmission.
+
+```cpp
+logger.debug("Generating integrity check. integ_algo:%d, count_dl:%d", ctxt_base.integ_algo, ctxt_base.rx_count);
+
+if (not integrity_check(pdu.get())) {
+    logger.warning("Sending Security Mode Reject due to integrity check failure");
+    send_security_mode_reject(cause_5gmm_t::cause_5gmm_type_::options::mac_failure);
+    return SRSRAN_ERROR;
+}
+```
+
+If the integrity check fails, the system logs a warning and sends a Security Mode Reject message, indicating a MAC failure. This step ensures that only valid and unaltered commands are accepted.
+
+#### 9. Sending Security Mode Complete and Updating Counters
+If all checks pass, the system sends a Security Mode Complete message to the UE, indicating successful processing of the Security Mode Command. It also increments the receive count to maintain the integrity of the security context.
+
+```cpp
+send_security_mode_complete(security_mode_command);
+ctxt_base.rx_count++;
+return SRSRAN_SUCCESS;
+```
+
+This final step completes the security handshake, establishing a secure communication channel between the network and the UE.
+
+### Conclusion
+The repair implemented in the code snippet significantly enhances the security of the NAS layer by adding a critical validation step for the integrity algorithm. It prevents the bypass of NAS security activation through the use of prohibited algorithms, ensuring that all communication is protected against tampering and unauthorized access. By maintaining comprehensive logging and robust error handling, the repair also aids in monitoring and debugging, contributing to the overall security and reliability of the system.

@@ -1,0 +1,14 @@
+The repair fixes the vulnerability by ensuring that the certificate serial number length (cserial.size) accurately represents the true, expected value before comparing it against the serial number contained in the OCSP response (rserial). In the original buggy code, the comparison was carried out directly between the sizes and the byte arrays of the two serial numbers without first ensuring that the certificate serial number’s length was correctly determined. This omission opened up a possibility for extra, extraneous bytes (possibly left over in memory from prior allocations) to be included in cserial.data, allowing an attacker to potentially craft a malicious OCSP response that bypassed proper certificate validation.
+
+In the repaired code, an explicit assignment is introduced where cserial.size is set to a trusted value obtained via a helper function. For example, the repair uses a call to Helper.extractSerialLength(crt) to retrieve the true length of the certificate serial number using the certificate (crt) as input. This trusted source of length data ensures that cserial.size is set precisely to the intended number of bytes that should be compared.
+
+Once both serial numbers have verified and matching lengths, the function then performs the memory comparison using Helper.memcmp, comparing exactly cserial.size bytes. If either the lengths don’t match or the contents differ, the function returns an error. This two-step validation process—first checking the lengths, then comparing the actual data—ensures that the certificate validation mechanism is robust against any manipulated responses.
+
+By explicitly updating the expected certificate serial number length, the repair prevents leftover trailing bytes from causing false positives in the comparison. In a scenario where previous memory allocations inadvertently left additional data in the certificate’s serial number field, those trailing bytes might have been mistakenly taken into account during the comparison with the OCSP response serial number. The explicit extraction and assignment thus mean that only the intended bytes are considered. 
+
+In summary, the repair works as follows:
+1. It first checks if any earlier error occurred (ret < 0) and exits early if so.
+2. It then explicitly sets the certificate serial number's size using trusted data retrieved from the certificate object. This step is critical as it sanitizes the length field to ensure it reflects exactly the relevant data.
+3. Finally, it compares the OCSP response serial (with its indicated size) to the freshly set certificate serial, both in terms of length and content, ensuring that any mismatch leads to an immediate error response.
+
+This approach directly addresses the vulnerability by eliminating the risk posed by unintended trailing bytes, thereby ensuring a much more secure certificate validation process.

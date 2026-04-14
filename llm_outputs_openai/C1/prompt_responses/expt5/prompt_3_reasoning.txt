@@ -1,0 +1,15 @@
+The repair adds logic to check the return value from the internal certificate verification function, X509_verify_cert(ctx), when no application-specific callback is provided. Here’s how it works:
+
+1. If an application-provided verification callback exists (s->ctx->app_verify_callback is not NULL), then the callback is used to verify the certificate, and its result is assigned to i. In this scenario, the application is fully responsible for handling the verification result.
+
+2. If there is no application callback, the code calls the internal verification function. The potential problem arises here because X509_verify_cert may return a negative value to indicate an internal error (such as an out-of-memory condition).
+
+3. Without the repair, a negative return value would propagate upward, causing higher-level functions (like SSL_connect or SSL_do_handshake) to interpret this negative value incorrectly. Specifically, higher-level functions expect the error SSL_ERROR_WANT_RETRY_VERIFY to only be returned when an application callback is involved. Thus, if a negative value appears without an application callback, it can lead to unpredictable behavior in the SSL state machine.
+
+4. The repair addresses this vulnerability by checking if the result (i) is negative. If i is less than zero (i.e., an internal error occurred), it is reset to 0. Essentially, this treatment converts an internal error into a straightforward certificate verification failure. By normalizing any negative error to zero, it ensures that the error is handled like a failed verification rather than a distinct and misinterpreted error code.
+
+5. The benefit of this approach is twofold:
+   - It prevents the propagation of a negative value that higher-level error-handling logic is not designed to process, avoiding the unintended return of SSL_ERROR_WANT_RETRY_VERIFY.
+   - It simplifies error interpretation by ensuring that if the certificate verification fails (whether due to an internal error or a certificate issue), it will be uniformly handled as a failure (value 0), maintaining consistent behavior throughout the SSL connection process.
+
+By implementing this check and normalization, the repair eliminates the possibility of unexpected SSL error codes, thereby enhancing the reliability and predictability of the SSL handshake process.

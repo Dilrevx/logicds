@@ -1,0 +1,13 @@
+The repair adds an extra check to make sure that when we obtain an alternate chain candidate using ctx->get_issuer, the candidate certificate is actually allowed to function as a Certification Authority (CA) certificate. In the original code, if the get_issuer function returns a certificate (i.e. ok > 0), the code immediately assumed that it was valid to use that issuer for further chain construction. However, attackers could potentially craft a certificate chain (or exploit improperly set Basic Constraints) where a certificate not allowed to act as a CA could be found. This could lead to an attacker spoofing a CA role, thereby compromising the trust of the certificate verification process.
+
+In the fixed version, once a candidate issuer is obtained (xtmp) and ok > 0, the code calls X509_check_ca(xtmp). This function inspects the Basic Constraints extension in the certificate to ensure that the candidate issuer has been flagged as valid for acting as a CA. If the check fails, indicating that the certificate should not be used as a CA, the candidate is freed (X509_free(xtmp)) and the loop continues looking for an alternative issuer. Only if the certificate passes the CA check does the code then proceed to use it by cleaning up the current chain entries (via popping and freeing extra certificates) and setting the retry flag to indicate that the chain should be rebuilt with this new CA.
+
+This extra verification directly addresses the vulnerability by ensuring that only certificates with valid Basic Constraints (i.e. allowed to be a CA) can be used to extend the chain along an alternate path. This prevents an attacker from injecting a valid leaf certificate that might trick the validation process into incorrectly trusting a non-CA certificate as an alternate chain continuation.
+
+Thus, the key changes include:
+
+1. Checking the candidate certificate with X509_check_ca(xtmp) to verify its CA status.
+2. If the candidate fails the CA check, freeing the candidate and continuing the loop without altering the current chain.
+3. Only when the certificate is confirmed as a valid CA does the code free the temporary reference and clean up the chain before retrying.
+
+By performing these steps, the vulnerability, where an attacker might otherwise spoof a CA role by misusing a valid leaf certificate, is mitigated. The code now robustly ensures proper certification authority properties before building an alternate certificate chain, thereby preserving the security of the X509_verify_cert function.

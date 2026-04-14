@@ -1,0 +1,17 @@
+The repair adds an additional early check right at the beginning of the function to ensure that, when acting as a server that requires a client certificate (i.e., mutual authentication is in effect), the client has submitted a certificate verification message. Here’s how it works:
+
+1. First, the code verifies if the context is that of a server (using ssl->options.isServer). Only when in server mode is mutual authentication relevant.
+
+2. Next, it checks whether a client certificate is required. This is determined by either ssl->requiredClientCert or ssl->strictCertPolicy being true. These fields help identify if the server configuration mandates that clients must present a valid certificate during the handshake.
+
+3. The code then checks whether the session is being resumed (with ssl->sessionResumed). For session resumption, mutual authentication might not be as strict since the session has already been authenticated. In those cases, it skips this check.
+
+4. Finally, the code confirms that the client provided the certificate verify message by checking the flag ssl->receivedCertVerify. If this flag is not set, it means the client did not send the required certificate_verify message, even though it is required by policy.
+
+If all these conditions imply that a certificate is needed and has not been provided, the code sets an error (PEER_CERT_MISSING) and calls FatalAlert to initiate a proper closure of the connection per TLS standards. This prevents the handshake from continuing under insecure conditions.
+
+After this critical check, the rest of the function carries on as before: verifying message length against the total size and, if the handshake is marked as complete, then deriving the finished secret used in securing later communication.
+
+By adding this early validation step, the repair stops any attempt by a client to bypass mutual authentication by simply omitting the certificate verification message. This ensures that if mutual authentication is required, the handshake will only complete if the client provides the necessary certificate verification. The fatal alert and immediate return prevent further processing in the handshake, thereby mitigating the vulnerability where a client could otherwise connect without necessary authentication credentials.
+
+This repair is significant because it adds a safeguard at the earliest point in the handshake procedure before any cryptographic keys or secrets are derived. It ensures that the server’s expectation for a client certificate (and its associated verification) is enforced right away, reinforcing the mutual authentication process and securing the TLS v1.3 connection.

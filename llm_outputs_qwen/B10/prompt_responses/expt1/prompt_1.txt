@@ -1,0 +1,53 @@
+<repair>
+            ssl->options.buildMsgState = BUILD_MSG_WRITE;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_WRITE:
+        {
+            /* Write record header */
+            output[0] = type;
+            output[1] = ssl->version.major;
+            output[2] = ssl->version.minor;
+            c32toa(args->sz - RECORD_HEADER_SZ, output + 3);
+
+            /* Write IV */
+            if (args->ivSz > 0) {
+                if (wolfSSL_RNG_GenerateBlock(ssl->rng, output + args->idx, args->ivSz) != 0) {
+                    ERROR_OUT(RNG_FAILURE_E, exit_buildmsg);
+                }
+                args->idx += args->ivSz;
+            }
+
+            /* Write payload */
+            XMEMCPY(output + args->idx, input, inSz);
+            args->idx += inSz;
+
+            /* Write padding */
+            if (args->pad > 0) {
+                XMEMSET(output + args->idx, args->pad, args->pad);
+                args->idx += args->pad;
+            }
+
+            /* Write MAC or AEAD tag */
+            if (ssl->specs.cipher_type == aead) {
+                if (GenerateAeadTag(ssl, output + args->idx, args->sz - args->headerSz) != 0) {
+                    ERROR_OUT(MAC_ERROR, exit_buildmsg);
+                }
+            }
+            else {
+                if (GenerateMac(ssl, output + args->idx, output + RECORD_HEADER_SZ, args->sz - RECORD_HEADER_SZ) != 0) {
+                    ERROR_OUT(MAC_ERROR, exit_buildmsg);
+                }
+            }
+
+            ret = args->sz;
+        }
+        break;
+        default:
+            ERROR_OUT(BAD_STATE_E, exit_buildmsg);
+    }
+
+exit_buildmsg:
+    return ret;
+}
+</repair>

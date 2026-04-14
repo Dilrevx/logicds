@@ -1,0 +1,33 @@
+Below is one example of how you might repair the code. The vulnerability arises because when a TSIG‐signed AXFR (zone transfer) request is accepted based solely on correct TSIG validation, an attacker who happens to know a valid TSIG key name could “trick” the server into serving a transfer even if the source isn’t otherwise authorized. A proper fix is to enforce an additional access control check (an ACL) for operations like zone transfers. For example, you might verify that the request is coming from an allowed IP address (or that the key is allowed for transfers) before accepting an AXFR request.
+
+One possible repaired version might look like this:
+
+---------------------------------------------------------------
+            if (msg.tsigstatus != Commons.dns_rcode_noerror) {
+                result = Commons.DNS_R_TSIGVERIFYFAILURE;
+            }
+            else if (tsig.error != Commons.dns_rcode_noerror) {
+                result = Commons.DNS_R_TSIGERRORSET;
+            }
+            // If the request is an AXFR, enforce additional ACL restrictions
+            else if (msg.opcode == Commons.DNS_OPCODE_AXFR) {
+                // Check that the source is authorized for zone transfer.
+                // For example, isAuthorizedAXFR() should verify the transferring client against a configured ACL.
+                if (!isAuthorizedAXFR(msg.client_address, msg.requested_zone)) {
+                    result = Commons.DNS_R_AXFRACLFAILURE;
+                } else {
+                    result = Commons.ISC_R_SUCCESS;
+                }
+            }
+            else {
+                result = Commons.ISC_R_SUCCESS;
+            }
+---------------------------------------------------------------
+
+Explanations:
+1. In this patch the first two conditions remain unchanged – they still reject TSIG‐signed messages if either msg.tsigstatus or tsig.error is non‑zero.
+2. For messages requesting a zone transfer (AXFR), an extra check is added. The helper function isAuthorizedAXFR() (which you would need to implement elsewhere) validates that the client (using, for example, its IP address and/or key properties) is explicitly permitted to request an AXFR for the given zone.
+3. If the ACL check fails the code returns a new error code (here Commons.DNS_R_AXFRACLFAILURE) to indicate the AXFR operation is not authorized.
+4. Only if TSIG validation succeeds and the ACL check passes (or for non‑AXFR requests) does the code ultimately return success.
+
+This additional check prevents an attacker with a known TSIG key name from bypassing the intended ACL restrictions (which is the essence of the vulnerability described). Adjust the ACL check details (function name, parameters, error code, etc.) to match your application’s design and coding standards.

@@ -1,0 +1,31 @@
+The provided repair addresses a critical vulnerability in the TLS 1.3 handshake process within the wolfSSL library, specifically focusing on the handling of the Pre-Shared Key (PSK) and Key Share Entry (KSE) extensions. The original code did not account for scenarios where neither the PSK nor the KSE extensions were present in the ServerHello message from the server. In such cases, the code would use a default, predictable buffer for the Input Key Material (IKM), which is crucial for deriving the session master secret. This predictability can be exploited by an attacker to reconstruct the session keys, compromising the confidentiality and integrity of the TLS session.
+
+### Vulnerability Analysis
+
+The vulnerability arises from the following sequence of events in the original code:
+
+1. **Check for PSK Extension**: The code checks if the PSK extension is present in the `ssl.extensions` list. If found, it iterates through the linked list of `PreSharedKey` objects to find one that has been chosen by the server (`psk.chosen`).
+
+2. **Check for Chosen PSK**: If no chosen PSK is found (`psk == null`), the code resets the PSK-related options and clears the PSK key array.
+
+3. **Setup PSK Key**: If a chosen PSK is found, the code proceeds to set up the PSK key using the `SetupPskKey` function and marks the PSK as negotiated.
+
+4. **Encryption On and Server State Update**: Regardless of whether a PSK was found or not, the code sets `ssl.keys.encryptionOn` to `true` and updates the server state to `SERVER_HELLO_COMPLETE`.
+
+The critical issue is the lack of handling for the scenario where neither the PSK nor the KSE extensions are present. In such cases, the code does not generate a secure, random IKM value, instead relying on a default, predictable buffer. This predictability can be exploited by an attacker to derive the session keys, leading to potential eavesdropping and tampering with the session contents.
+
+### Repair Explanation
+
+The repair introduces several key changes to address the vulnerability:
+
+1. **Check for KSE Extension**: In addition to checking for the PSK extension, the code now also checks for the presence of the KSE extension. This is done by searching for the `TLSX_KEY_SHARE` extension in the `ssl.extensions` list and assigning it to the `kse` variable.
+
+2. **Generate Secure Random IKM**: If both `psk` and `kse` are `null`, indicating that neither the PSK nor the KSE extensions were received, the code generates a secure, random IKM value. This is achieved by creating a byte array of a suitable size (e.g., 32 bytes) and filling it with random bytes using a `SecureRandom` instance. The size of the IKM should be according to the protocol specifications and security requirements.
+
+3. **Use IKM for Further Processing**: The generated IKM value should be used in subsequent steps of the TLS handshake process to derive the session master secret. This ensures that the IKM is unpredictable and secure, preventing attackers from reconstructing the session keys.
+
+4. **Handle Key Share Extension**: If a KSE is present, the code should handle it appropriately. This might involve setting up the key share and performing the necessary cryptographic operations to derive the session keys. The exact implementation details depend on the specific requirements of the TLS 1.3 protocol and the wolfSSL library.
+
+5. **Maintain Original Functionality**: The repair maintains the original functionality of the code, including setting up the PSK key if a chosen PSK is found, and updating the encryption status and server state.
+
+By implementing these changes, the repair ensures that the TLS 1.3 handshake process is robust against scenarios where neither the PSK nor the KSE extensions are present. It prevents the use of predictable IKM values, thereby enhancing the security of the TLS session and protecting against potential attacks.

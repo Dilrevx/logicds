@@ -1,0 +1,27 @@
+The repair adds a critical check to ensure that the signature algorithm used in the CertificateVerify message (contained in the args.sigAlgo variable) matches the algorithm indicated in the certificate message (assumed to be held by ssl.peerCertSigAlgo). This alignment between the certificate’s algorithm and the actual signature algorithm prevents an attacker from tricking the TLS client into accepting a mismatched or unexpected signature algorithm. Without this check, an attacker might supply a different signature algorithm in CertificateVerify than what was stated in the certificate, thereby bypassing the proper validations.
+
+Here’s a step-by-step rundown of the repair:
+
+1. Initialization & Argument Parsing:
+   The function initializes the TLS context and a Dcv13Args structure, setting initial values (e.g., the default signature algorithm to anonymous). The index from which to start parsing is set using inOutIdx. 
+
+2. Signature Algorithm Decoding:
+   The code decodes the signature algorithm using CommonUtils.DecodeTls13SigAlg, populating args.sigAlgo with the value sent by the peer in the CertificateVerify message. Previously, the function would have simply proceeded with further decoding and verification of the signature data without confirming that the received algorithm was expected per the certificate.
+
+3. New Verification Step:
+   Right after decoding and before the function advances to parsing the rest of the data, the repaired code introduces an if-statement:
+   
+       if (args.sigAlgo != ssl.peerCertSigAlgo) {
+           Wslib.WOLFSSL_MSG("Mismatch in signature algorithm between certificate and CertificateVerify message");
+           return CommonsConstants.SIG_VERIFY_E;
+       }
+   
+   This check compares the signature algorithm specified in the CertificateVerify message (args.sigAlgo) with the expected signature algorithm from the certificate (ssl.peerCertSigAlgo). If there’s a mismatch, the function immediately logs an error and returns a signature verification error, preventing further processing.
+
+4. Continued Byte Buffer Checks:
+   After the new check, the code continues to update the pointer, performs bounds checking, and decodes the size of the signature. It then enters additional verification steps specific to each signature algorithm (e.g., confirming that the respective keys for ED25519, ED448, ECC, Falcon, RSA, etc. are present). These parts already existed in the original code and ensure that the correct key types are being used.
+
+5. How This Fix Addresses the Vulnerability:
+   The TLS v1.3 vulnerability described was due to the possibility of bypassing certificate verification by using a different sig_algo in the CertificateVerify message. By explicitly checking that the signature algorithm matches the algorithm provided in the certificate message, the repair forces consistency between the two messages. This means that an attacker cannot, for example, send a weaker or otherwise unintended signature algorithm for verification while the certificate expects a stronger one, thereby removing the avenue for bypassing certificate checks.
+
+In summary, the repair adds a simple but crucial comparison between the expected certificate signature algorithm and the algorithm actually received during the TLS handshake. This consistent enforcement from message to message closes off the vulnerability where mismatches could be exploited to bypass certificate verification.

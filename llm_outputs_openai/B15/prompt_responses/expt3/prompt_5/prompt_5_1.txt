@@ -1,0 +1,75 @@
+Below is an example patch that implements the repair as described. In the new version the code no longer simply acts on the first keynode found; it enters a loop and explicitly compares each candidate against the supplied key before deciding that it may be trusted. This iteration ensures that every matching candidate is examined and only a key that fully matches (using a dedicated comparison routine) is accepted. Note that resource cleanup is performed in each iteration to avoid leaks.
+
+------------------------------------------------------------
+/* Repaired code snippet */
+result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+                                  dst_key_alg(key), dst_key_id(key),
+                                  &keynode);
+/* If there was an error during lookup (other than no match or partial match), return it immediately. */
+if (result != ISC_R_SUCCESS && result != DNS_R_PARTIALMATCH &&
+    result != ISC_R_NOTFOUND) {
+    goto cleanup;
+}
+
+/* Initialize the flag to false; it will only be set to true if a proper match is found. */
+*goodkey = false;
+
+/* Iterate over all matching keynodes */
+while (keynode != NULL) {
+    /*
+     * Compare the candidate keynode's key with the supplied key.
+     * This function performs a full comparison to ensure the keys are identical.
+     */
+    if (dst_key_compare(keynode->key, key) == 0) {
+        /* The candidate is a full match, so detach it to avoid reuse */
+        dns_keytable_detachkeynode(vctx->secroots, &keynode);
+        /* Mark our DNSSEC data sets as secure */
+        dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+        dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+        *goodkey = true;
+        /* A valid trust anchor was found; break out of the loop */
+        break;
+    } else {
+        /*
+         * No match for this keynode.
+         * Remove the current keynode from the trust anchor table to avoid processing it again.
+         */
+        dns_keytable_detachkeynode(vctx->secroots, &keynode);
+        /*
+         * Fetch the next matching keynode, if any.
+         * (Assuming dns_keytable_findnextkeynode is a function that returns the next candidate.)
+         */
+        result = dns_keytable_findnextkeynode(vctx->secroots, vctx->origin,
+                                                dst_key_alg(key), dst_key_id(key),
+                                                &keynode);
+        /*
+         * If the search resulted in an error (other than not found), return it.
+         */
+        if (result != ISC_R_SUCCESS && result != DNS_R_PARTIALMATCH &&
+            result != ISC_R_NOTFOUND) {
+            goto cleanup;
+        }
+    }
+}
+
+/*
+ * If no matching keynode was ever found, the result of the overall operation remains success,
+ * but the flag *goodkey is still false. This means that while the operation did not error out,
+ * no trust anchor was identified in the table.
+ */
+
+cleanup:
+dst_key_free(&key);
+return (result);
+
+------------------------------------------------------------
+
+Explanations of the key changes:
+
+1. Instead of handling the returned keynode with a switch statement, the patch enters a while‐loop to process every candidate.
+2. In each loop iteration, the code uses a dedicated key comparison function (here named dst_key_compare) to verify a full key match.
+3. If a match is found, the key node is detached, the DNSSEC datasets are marked secure, and the good key flag is set.
+4. When the current candidate does not match, it is detached immediately and the code continues searching for any further candidates using dns_keytable_findnextkeynode.
+5. In all cases, the allocated key is freed in the cleanup section, ensuring proper resource management.
+
+This change mitigates the risk of an on-path attacker taking advantage of incomplete validation by ensuring that every candidate is exhaustively verified before a trust anchor is accepted.

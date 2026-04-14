@@ -1,0 +1,21 @@
+The repair starts by preserving the original conditions that check whether any of the pointers for the engine, the alternative implementation (tmpimpl), or the provided implementation (impl) are non-null. These checks determine if an alternative (non-standard) processing path is needed.
+
+The new modification introduces two extra conditions that specifically check the origin of the cipher. This is critical because the original vulnerability allowed a scenario where a cipher created with legacy methods (legacy custom cipher) was not being handled correctly. Specifically, if a cipher with an undefined identifier (for example, NID_undef) were mistakenly matched with a null cipher, it could lead to a security issue by exposing plaintext as ciphertext.
+
+The first added condition:
+
+  (ctx->cipher != NULL && ctx->cipher->origin == EVP_CIPHER_LEGACY)
+
+checks whether the primary cipher pointer is non-null and whether its origin field indicates that it was created using the legacy custom method (symbolized by EVP_CIPHER_LEGACY). This ensures that, if a legacy cipher is explicitly assigned to ctx->cipher, the code enters the legacy branch to handle it consistently.
+
+The second added condition:
+
+  (ctx->cipher == NULL && ctx->fetched_cipher != NULL && ctx->fetched_cipher->origin == EVP_CIPHER_LEGACY)
+
+covers the scenario where the primary cipher pointer (ctx->cipher) is null, but another pointer (ctx->fetched_cipher) holds a legacy cipher. By checking that fetched_cipher is non-null and that its origin is the legacy custom method, the code safely redirects the execution to the legacy handling branch even if the primary pointer is not set.
+
+By adding these conditions, the repair ensures that any cipher known to have originated from the legacy methods is explicitly recognized. Once one of these conditions (or one of the original ones) is met, the function cleans up by freeing and nullifying the fetched_cipher pointer. This removal prevents any risk of mistakenly reusing a cipher that may have an undefined or unintended identifier.
+
+Finally, the flow is directed to the legacy handling branch (via goto legacy;), which is presumed to properly handle these legacy ciphers. This segregation is important because it ensures that the legacy path is isolated, preventing the system from mixing legacy cryptographic material with newer provider-based implementations.
+
+In summary, the repair fixes the vulnerability by explicitly checking the origin of the cipher—both when it is directly assigned (ctx->cipher) or when it is stored in the temporary fetched pointer (ctx->fetched_cipher). This prevents inadvertently using an undefined or mismatched cipher, which could compromise the integrity of the encryption process. The reliable segregation into a legacy handling branch ensures that only the proper, intended cryptographic methods are used, thereby significantly reducing the risk of a security breach stemming from legacy cipher mishandling.

@@ -1,0 +1,17 @@
+The repair addresses the vulnerability by explicitly handling the case when the supplied key is not found in the trust anchor table. In the buggy code, if the key wasn’t found or only partially matched, the function simply returned success without marking the data as insecure. This means that mirror zone data could be used even though it wasn’t validated by a trusted key. An attacker, exploiting this gap, could inject forged, unvalidated zone data that appears to be from a legitimate trust anchor, thereby compromising the integrity of mirror zones.
+
+Key points in the repair include:
+
+1. Trust Classification:  
+   If the key lookup (dns_keytable_findkeynode) fails to find a proper trust anchor (DNS_R_PARTIALMATCH or ISC_R_NOTFOUND), the repair explicitly sets the trust for both the DNSKEY set and its signatures to dns_trust_insecure. This prevents mirror zone data from being treated as secure, forcing the system to fallback to traditional recursion rather than relying on possibly compromised mirror zone data.
+
+2. Control Flow and Return Code:  
+   In the failure case, the repair does not simply convert the result to a successful one; instead, it returns an ISC_R_NOTFOUND error. By doing this, the function ensures that callers can detect that the mirror zone data should not be trusted. This stops the system from accepting unvalidated or forged data from potentially malicious sources.
+
+3. Goodkey Flag:  
+   The flag *goodkey is set to false when the key is not found, which provides an additional internal indicator that the security check failed. This extra marker helps ensure that any logic depending on this flag knows that conditions for utilizing the mirror zone data have not been met.
+
+4. Preventing Reuse of Trust Anchor Data:  
+   When a trusted key is found (ISC_R_SUCCESS), the trust anchor node is detached from the table to prevent its subsequent reuse in mirror zone validation. This is important to maintain freshness and integrity of the mirror zone mechanism. However, this safe action only occurs if the key is properly validated, thereby preventing an attacker from poisoning the cache with untrusted data.
+
+Overall, the repair ensures that only data validated with a proper trust anchor is marked as secure. In cases where the trust anchor is missing or only partially matches, the system is made to treat the data as insecure and avoid its use, effectively mitigating the risk of a mirror zone attack. This strict handling of key validation and trust marking is crucial in defending against an on-path attacker who might otherwise be able to inject forged zone data into the recursive server’s cache.

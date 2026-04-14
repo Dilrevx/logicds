@@ -1,0 +1,27 @@
+Below is one correct way to fix the bug. In the buggy code the branch for a certificate verification failure resets ret to the (negative) error code – this causes OCSP_basic_verify to return a “fatal error” (i.e. a negative value) although the expectation is that a normal verification failure should simply return 0. One way to fix this is to log the error but then force ret to 0 before exiting. For example, suppose the original code looked like this:
+
+--------------------------------------------------
+  if (ret <= 0) {
+   ret = X509_STORE_CTX_get_error(ctx);
+   ERR_raise_data(ERR_LIB_OCSP, OCSP_R_CERTIFICATE_VERIFY_ERROR,
+    "Verify error: %s", X509_verify_cert_error_string(ret));
+   goto end;
+  }
+--------------------------------------------------
+
+A repaired version might look like:
+
+--------------------------------------------------
+  if (ret <= 0) {
+   int verify_err = X509_STORE_CTX_get_error(ctx);
+   ERR_raise_data(ERR_LIB_OCSP, OCSP_R_CERTIFICATE_VERIFY_ERROR,
+    "Verify error: %s", X509_verify_cert_error_string(verify_err));
+   /* Instead of returning a negative/fatal error, we return 0 to indicate verification failure */
+   ret = 0;
+   goto end;
+  }
+--------------------------------------------------
+
+With this change the function will return 0 (a normal, non‐fatal failure) in the event the certificate verification fails. This repair prevents the OCSP verification function from mistakenly indicating a fatal error when most users (who do not use the OCSP_NOCHECKS flag) are expecting a return value of 0 on certificate verification failure.
+
+This patch thereby repairs the vulnerability so that the positive “verification” result does not get triggered along with contradictory error messages or a negative error return.

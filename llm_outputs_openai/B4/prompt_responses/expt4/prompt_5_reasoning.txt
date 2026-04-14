@@ -1,0 +1,21 @@
+The repair adds a check that verifies the actual number of bytes returned by gnutls_x509_crt_get_serial (stored in the variable t) matches exactly the expected serial length from the OCSP response (rserial.size). In the original code, the serial number comparison only looked at the content of rserial.data with the allocated cserial.data using the provided rserial.size. However, if gnutls_malloc or gnutls_x509_crt_get_serial left extra trailing bytes, those could be inadvertently considered valid, allowing an attacker to manipulate the certificate serial by adding trailing data.
+
+Here’s what the repair does explicitly:
+
+1. After allocating cserial.data with a size equal to rserial.size, the code sets t to this size.  
+2. It then calls gnutls_x509_crt_get_serial, which fills the buffer and also sets t to the actual number of bytes used to represent the certificate’s serial number.
+3. The repair then adds a conditional:
+   
+   if (t != rserial.size || memcmp(cserial.data, rserial.data, rserial.size) != 0) { ... }
+   
+   This ensures two things:  
+     • The length of the certificate’s serial number exactly matches the length provided in the OCSP response.  
+     • The actual bytes match exactly.
+     
+   This prevents any trailing bytes from skewing the comparison. 
+
+4. Other parts of the code (issuer DN hash verification, memory cleanup, etc.) remain unchanged since they were not directly related to the vulnerability.
+
+By ensuring that the certificate's serial number length directly corresponds to the OCSP response's serial length, the repair closes the window of attack where an attacker could exploit trailing bytes. This validation protects against certificate validation bypass, ensuring that any mismatch in the expected byte count results in a response error.
+
+In summary, the change requires that the certificate serial has the exact expected length and contents as indicated by the OCSP response, thereby mitigating the vulnerability stemming from possible trailing bytes left by previous allocations.

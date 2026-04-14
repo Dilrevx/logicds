@@ -1,0 +1,13 @@
+The repair adds explicit checks to verify that any certificate acting as an issuer has its Basic Constraints extension marked with the CA flag. In other words, it ensures that a certificate is only accepted as a valid Certification Authority if it is actually allowed to act as one. Here’s a walk‐through of the changes:
+
+1. In the first branch where the certificate chain contains only one certificate (a self-signed leaf), after obtaining the issuer via ctx.get_issuer(x), the code now checks:
+  if (ok > 0 && !Helper.is_ca(Helper.lastIssuer))
+If this condition is true, it indicates that even though an issuer was found, it is not a valid CA because it lacks the proper Basic Constraints. The code then sets an error (X509_V_ERR_INVALID_CA) and calls the callback function so that the chain is not trusted. This prevents a leaf certificate without appropriate CA permissions from being mistakenly accepted as an issuer.
+
+2. After retrieving an issuer certificate in the loop that adds issuers to the chain, the repair now verifies that the returned certificate is indeed a valid CA:
+  if (!Helper.is_ca(Helper.lastIssuer))
+If the certificate doesn’t have its CA flag set, the code again errors out with X509_V_ERR_INVALID_CA and returns early. This stops the building of a chain that includes a certificate that should not be authorizing other certificates.
+
+3. For alternative certificate chains (where alternative trust paths are explored), the repair introduces a check in the loop iterating over possible alternative chains. If an issuer is found but lacks the CA flag, the alternative path is skipped (using the continue statement). This way, a non-valid CA certificate cannot be used to construct a valid chain, thus mitigating the potential for spoofing a Certification Authority.
+
+Overall, these modifications fix the vulnerability by enforcing that every certificate acting as an issuer in any part of the chain must be a valid CA as per its Basic Constraints. It directly addresses the vulnerability where an attacker might present a valid leaf certificate that could be misinterpreted as a CA when following an alternative chain path. By rejecting such certificates early in the chain-building process, the repair prevents unintended certificate verifications and reinforces trust chain integrity.

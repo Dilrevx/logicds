@@ -1,0 +1,91 @@
+package master;
+
+import common.*;
+
+public class EapPeap {
+    public static final int EAP_TLV_RESULT_SUCCESS = 1;
+    public static final int EAP_TLV_RESULT_FAILURE = 0;
+
+    public static int WPA_GET_BE16(int x){
+        return x;
+    }
+
+
+    public static int eap_tlv_process(EapSm sm, EapPeapData data,
+                                      EapMethodRet ret, WPABuf req, boolean force_failure) {
+        int resp_status;
+
+        // Check that the request buffer is valid and long enough to contain a TLV status field (2 bytes)
+        if (req == null || req.length() < 2) {
+            System.err.println("EAP-TLV: Too short frame; missing TLV status field");
+            ret.methodState = EapMethodRet.MethodState.METHOD_DONE;
+            ret.decision = EapMethodRet.Decision.DECISION_FAIL;
+            return -1; // Use an appropriate error code
+        }
+
+        // Instead of using a constant, safely extract the two-byte TLV status from the beginning of the buffer.
+        // Converting from big-endian.
+        int tlvStatus = ((req.getByte(0) & 0xff) << 8) | (req.getByte(1) & 0xff);
+
+        // Verify that the TLV status indicates success (unless force_failure is true)
+        if (force_failure || tlvStatus != EAP_TLV_RESULT_SUCCESS) {
+            System.err.println("EAP-TLV: TLV result error (status=" + tlvStatus + ", force_failure=" + force_failure + ")");
+            ret.methodState = EapMethodRet.MethodState.METHOD_DONE;
+            ret.decision = EapMethodRet.Decision.DECISION_FAIL;
+            return -1;
+        }
+
+        // Continue processing the TLV payload.
+        // Begin parsing after the TLV status field.
+        int index = 2;
+        while (index < req.length()) {
+            // Ensure there are at least 2 bytes available for the TLV header (type and length)
+            if (index + 2 > req.length()) {
+                System.err.println("EAP-TLV: Insufficient data for TLV header");
+                ret.methodState = EapMethodRet.MethodState.METHOD_DONE;
+                ret.decision = EapMethodRet.Decision.DECISION_FAIL;
+                return -1;
+            }
+
+            // Read TLV header fields
+            int tlvType = req.getByte(index) & 0xff;
+            int tlvLen  = req.getByte(index + 1) & 0xff;
+            index += 2;
+
+            // Verify that the rest of the buffer is long enough for the specified TLV data length.
+            if (index + tlvLen > req.length()) {
+                System.err.println("EAP-TLV: TLV length " + tlvLen + " exceeds available data");
+                ret.methodState = EapMethodRet.MethodState.METHOD_DONE;
+                ret.decision = EapMethodRet.Decision.DECISION_FAIL;
+                return -1;
+            }
+
+            // Extract the TLV payload safely
+            byte[] tlvData = req.getBytes(index, tlvLen);
+            // Process the TLV based on its type.
+            processTlv(tlvType, tlvData);
+
+            // Move to the next TLV
+            index += tlvLen;
+        }
+
+        // Everything processed correctly; set success outcome.
+        resp_status = 0; // Assuming 0 represents success.
+        ret.methodState = EapMethodRet.MethodState.METHOD_NONE;
+        ret.decision = EapMethodRet.Decision.DECISION_UNCOND_SUCC;
+        return resp_status;
+    }
+
+
+    public static boolean peapPhase2Sufficient(EapSm sm, EapPeapData data) {
+        if ((data.phase2Auth == EapPeapData.ALWAYS ||
+                (data.phase2Auth == EapPeapData.FOR_INITIAL &&
+                        !sm.tlsConnectionResumed() &&
+                        !data.ssl.clientCertConf) ||
+                data.phase2EapStarted) &&
+                !data.phase2EapSuccess) {
+            return false;
+        }
+        return true;
+    }
+}

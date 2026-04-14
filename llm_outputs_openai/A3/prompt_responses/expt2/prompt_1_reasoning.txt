@@ -1,0 +1,13 @@
+The repair adds a new check before proceeding with the fetching of an equivalent cipher. In the original code, if a custom cipher was used with its NID improperly set to NID_undef, the function could mistakenly fetch the NULL cipher. This is dangerous because using the NULL cipher would effectively leave the plaintext unchanged, meaning encryption failure.
+
+Here’s a breakdown of the repair changes:
+
+1. A new validation block is inserted right after the initial condition. This block checks if ctx->cipher is not NULL and then inspects its NID using EVP_CIPHER_nid().
+
+2. The check specifically tests whether the NID of the cipher equals NID_undef. If it does, the code raises an error (via ERR_raise) with an appropriate error code (EVP_R_INVALID_CIPHER_NID). Then it immediately returns an error code (0). This prevents further processing.
+
+3. By returning early when a cipher with an undefined NID is found, the code avoids any chance of the subsequent logic (which frees the fetched cipher and then jumps to legacy processing) accidentally substituting the NULL cipher when a proper custom cipher was expected.
+
+4. After the new validation, the original operations remain unchanged for valid cases. If the custom cipher’s NID is properly defined, then the code compares the pointer values of ctx->cipher and ctx->fetched_cipher and sets ctx->cipher to NULL if they match. It then frees the fetched cipher and resets the pointer, before continuing into the legacy code path.
+
+This patch fixes the vulnerability by ensuring that no custom cipher with an undefined NID can pass through the initialization process. Since NID_undef is supposed to uniquely indicate an error or a misconfigured cipher, checking it explicitly stops the process before OpenSSL can mistakenly retrieve and use the NULL cipher from the providers. Overall, this strengthens the cipher initialization logic by validating inputs upfront, thereby preventing the unintended use of a non-secure encryption method.

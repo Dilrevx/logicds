@@ -1,0 +1,29 @@
+We need to ensure that when matching a reply to a forwarded query, dnsmasq verifies all the query parameters required by RFC5452 – not only the identifier and (optionally) the hash, but also the reply’s destination address and port. In the original code, only the id (and maybe a query hash) is checked:
+
+  if (f->sentto && f->new_id == id && 
+    (!hash || memcmp(hash, f->hash, HASH_SIZE) == 0))
+   return f;
+
+Because it does not check the destination (reply) address or port, an attacker has fewer parameters to guess when trying to forge a response (this simplifies DNS cache poisoning attacks).
+
+A corrected version of the code will add checks to verify that the reply came to the same address and port that were used when the query was sent. For example, assume that the reply comes with reply_port and reply_addr (of type struct in_addr or a similar structure), and that the forwarded query stores the expected address/port in f->dest_addr and f->dest_port. The fix would be to add further conditions that these match. One acceptable repair is:
+
+------------------------------------------------------------
+  if (f->sentto && f->new_id == id &&
+    (!hash || memcmp(hash, f->hash, HASH_SIZE) == 0) &&
+    f->dest_port == reply_port &&
+    f->dest_addr.s_addr == reply_addr->s_addr)
+   return f;
+------------------------------------------------------------
+
+Let’s break down the fix step by step:
+
+1. f->sentto ensures that this forwarded-query entry is active.
+2. f->new_id == id checks that the new_id in the entry matches the reply’s id.
+3. The existing hash check (if provided) remains in place.
+4. f->dest_port == reply_port now verifies that the destination port matches the expected port.
+5. f->dest_addr.s_addr == reply_addr->s_addr does the same for the IP address.
+
+By requiring the reply to come to the exact port/address that was used in the forwarded query, the code now adheres to RFC5452 and makes forging a reply considerably harder for an attacker.
+
+This is one straightforward repair. (Note: Your specific variable names and structure fields may differ, but the general idea is to perform a comparison of the reply’s destination IP and port against the stored values for the pending query.)

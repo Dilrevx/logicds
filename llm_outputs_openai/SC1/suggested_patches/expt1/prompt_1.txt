@@ -1,0 +1,72 @@
+import java.util.List;
+import common.*;
+
+public class OpenSslSsl {
+    public VerifyCallback verify_callback;
+    public SslContext ctx;
+    public int verify_result;
+    public List<X509> verified_chain;
+    public VerifyParams param;
+    public Session session;
+    public int verify_mode;
+    public int rwstate;
+    public Tmp tmp;
+
+    public static final int SSL_VERIFY_NONE = 0;
+    public static final int SSL_RETRY_VERIFY = 1;
+    public static final int SSL_R_CERTIFICATE_VERIFY_FAILED = 1001;
+
+
+    public static int ssl_verify_cert_chain(OpenSslSsl s, List<X509> sk) {
+        // Validate inputs to avoid null pointer or empty chain issues.
+        if (s == null || sk == null || sk.isEmpty()) {
+            // Return an error code (e.g. -1) if parameters are not valid.
+            return -1;
+        }
+        
+        X509_STORE_CTX ctxStore = new X509_STORE_CTX();
+        int ret = -1;
+        
+        // Initialize the store context with the trusted certificate store from s,
+        // the end-entity certificate (first in the list), and the rest of the chain.
+        // This initialization ensures that the context is properly associated with
+        // a trusted store and the appropriate certificate chain.
+        // Note: Assume that s.cert_store is a properly initialized X509_STORE.
+        if (!ctxStore.init(s.cert_store, sk.get(0), sk)) {
+            // Failed to initialize the verification context.
+            return -1;
+        }
+        
+        // If a verification callback is provided, set it for the context.
+        if (s.verify_callback != null) {
+            ctxStore.set_verify_cb(s.verify_callback);
+        }
+        
+        // Optionally, set the default verification paths if needed.
+        ctxStore.set_default_verify_paths();
+        
+        // Perform the verification of the certificate chain.
+        ret = ctxStore.verify_cert();
+        
+        // Clean up the context to free resources.
+        ctxStore.cleanup();
+        
+        return ret;
+    }
+
+
+    public static int tls_post_process_server_certificate(OpenSslSsl s, int wst) {
+        int i = ssl_verify_cert_chain(s, s.session.peer_chain);
+        if (i == -1) {
+            s.rwstate = SSL_RETRY_VERIFY;
+            return WorkState.WORK_MORE_A;
+        }
+        if (s.verify_mode != SSL_VERIFY_NONE && i == 0) {
+            SSLfatal(s, Err.ssl_x509err2alert(s.verify_result), SSL_R_CERTIFICATE_VERIFY_FAILED);
+            return WorkState.WORK_ERROR;
+        }
+        return WorkState.WORK_FINISHED_CONTINUE;
+    }
+
+    static void SSLfatal(OpenSslSsl s, int alert, int code) {}
+}

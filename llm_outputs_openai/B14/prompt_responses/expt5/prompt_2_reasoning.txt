@@ -1,0 +1,14 @@
+The repair addresses the vulnerability by taking immediate action on the TCP socket instead of relying on the asynchronous event queuing mechanism, which could delay or indefinitely postpone socket cleanup. In the original code, if the detachment operation was deferred to a worker thread, then under a specifically crafted TCP stream the event might never be processed, leaving the socket in the CLOSE_WAIT state indefinitely.
+
+Here’s a walkthrough of the changes:
+
+1. Immediate Shutdown and Close:  
+   The code now begins by calling the shutdown() system call on the socket file descriptor with SHUT_RDWR as an argument. This call forces the connection to terminate both sends and receives, which guarantees that the TCP connection is halted regardless of any asynchronous cleanup delays. Following shutdown, close() is called to free the file descriptor, ensuring that the resource is properly deallocated.
+
+2. Eliminating the Asynchronous Detachment:  
+   Instead of queueing a detach event for a worker thread (which might be delayed or never processed due to malicious input), the repair directly invokes the detachment callback nmhandle_detach_cb. This ensures that the socket cleanup and associated resource management occurs immediately and synchronously, leaving no opportunity for the socket to remain in a problematic state.
+
+3. Error Handling Considerations:  
+   Although minimal error handling is illustrated (by potentially logging any error returned by shutdown), the primary fix here is to ensure that even if errors occur, attempts are made to promptly close the socket. Thus, the vulnerability of an indefinitely open CLOSE_WAIT connection is mitigated.
+
+In summary, by shutting down and closing the socket immediately, the repair avoids the risk of leaving sockets hanging in the CLOSE_WAIT state due to delayed asynchronous processing. This approach ensures that all TCP connections are reliably terminated at the moment of detection, eliminating an attack vector that could be exploited through carefully crafted TCP streams aiming to misuse delayed worker thread processing.

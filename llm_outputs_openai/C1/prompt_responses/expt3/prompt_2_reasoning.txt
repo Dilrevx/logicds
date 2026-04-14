@@ -1,0 +1,9 @@
+The repair introduces a simple but critical check to normalize a negative certificate verification result into a standard failure indicator. Here’s how it works:
+
+1. If an application-specific callback (app_verify_callback) is provided, the code uses that callback. In that case, the application decides how to interpret the result, so no change is needed.
+
+2. When no application callback is set, the repair calls X509_verify_cert() to perform internal certificate verification. Importantly, this function can return a negative value to signal an internal error (for example, an out-of-memory error). In the original buggy code, such a negative value was passed along, leading higher-level functions (such as SSL_connect() or SSL_do_handshake()) to detect it as SSL_ERROR_WANT_RETRY_VERIFY unexpectedly. This error code is normally intended only when an application callback is used, which can cause problematic behavior.
+
+3. To avoid that, the repair immediately checks if the result (i) is negative. If it is, the repair resets the result to zero. By doing so, the internal error is “normalized” to indicate a generic verification failure rather than an internal error. This ensures that the SSL handshake process treats the failure consistently and does not return an unexpected error code to the application.
+
+In summary, the repair fixes the vulnerability by converting any negative error codes from the internal certificate verification process into a simple failure (i.e., zero). This adjustment prevents the SSL layer from mistakenly handling internal errors as if an application-specific callback was present. This normalization protects against unpredictable behavior and ensures that SSL_get_error() returns the expected error codes, thereby maintaining robustness and consistency during the SSL/TLS handshake.

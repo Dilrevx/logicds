@@ -1,0 +1,17 @@
+The repair introduces a check for the key share extension when no valid pre-shared key (PSK) is found. In the vulnerable code, if no PSK is chosen, the code would simply zero out the PSK buffer and continue. This could lead to a situation where a default, predictable Input Keying Material (IKM) is used to generate the session secret, compromising security.
+
+Key steps in the repair:
+
+1. Finding the Key Share Extension:  
+   After determining that no PSK is chosen (psk is null), the code now searches for a key share extension using TLSX.find(ssl.extensions, CommonsConstants.TLSX_KEY_SHARE). This enforces the requirement specified in TLS 1.3 that a client must include either the pre_shared_key extension or the key_share extension.
+
+2. Aborting the Handshake when Missing a Required Extension:  
+   If the key share extension is not found, the repair aborts the handshake by setting an alert (ssl.alert = CommonsConstants.alert_missing_extension) and returning a fatal error (CommonsConstants.fatal_error). This is in line with the specification which mandates that on missing required extensions the connection must be terminated. This prevents the fallback to any default predictable IKM.
+
+3. Using the Key Share for Secret Generation:  
+   If the key share extension is present, the handshake proceeds by calling SetupKeyShare (assumed to be the proper procedure to handle key shares) with the provided extension data. This ensures that a valid key material received via a proper key share extension is used for setting up the cryptographic state, and not a default, predictable value.
+
+4. Default Handling for PSK:  
+   On the other hand, if the PSK extension is valid and selected, the flow goes to the well-established PSK-based setup, calling SetupPskKey. This means that if a secure PSK is provided, the session is correctly configured with it.
+
+By enforcing that either a valid PSK or a valid key share extension must be present (and aborting the handshake if both are absent), the code adheres strictly to the TLS 1.3 specification. This requirement prevents the use of any default IKM value, ensuring that the session master secret is derived using genuinely secure, client-supplied keying material. The repair eliminates the scenario that allowed a malicious server, which might omit both extensions, to cause the use of a known default IKM. Thus, it closes the vulnerability by making certain that the session key generation's inputs come from proper and securely provided sources.

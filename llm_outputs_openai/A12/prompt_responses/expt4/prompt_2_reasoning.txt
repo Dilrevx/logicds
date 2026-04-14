@@ -1,0 +1,13 @@
+The repaired code adds an early certificate verification check at the start of the function. This extra check is specifically for the server side when it expects a client certificate due to mutual authentication requirements.
+
+1. First, the code verifies that the connection is on the server side by checking that the appropriate server flag is set (ssl->options.side == WOLFSSL_SERVER). Then, it checks if a client certificate is required. This is done by either verifying if mutual authentication is requested (ssl->options.doMutualAuth) or if the server has been configured to require a certificate (ssl->options.requireCert). These conditions ensure that the check only applies when the security policy demands a certificate.
+
+2. The check also ensures that the connection is not a session resume (using ssl->session.resumed). In resumed sessions, mutual authentication might be relaxed because an initial full handshake might have already taken place. Thus, the check is skipped for resumed sessions to maintain compatibility.
+
+3. Next, the code checks if the certificate verification message has been received. This is done via a flag (ssl->keys.certVerifyReceived). If the client did not provide a certificate or the verification message wasn’t processed, this flag will be false.
+
+4. If all these conditions indicate that the client certificate is expected but not provided, the code takes immediate action. It sets an error code (NO_CERTIFICATE) to indicate that the required certificate is missing. It also triggers a fatal TLS alert (using FatalAlert with TLS1_ALERT_CERTIFICATE_REQUIRED), immediately notifying the client about the failure and halting the handshake process. This prevents a malicious client from bypassing certificate checks by omitting the verify message, which was the vulnerability in the original code.
+
+5. After this early validation, the remainder of the function proceeds as before. The code first checks bounds to ensure that the incoming message doesn’t exceed the total allowed size. Then, if the handshake is marked as complete, it computes the finished secret for message authentication purposes. This part remains unchanged from the original implementation.
+
+By performing the certificate existence check before processing the rest of the handshake (and before working with buffer size or generating secrets), the repair ensures that no further handshake processing occurs if the client has not properly completed the mutual authentication step. Essentially, this early termination prevents an attacker from exploiting the vulnerability to bypass required certificate verification in TLS v1.3, thereby reinforcing the security guarantees expected under mutual authentication.

@@ -1,0 +1,27 @@
+The vulnerability addressed in the provided code snippet pertains to a logical flaw within the `ssl3_get_cert_verify` function, which is responsible for handling the CertificateVerify message during an SSL/TLS handshake. This function is crucial for ensuring that the client has possession of the private key corresponding to the public key presented in its Certificate message, thereby authenticating the client to the server.
+
+### Vulnerability Explanation
+
+The original code contained a logical flaw that allowed clients to bypass the CertificateVerify step when using certain types of certificates, specifically those based on Diffie-Hellman (DH). In a typical SSL/TLS handshake, if the server requests client authentication, the client must send a CertificateVerify message to prove possession of the private key associated with the certificate it presented. However, the flawed logic did not enforce this requirement for certificates that do not include signing capabilities, such as those based on DH.
+
+This oversight could allow an attacker to craft a malicious TLS handshake where they present a DH certificate but omit the CertificateVerify message. Since the server's logic did not properly check for the presence of the CertificateVerify message when the certificate does not have signing capabilities, the handshake could succeed without the client demonstrating knowledge of the private key. This would effectively allow unauthorized access to services that require client authentication.
+
+### Repair Explanation
+
+The repair introduced corrects this logical flaw by ensuring that the CertificateVerify message is always expected and verified when the server requests client authentication, regardless of the type of certificate presented by the client. Here’s how the repair works:
+
+1. **Message Type Check**: The code checks if the current message type (`s->s3->tmp.message_type`) is `SSL3_MT_CERTIFICATE_VERIFY`. This is a critical step to ensure that the server receives the expected message from the client.
+
+2. **Unexpected Message Handling**: If the message type is not `SSL3_MT_CERTIFICATE_VERIFY`, the server sets `s->s3->tmp.reuse_message` to 1, indicating that the received message should be reused in subsequent processing. This is important for maintaining the integrity of the handshake process.
+
+3. **Certificate Type Verification**: The code then checks if the peer certificate (`peer`) is not null and if the certificate type includes the `EVP_PKT_SIGN` flag. This flag indicates that the certificate is capable of signing data, which is necessary for generating a valid CertificateVerify message.
+
+4. **Error Handling**: If both conditions are met (certificate is present and capable of signing), the server sends an alert (`SSL_AD_UNEXPECTED_MESSAGE`) and logs an error (`SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_MISSING_VERIFY_MESSAGE)`). This ensures that the server properly rejects handshakes where the CertificateVerify message is missing.
+
+5. **Early Termination**: After setting the alert and logging the error, the function jumps to the `f_err` label, which typically handles error cleanup and termination of the handshake process.
+
+6. **Successful Completion**: If the message type is indeed `SSL3_MT_CERTIFICATE_VERIFY`, the function proceeds to verify the signature in the CertificateVerify message, ensuring that the client possesses the private key corresponding to the presented certificate.
+
+### Conclusion
+
+By enforcing the presence and verification of the CertificateVerify message, regardless of the certificate type, the repair ensures that the server correctly implements client authentication as specified by the SSL/TLS protocol. This strengthens the security of the handshake process, preventing unauthorized access through crafted TLS traffic and ensuring that only authenticated clients can establish secure connections with the server.

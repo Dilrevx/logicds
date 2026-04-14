@@ -1,0 +1,28 @@
+Below is one approach to repairing the vulnerability. The core issue is that a valid TSIG signature alone shouldn’t automatically grant access for sensitive operations such as zone transfers (AXFR) or accepting NOTIFY messages. We need to add extra checks (such as ACL validations) on the source of the request before allowing these operations. That way even if an attacker crafts a message with a known TSIG key name and valid TSIG signature, unauthorized operations can be prevented.
+
+Below is a modified version of the snippet that demonstrates the idea:
+
+------------------------------------------------
+            if (msg.tsigstatus != Commons.dns_rcode_noerror)
+                result = Commons.DNS_R_TSIGVERIFYFAILURE;
+            else if (tsig.error != Commons.dns_rcode_noerror)
+                result = Commons.DNS_R_TSIGERRORSET;
+            else {
+                // If handling sensitive requests (AXFR or NOTIFY),
+                // perform an additional ACL check to verify that the source is authorized.
+                if ((query.type == Commons.AXFR || query.type == Commons.NOTIFY) &&
+                    !isAuthorizedSender(query.source)) {
+                        // For instance, return an unauthorized or authentication failure error.
+                        result = Commons.DNS_R_TSIGAUTHFAILURE;
+                } else {
+                    result = Commons.ISC_R_SUCCESS;
+                }
+            }
+------------------------------------------------
+
+In the repaired code, the following changes were introduced:
+1. After confirming that TSIG verification succeeded (no error codes), we check if the query is of a sensitive type (e.g. AXFR or NOTIFY).
+2. If it is, we call a function (here, isAuthorizedSender) to verify that the source IP (or other identifying data) is permitted for such operations.
+3. If the sender fails the ACL check, we return a failure status (e.g., Commons.DNS_R_TSIGAUTHFAILURE). Otherwise, we process the request normally.
+
+This additional ACL verification prevents attackers—who might possess a valid TSIG key name but are not truly authorized—from performing sensitive operations despite a valid TSIG signature. (Note that you may need to adapt the function names, constants, and ACL logic according to your project’s specifics.)

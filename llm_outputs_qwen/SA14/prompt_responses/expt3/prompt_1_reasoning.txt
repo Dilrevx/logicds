@@ -1,0 +1,64 @@
+The provided repair addresses the "CCS Injection" vulnerability, which is a critical security flaw in the implementation of the Transport Layer Security (TLS) protocol, particularly affecting versions that utilize OpenSSL. This vulnerability arises from the improper handling of ChangeCipherSpec (CCS) messages during the TLS handshake process. An attacker can exploit this by injecting a CCS message at an inappropriate time, leading to the use of a zero-length master key, which can result in session hijacking or exposure of sensitive information.
+
+### Vulnerability Explanation
+
+In a typical TLS handshake, the ChangeCipherSpec message is used to signal the transition from unencrypted to encrypted communication. It should be sent immediately after the client receives the server's `Finished` message but before sending its own `Finished` message. The server, upon receiving the client's `Finished` message, should verify that it has already received the client's CCS message before proceeding with the handshake.
+
+The vulnerability occurs when the server does not correctly enforce the order of these messages. An attacker can inject a CCS message out of sequence, causing the server to believe that the client has completed the necessary steps for encryption, even though it has not. This can lead to the server using a zero-length master key, which effectively means no encryption is applied, allowing the attacker to intercept and read the subsequent traffic.
+
+### Code Analysis and Repair
+
+The original code snippet provided is part of a client-side implementation of the TLS handshake process. It handles the `Finished` state of the handshake, where the client processes the server's `Finished` message and sets the handshake stage to `SSL_ST_OK`, indicating that the handshake is complete.
+
+#### Original Code
+
+```java
+case HandshakeStates.SSL3_ST_CR_FINISHED_A:
+case HandshakeStates.SSL3_ST_CR_FINISHED_B:
+    System.out.println("Client: In Finished state, setting CCS_OK");
+    ret = ssl3_get_finished();
+    if (ret <= 0)
+        return ret;
+    state.handshakeStage = HandshakeStates.SSL_ST_OK;
+    break;
+```
+
+**Issues:**
+1. **Lack of CCS Verification:** The code does not check whether the client's CCS message has been received before transitioning to the `SSL_ST_OK` state.
+2. **Potential for Misordering:** Without this check, an attacker could inject a CCS message at an incorrect time, bypassing the intended handshake sequence.
+
+#### Repaired Code
+
+```java
+case HandshakeStates.SSL3_ST_CR_FINISHED_A:
+case HandshakeStates.SSL3_ST_CR_FINISHED_B:
+    System.out.println("Client: In Finished state, setting CCS_OK");
+    ret = ssl3_get_finished();
+    if (ret <= 0) {
+        return ret;
+    }
+    // Ensure that ChangeCipherSpec has been received before moving to SSL_ST_OK
+    if (!state.ccsReceived) {
+        System.err.println("Client: CCS not received before Finished message");
+        return -1; // Or appropriate error handling
+    }
+    state.handshakeStage = HandshakeStates.SSL_ST_OK;
+    break;
+```
+
+**Repairs Made:**
+1. **CCS Receipt Check:** A condition is added to verify that the `ccsReceived` flag is set to `true` before advancing the handshake stage to `SSL_ST_OK`. This flag should be set when the client's CCS message is correctly processed.
+2. **Error Handling:** If the CCS message has not been received, the code logs an error message and returns `-1` (or another appropriate error code) to terminate the handshake process. This prevents the handshake from proceeding in an insecure state.
+
+### Ensuring Secure Handshake Sequence
+
+To fully mitigate the CCS Injection vulnerability, both the client and server must enforce strict ordering of handshake messages:
+
+- **Server-Side Enforcement:** The server should ensure that it has received the client's CCS message before processing the client's `Finished` message. If the CCS message is missing, the server should abort the handshake.
+- **Client-Side Enforcement:** The client should ensure that it sends its CCS message before sending its `Finished` message. Additionally, the client should verify that the server's CCS message is received before processing the server's `Finished` message.
+
+By implementing these checks, the system ensures that the handshake process adheres to the correct sequence of events, preventing attackers from injecting CCS messages at inappropriate times. This is crucial for maintaining the integrity and confidentiality of the communication channel established through TLS.
+
+### Conclusion
+
+The repair provided addresses the core issue of the CCS Injection vulnerability by ensuring that the client verifies the receipt of its own CCS message before completing the handshake. This aligns with best practices for secure TLS implementation and helps protect against man-in-the-middle attacks that exploit improper message ordering during the handshake process.

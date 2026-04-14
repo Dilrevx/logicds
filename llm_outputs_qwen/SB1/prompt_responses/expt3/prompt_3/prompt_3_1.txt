@@ -1,0 +1,37 @@
+To address the vulnerability described, we need to ensure that when a client presents a certificate using a Diffie-Hellman (DH) key, the `ssl3_get_cert_verify` function requires a `CertificateVerify` message from the client. The current implementation does not enforce this requirement when the certificate type involves signing capabilities.
+
+Here’s how we can modify the code to fix this issue:
+
+1. **Identify the Certificate Type**: We need to check if the certificate uses a key that requires a signature (like DH). This can be determined by the `type` variable, which includes flags indicating the capabilities of the key.
+
+2. **Require CertificateVerify Message**: If the certificate requires a signature, we should ensure that a `CertificateVerify` message is received before proceeding. If it is not received, the connection should be terminated with an appropriate alert.
+
+3. **Modify the Condition**: Update the existing condition to include a check for whether a `CertificateVerify` message is expected based on the certificate type.
+
+Here's the modified code snippet:
+
+```java
+if (s.s3.tmp.message_type != Constants.SSL3_MT_CERTIFICATE_VERIFY) {
+    // Check if the peer certificate requires a signature and if the message type is not CERTIFICATE_VERIFY
+    if (peer != null && (type & Constants.EVP_PKT_SIGN) != 0) {
+        // A CertificateVerify message is required but not received
+        al = Constants.SSL_AD_UNEXPECTED_MESSAGE;
+        Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+                Constants.SSL_R_MISSING_VERIFY_MESSAGE);
+        Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);
+        return ret; // Terminate the handshake
+    } else {
+        // If no CertificateVerify is required or the peer is null, reuse the message
+        s.s3.tmp.reuse_message = 1;
+        return 1;
+    }
+}
+```
+
+### Explanation:
+
+- **Condition Check**: The condition `(type & Constants.EVP_PKT_SIGN) != 0` checks if the certificate's key type requires a signature.
+- **Alert Handling**: If a `CertificateVerify` message is expected but not received, an alert is sent, and the handshake is terminated.
+- **Reusing Message**: If no `CertificateVerify` is required, the message is reused as in the original code.
+
+This modification ensures that the server properly enforces the requirement for a `CertificateVerify` message when a signed certificate (such as one using DH) is presented by the client.

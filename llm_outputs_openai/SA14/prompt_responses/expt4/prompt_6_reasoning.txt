@@ -1,0 +1,14 @@
+The repair addresses the vulnerability by explicitly marking the ChangeCipherSpec (CCS) message as allowed only when it is expected during the handshake process. Originally, the code did not set any flag or make an explicit check before processing the CCS message, leaving room for a crafted message to slip in—potentially allowing an attacker to force a zero-length master key.
+
+In the updated code, when the handshake reaches one of the “finished” states (SSL3_ST_CR_FINISHED_A or SSL3_ST_CR_FINISHED_B), the code first logs that it is now marking the CCS message as allowed. It then performs a bitwise operation on the handshake state’s flags (using state.flags |= HandshakeFlags.CCS_ALLOWED) to explicitly set a flag that makes further parts of the handshake aware that a CCS message is legitimate at this point. This is a critical step because it strongly ties the allowance of a CCS message to the correct context within the handshake process.
+
+After setting this flag, the code proceeds to retrieve the Finished message by calling ssl3_get_finished(). This ensures that the process only continues if the Finished message is correctly received—if the Finished message retrieval fails (indicated by a non-positive return value), the handshake is aborted immediately.
+
+By performing the flag setting before the Finished message is processed, the code guarantees that any later checks in the handshake process (which examine the flags) will see a clearly marked condition that permits only a valid CCS message. This change prevents an attacker from injecting a forged CCS too early or out of sequence, which was the core of the vulnerability. The attacker’s strategy in the original vulnerability involved manipulating handshakes to cause the acceptance of an inappropriate CCS message, leading to a scenario where a zero-length master key might be used.
+
+In summary, the repair works by:
+1. Introducing a new flag operation (HandshakeFlags.CCS_ALLOWED) to explicitly designate a state in which a CCS message is acceptable.
+2. Ensuring that this flag is only set at a precise point in the handshake process—after reaching the finished state but before processing the Finished message.
+3. Maintaining the integrity of the handshake by aborting the process if obtaining the Finished message fails.
+
+This well-timed flagging mechanism guarantees that the CCS message is only processed under conditions that are secure, thereby mitigating the risk of CCS injection and securing the overall handshake against man-in-the-middle attacks.

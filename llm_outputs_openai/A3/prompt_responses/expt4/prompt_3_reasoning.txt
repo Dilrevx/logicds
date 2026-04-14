@@ -1,0 +1,15 @@
+The repair adds a check to detect if the cipher in the EVP_CIPHER_CTX is a custom one created with an undefined NID (NID_undef). Here’s how the repair works:
+
+1. The original snippet was intended to handle “legacy” situations where a fetched cipher (obtained from the provider) is used instead of a custom one. When any of the ENGINE-related pointers is non-NULL, it jumps to the legacy handling code. However, it did not check if the user supplied a cipher with a NID of NID_undef. When NID_undef is used, OpenSSL mistakenly matches it to the NULL cipher from the default provider. This flaws the security model as the NULL cipher sends the plaintext as output.
+
+2. In the repaired code, before continuing into the legacy management, the patch checks whether ctx->cipher is not NULL and whether its nid is NID_undef. This is done using:
+   
+   if (ctx->cipher != NULL && ctx->cipher->nid == NID_undef)
+   
+   If this condition is true, it raises an error using ERR_raise with an appropriate error code (EVP_R_UNSUPPORTED_CIPHER) and returns 0 to abort initialization.
+
+3. By checking for NID_undef, the repair stops the initialization from proceeding with the insecure configuration that would allow the plaintext to be passed as “ciphertext”. This explicitly prevents the fallback behavior that ends up inadvertently fetching and using the NULL cipher from the provider.
+
+4. Only if the cipher is not a custom legacy cipher with an undefined NID does the rest of the original logic execute (freeing any previously fetched cipher and jumping to the legacy section).
+
+In summary, the repair strengthens security by ensuring that if a custom cipher with NID_undef is provided, the encryption/decryption initialization fails immediately. This proactive validation prevents the vulnerability where such a cipher could silently cause the cryptographic operation to default to the NULL (no-op) cipher, thus compromising the confidentiality of the data.

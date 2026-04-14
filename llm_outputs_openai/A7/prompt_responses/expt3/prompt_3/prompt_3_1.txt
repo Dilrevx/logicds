@@ -1,0 +1,46 @@
+Below is one way to correct the problem. In this case the bug is that when an alternative chain is found (that is, ok > 0), the candidate certificate is “accepted” without verifying that it is in fact authorized for use as a CA. (It may just be a valid end‐entity certificate.) To fix the vulnerability we must add a check that the certificate has an appropriate Basic Constraints extension with the CA flag set before treating it as the start of an alternative chain. One common solution is to use OpenSSL’s own verification helper (for example, X509_check_ca) to perform that check.
+
+Below is an example “patched” snippet. (In context, you would have to ensure that xtmp is available for the CA check – if necessary, postpone freeing it until after the check.) For example:
+
+----------------------------------------------------------------
+                if (ok > 0) {
+                    /*
+                     * Before accepting an alternate chain, ensure that
+                     * the candidate certificate is allowed to act as a CA.
+                     * If it is not, then we should not replace the chain.
+                     */
+                    if (!X509_check_ca(xtmp)) {
+                        /* The certificate does not have proper Basic Constraints.
+                         * Do not use this alternative chain.
+                         */
+                        break;
+                    }
+
+                    /*
+                     * Free up the found cert since we'll add it again later.
+                     */
+                    X509_free(xtmp);
+
+                    /*
+                     * Dump all the certs above this point -- we've found an
+                     * alternate chain that passes the CA check.
+                     */
+                    while (num > j) {
+                        xtmp = sk_X509_pop(ctx->chain);
+                        X509_free(xtmp);
+                        num--;
+                        ctx->last_untrusted--;
+                    }
+                    retry = 1;
+                    break;
+                }
+----------------------------------------------------------------
+
+Step by step explanation:
+1. When ok > 0 (i.e. we found an alternative candidate chain), first verify that xtmp (the candidate certificate) is allowed to be used as a Certification Authority. This is done using X509_check_ca, which checks for a valid Basic Constraints extension with the CA flag asserted.
+2. If the candidate certificate does not meet the requirements, we break out of the alternate chain path (or otherwise skip using it), so that a leaf certificate cannot be abused to impersonate a CA.
+3. Only if the candidate certificate passes the CA check do we proceed to free it and clear out the previous chain certificates before retrying.
+
+Using this patch ensures that only certificates with the proper CA constraints contribute to a certificate chain, mitigating the vulnerability described.
+
+This repair is one possible fix strategy; you may need to adjust details based on your use case and the overall control flow of your certificate verification routine.

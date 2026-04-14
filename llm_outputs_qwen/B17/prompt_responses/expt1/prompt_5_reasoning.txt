@@ -1,0 +1,44 @@
+The original code snippet contained a logical vulnerability related to how Certificate Revocation Lists (CRLs) were being fetched and utilized to verify client certificates. Specifically, the bug involved fetching CRLs based on the subject of the current certificate twice instead of fetching CRLs based on both the subject and the issuer. This oversight prevented the code from correctly identifying and applying CRLs that were relevant to the issuer of the current certificate, potentially allowing revoked certificates to pass verification.
+
+### Understanding the Vulnerability
+
+In Public Key Infrastructure (PKI), CRLs are used to list certificates that have been revoked by their issuing Certificate Authority (CA) before their expiration dates. When a client presents a certificate to a server, the server must verify the certificate's validity, including checking against CRLs to ensure the certificate has not been revoked.
+
+The vulnerability in the `tls_verify_crl` function lay in the logic for retrieving CRLs. The function initially retrieves CRLs based on the subject of the current certificate, which is correct for verifying the signature of the CRL in the next iteration. However, it then attempts to retrieve CRLs again based on the subject, instead of switching to the issuer. This means that CRLs relevant to the issuer of the current certificate are never retrieved, leading to a failure in properly checking whether the certificate has been revoked.
+
+### Correcting the Logic
+
+To address this vulnerability, the corrected code modifies the second retrieval of CRLs to use the issuer of the current certificate instead of the subject. This change ensures that the function checks the appropriate CRLs for revocation status.
+
+Here's a detailed breakdown of the changes:
+
+1. **Fetching CRLs Based on Issuer:**
+   - The original code incorrectly used the subject of the certificate to fetch CRLs for the second check:
+     ```c
+     crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+     ```
+   - The corrected code uses the issuer of the certificate:
+     ```c
+     crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+     ```
+
+2. **Checking Revocation Status:**
+   - After retrieving the CRLs based on the issuer, the function checks if the current certificate is listed as revoked in any of these CRLs:
+     ```c
+     res = X509_CRL_get0_by_cert(&crl, xs, crls);
+     if (res == 1) {
+       tls_log("certificate is revoked");
+       X509_STORE_CTX_set_error(ctx, X509_V_ERR_CERT_REVOKED);
+       sk_X509_CRL_free(crls);
+       X509_STORE_CTX_cleanup(store_ctx);
+       X509_STORE_CTX_free(store_ctx);
+       return FALSE;
+     }
+     ```
+   - If the certificate is found in a CRL (`res == 1`), the function logs that the certificate is revoked, sets the appropriate error in the context, and returns `FALSE` to indicate failure in the verification process.
+
+### Ensuring Robustness
+
+The corrected code maintains the robustness and security of the certificate verification process by ensuring that both the integrity of the CRLs (by verifying their signatures) and the revocation status of the certificates are checked accurately. It leverages OpenSSL's functions to handle CRLs and certificates, ensuring compatibility across different versions of OpenSSL while addressing the specific issue at hand.
+
+By making these corrections, the function now correctly implements the intended logic for CRL verification, enhancing the security of the TLS/SSL connections by preventing revoked certificates from being accepted. This is crucial for maintaining trust and integrity in secure communications.

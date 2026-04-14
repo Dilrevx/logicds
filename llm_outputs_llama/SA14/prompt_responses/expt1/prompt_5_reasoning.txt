@@ -1,0 +1,50 @@
+The provided buggy code snippet is vulnerable to the "CCS Injection" vulnerability, which is a logical vulnerability in the OpenSSL library. This vulnerability allows a man-in-the-middle attacker to trigger the use of a zero-length master key in certain OpenSSL-to-OpenSSL communications, potentially leading to session hijacking or sensitive information disclosure.
+
+The vulnerability arises from the fact that the code does not properly restrict the processing of ChangeCipherSpec (CCS) messages. In the buggy code, the CCS_OK state is set without verifying whether the CCS message has already been processed. This allows an attacker to send multiple CCS messages, causing the client to enter an inconsistent state.
+
+The repair addresses this vulnerability by introducing a new boolean flag, `cc_inited`, to track whether the CCS message has already been processed. This flag is initialized to `false` and set to `true` when the CCS message is first processed. If the client receives another CCS message while `cc_inited` is `true`, it will not process the message again, preventing the vulnerability.
+
+Here's a step-by-step explanation of the repair:
+
+1.  **Added a new boolean flag `cc_inited`**: This flag is used to track whether the CCS message has already been processed. It is initialized to `false` and set to `true` when the CCS message is first processed.
+2.  **Modified the `case HandshakeStates.SSL3_ST_CR_FINISHED_A` and `case HandshakeStates.SSL3_ST_CR_FINISHED_B` blocks**: In these blocks, the code checks the value of `cc_inited` before processing the CCS message. If `cc_inited` is `false`, the code processes the CCS message and sets `cc_inited` to `true`. If `cc_inited` is already `true`, the code skips processing the CCS message.
+3.  **Added a return statement for the `case HandshakeStates.SSL_ST_OK` block**: This ensures that the function returns immediately when the handshake is complete, preventing any further processing of CCS messages.
+
+By introducing the `cc_inited` flag and modifying the CCS message processing logic, the repair prevents the CCS Injection vulnerability and ensures that the client only processes the CCS message once.
+
+Here's the relevant code snippet with comments explaining the changes:
+
+```java
+// Added a new boolean flag cc_inited to track whether the CCS message has already been processed
+boolean cc_inited = false;
+
+public int ssl3_connect() {
+    int ret = -1;
+    switch (state.handshakeStage) {
+        case 0:
+            System.out.println("Client: Sending ClientHello");
+            state.handshakeStage = HandshakeStates.SSL3_ST_CR_FINISHED_A;
+            ret = 1;
+            break;
+        case HandshakeStates.SSL3_ST_CR_FINISHED_A:
+        case HandshakeStates.SSL3_ST_CR_FINISHED_B:
+            System.out.println("Client: In Finished state, setting CCS_OK");
+            // Check if the CCS message has already been processed
+            if (!state.cc_inited) {
+                // Process the CCS message and set cc_inited to true
+                state.cc_inited = true;
+                ret = ssl3_get_finished();
+                if (ret <= 0)
+                    return ret;
+            }
+            state.handshakeStage = HandshakeStates.SSL_ST_OK;
+            break;
+        case HandshakeStates.SSL_ST_OK:
+            // Return immediately when the handshake is complete
+            return ret;
+    }
+    return ret;
+}
+```
+
+By applying this repair, the code is no longer vulnerable to the CCS Injection vulnerability, ensuring the security and integrity of the SSL/TLS handshake.

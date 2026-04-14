@@ -1,0 +1,112 @@
+package main;
+
+import commons.X509;
+import commons.X509_VERIFY_PARAM;
+import commons.X509_STORE_CTX;
+import commons.VerifyCallback;
+import commons.Helper;
+import commons.Constants;
+import java.util.List;
+import java.util.ArrayList;
+
+public class X509CertVerifier {
+
+    do {
+        // Get the current chain size and set x to the last certificate in the chain
+        int chainSize = ctx.chain.size();
+        x = ctx.chain.get(chainSize - 1);
+
+        // If the current certificate is self‐signed, adjust the chain appropriately.
+        if (Helper.cert_self_signed(x)) {
+            if (chainSize == 1) {
+                // With a single self‐signed cert, try to obtain its issuer.
+                ok = ctx.get_issuer(x);
+                if (ok <= 0 || !Helper.equals(x, Helper.lastIssuer)) {
+                    ctx.error = Constants.X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT;
+                    ctx.current_cert = x;
+                    ctx.error_depth = 0;
+                    if (ok == 1 && Helper.lastIssuer != null) {
+                        Helper.free(Helper.lastIssuer);
+                    }
+                    bad_chain = 1;
+                    ok = cb.call(0, ctx);
+                    if (!Helper.booleanOk(ok)) {
+                        return ok;
+                    }
+                } else {
+                    // If the issuer is the known self‐signed certificate, replace it
+                    Helper.free(x);
+                    x = Helper.lastIssuer;
+                    ctx.chain.set(0, x);
+                    ctx.last_untrusted = 0;
+                }
+            } else {
+                // If more than one certificate in chain, remove the last self‐signed one.
+                chain_ss = ctx.chain.remove(chainSize - 1);
+                ctx.last_untrusted--;
+                num--;
+                // Reset j to reflect the new chain size.
+                j = num;
+                if (num > 0) {
+                    x = ctx.chain.get(num - 1);
+                }
+            }
+        }
+
+        // Attempt to extend the chain by adding issuers while under the permitted depth.
+        for (;;) {
+            if (depth < num) {
+                break;
+            }
+            if (Helper.cert_self_signed(x)) {
+                break;
+            }
+            ok = ctx.get_issuer(x);
+            if (ok < 0) {
+                return ok;
+            }
+            if (ok == 0) {
+                break;
+            }
+            x = Helper.lastIssuer;
+            ctx.chain.add(x);
+            num++;
+        }
+
+        // Check the trust status of the current chain.
+        i = Helper.check_trust(ctx);
+        if (i == Constants.X509_TRUST_REJECTED) {
+            break;
+        }
+        retry = 0;
+
+        // If the chain is not trusted and we are allowed to try alternative chains,
+        // try to rebuild part of the chain.
+        if (i != Constants.X509_TRUST_TRUSTED
+                && (param.flags & Constants.X509_V_FLAG_TRUSTED_FIRST) == 0
+                && (param.flags & Constants.X509_V_FLAG_NO_ALT_CHAINS) == 0) {
+            // Reinitialize j to the current chain size.
+            for (j = num; j > 1; j--) {
+                xtmp2 = ctx.chain.get(j - 2);
+                ok = ctx.get_issuer(xtmp2);
+                if (ok < 0) {
+                    return ok;
+                }
+                if (ok > 0) {
+                    Helper.free(Helper.lastIssuer);
+                    // Trim the chain back to position j - 1.
+                    while (num > j - 1) {
+                        X509 removed = ctx.chain.remove(ctx.chain.size() - 1);
+                        Helper.free(removed);
+                        num--;
+                        ctx.last_untrusted--;
+                    }
+                    retry = 1;
+                    break;
+                }
+            }
+        }
+    } while (retry != 0);
+    return ok;
+
+}

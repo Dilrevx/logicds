@@ -1,0 +1,16 @@
+The vulnerability stemmed from treating DNS_R_PARTIALMATCH as a benign state—allowing the function to return success even when the trust anchor lookup did not fully match. When a partial match occurred, it meant that some parameters of the key did not match exactly, thereby opening the door for an attacker to provide forged data that could still be inadvertently trusted. The repair removes this possibility by changing the handling of DNS_R_PARTIALMATCH.
+
+Here’s what happens in the repaired code:
+
+1. The function dns_keytable_findkeynode is called to search for the key in the trust anchor table. It attempts to find an exact match in terms of algorithm and key identifier.
+
+2. The switch statement then handles the result:
+   • If the result is ISC_R_SUCCESS, it means that an exact match was found. In this case, the key is detached from the trust anchor table, and both the keyset and key signatures are marked as secure (through dns_rdataset_settrust with dns_trust_secure). The corresponding flag (goodkey) is set to true, indicating that the verification was successful.
+  
+   • If the result is ISC_R_NOTFOUND, then the key is simply not found in the trust anchor table. Instead of treating this as an error, the function still returns ISC_R_SUCCESS but does not mark the key as trusted since no secure anchor was available. This is acceptable because even if the key is not a trust anchor, other keys might sign the DNSKEY resource record set.
+
+   • The important change comes with DNS_R_PARTIALMATCH, along with any other error in the default case. Previously, DNS_R_PARTIALMATCH might have been treated as a benign condition (like not found) allowing validation to continue. In the repair, DNS_R_PARTIALMATCH is now handled together with other error conditions in the default clause. Instead of returning a success code, the function now returns the error result directly. This effectively disallows accepting any key which does not exactly match a trust anchor, blocking the possibility for partially matching forged keys.
+
+3. Finally, the code cleans up the dynamically allocated key resource regardless of the outcome by calling dst_key_free. The function then returns the result—if an error occurred (including DNS_R_PARTIALMATCH), that error propagates to the caller.
+
+By strictly enforcing that only an exact match (ISC_R_SUCCESS) is indicative of a valid trust anchor, the repair ensures that an attacker cannot exploit a partial match scenario to have forged or manipulated DNS zone data accepted. This change reinforces the integrity of the DNSSEC validation process, particularly protecting mirror zones from accepting manipulated data.

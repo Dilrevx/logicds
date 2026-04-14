@@ -1,0 +1,35 @@
+The provided repair addresses the "CCS Injection" vulnerability in the OpenSSL library, specifically within the handling of ChangeCipherSpec (CCS) messages during a TLS handshake. This vulnerability arises because an attacker can inject a CCS message prematurely, causing the server to use a zero-length master key, which can lead to session hijacking or exposure of sensitive information.
+
+### Understanding the Vulnerability
+
+In a typical TLS handshake, the ChangeCipherSpec message is used to signal the transition from unencrypted to encrypted communication. It is crucial that this message is sent at the correct time in the handshake sequence—specifically, after the ServerHelloDone message from the server and the ClientKeyExchange message from the client. Sending it prematurely can disrupt the expected handshake flow, allowing an attacker to manipulate the state of the connection.
+
+The vulnerability in the original code snippet is that it does not enforce this timing constraint. An attacker could send a CCS message before the expected point in the handshake, potentially leading to the use of a zero-length master key if the implementation is not robust enough to handle such anomalies.
+
+### The Repair
+
+The repair introduces a new check to ensure that the CCS message is only processed when it is allowed according to the state of the handshake. This is done by introducing a flag `s->s3->change_cipher_spec_allowed`, which indicates whether the receipt of a CCS message is appropriate at the current stage of the handshake.
+
+#### Key Changes in the Repair
+
+1. **Introduction of a State Flag:**
+   - A new flag `change_cipher_spec_allowed` is introduced in the `s->s3` structure. This flag should be set to true only when the handshake has reached a point where a CCS message is expected. Typically, this would be after the server has sent the ServerHelloDone message and the client has sent the ClientKeyExchange message.
+
+2. **Validation of CCS Message Timing:**
+   - Before processing the CCS message, the code now checks the value of `s->s3->change_cipher_spec_allowed`. If this flag is false, indicating that a CCS message is not expected at this time, the function returns an error with `SSL_AD_UNEXPECTED_MESSAGE` and the specific error code `SSL_R_CCS_RECEIVED_EARLY`.
+
+3. **Ensuring Correct Handshake Flow:**
+   - By enforcing this timing constraint, the repair ensures that the CCS message is processed only when it is part of a correctly ordered handshake. This prevents an attacker from injecting a CCS message prematurely, which could lead to the use of a zero-length master key or other security issues.
+
+### Implementation Considerations
+
+- **Initialization of the Flag:**
+  - The `change_cipher_spec_allowed` flag must be initialized appropriately at the start of the handshake. It should be set to false initially and then set to true only when the handshake reaches the point where a CCS message is expected.
+
+- **Resetting the Flag:**
+  - After processing a valid CCS message, the flag should be reset to false to prevent further CCS messages from being processed until the next handshake.
+
+- **Testing and Validation:**
+  - It is crucial to thoroughly test the modified code to ensure that it correctly enforces the timing constraints on CCS messages without introducing new issues. This includes testing both valid and invalid handshake sequences to verify that the CCS message is only accepted when appropriate.
+
+By implementing these changes, the repair effectively mitigates the CCS Injection vulnerability, ensuring that the TLS handshake proceeds securely and as intended. This enhancement is critical for maintaining the integrity and confidentiality of data transmitted over secure connections.

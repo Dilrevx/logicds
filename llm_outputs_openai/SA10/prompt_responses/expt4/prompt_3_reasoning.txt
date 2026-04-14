@@ -1,0 +1,14 @@
+The original code was written so that if sig_params1.len was 0 (meaning it was interpreted as having “no parameters”), then it skipped a full byte‐for‐byte comparison of the parameters. This means that if one certificate used an explicit ASN.1 NULL encoding for the algorithm parameters (which yields a non-zero DER length) and the other used an empty array (zero length), then the certificate could be incorrectly accepted even though the parameters differ. As described in the vulnerability, a certificate with mismatched parameters should be rejected.
+
+In the repair, the conditional check is changed to always compare the byte content of the parameters if the lengths match. Here’s the breakdown of the fix:
+
+1. The original code compared the lengths using “sig_params1.len != sig_params2.len”. That part is still there because if the lengths differ then the content cannot be equal.
+
+2. The bug was in the condition where it compared the content only if sig_params1.len was non-zero. The repair removes this condition (the “sig_params1.len != 0 &&” part), making it so that the code always calls equalBytes when the lengths are equal. This means even if one parameter is represented as a non-empty ASN.1 NULL (which has a specific derived length and byte content) and the other is represented as an absent/empty array, the content comparison will fail.
+
+3. The fixed logic now becomes:
+  if the signature OIDs differ in length or content OR if the algorithm parameter lengths differ OR if (when the lengths are the same) the byte-by-byte comparison fails, then the certificate is deemed invalid. This ensures that any discrepancy in the algorithm parameters (including the subtle case of NULL versus an empty array) causes the certificate to be rejected.
+
+Thus, the repair narrows the acceptance criteria to require an exact match of the algorithm parameters’ encoded values. This directly addresses the vulnerability by ensuring that a mismatch (even in cases where one field is a NULL type, and the other is an empty array) will be detected and the certificate rejection is enforced via the error constant.
+
+Ultimately, the repair eliminates the potential exploitation where an adversary might provide two certificates with different algorithm parameter encodings (one with explicit NULL and the other empty) and have them erroneously considered equivalent, thereby guarding against an authentication bypass based on subtle ASN.1 encoding differences.

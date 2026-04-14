@@ -1,0 +1,138 @@
+<repair>
+    /* bugfix: fixed Logical vulnerability: enforce that only a valid TLS 1.3
+       cipher suite is accepted. In previous versions a conditional exception
+       allowed an insecure null-cipher to bypass the TLS 1.3 cipher suite check.
+       The insecure exception has now been removed. */
+#ifdef HAVE_NULL_CIPHER
+    /* Removed insecure null-cipher exception handling to mitigate downgrade vulnerabilities */
+#endif
+    if (ssl->options.cipherSuite0 != TLS13_BYTE) {
+        WOLFSSL_MSG("Server sent non-TLS13 cipher suite in TLS 1.3 packet");
+        WOLFSSL_ERROR_VERBOSE(INVALID_PARAMETER);
+        return INVALID_PARAMETER;
+    }
+    
+    suite[0] = ssl->options.cipherSuite0;
+    suite[1] = ssl->options.cipherSuite;
+    if (!FindSuiteSSL(ssl, suite)) {
+        WOLFSSL_MSG("Cipher suite not supported on client");
+        WOLFSSL_ERROR_VERBOSE(MATCH_SUITE_ERROR);
+        return MATCH_SUITE_ERROR;
+    }
+    
+    ret = SetCipherSpecs(ssl);
+    if (ret != 0)
+        return ret;
+    
+#if defined(HAVE_ECH)
+    /* check for acceptConfirmation and HashInput with 8 0 bytes */
+    if (ssl->options.useEch == 1) {
+        ret = EchCheckAcceptance(ssl, input, args->serverRandomOffset, helloSz);
+        if (ret != 0)
+            return ret;
+    }
+#endif
+    
+#ifdef WOLFSSL_TLS13_MIDDLEBOX_COMPAT
+    if (ssl->options.tls13MiddleBoxCompat) {
+        if (args->sessIdSz == 0) {
+            WOLFSSL_MSG("args->sessIdSz == 0");
+            WOLFSSL_ERROR_VERBOSE(INVALID_PARAMETER);
+            return INVALID_PARAMETER;
+        }
+        if (ssl->session->sessionIDSz != 0) {
+            if (ssl->session->sessionIDSz != args->sessIdSz ||
+                XMEMCMP(ssl->session->sessionID, args->sessId, args->sessIdSz) != 0) {
+                WOLFSSL_MSG("session id doesn't match");
+                WOLFSSL_ERROR_VERBOSE(INVALID_PARAMETER);
+                return INVALID_PARAMETER;
+            }
+        }
+        else if (XMEMCMP(ssl->arrays->clientRandom, args->sessId, args->sessIdSz) != 0) {
+            WOLFSSL_MSG("session id doesn't match client random");
+            WOLFSSL_ERROR_VERBOSE(INVALID_PARAMETER);
+            return INVALID_PARAMETER;
+        }
+    }
+    else
+#endif /* WOLFSSL_TLS13_MIDDLEBOX_COMPAT */
+#ifdef WOLFSSL_QUIC
+    if (WOLFSSL_IS_QUIC(ssl)) {
+        if (args->sessIdSz != 0) {
+            WOLFSSL_MSG("args->sessIdSz != 0");
+            WOLFSSL_ERROR_VERBOSE(INVALID_PARAMETER);
+            return INVALID_PARAMETER;
+        }
+    }
+    else
+#endif /* WOLFSSL_QUIC */
+    if (args->sessIdSz != ssl->session->sessionIDSz ||
+        (args->sessIdSz > 0 &&
+         XMEMCMP(ssl->session->sessionID, args->sessId, args->sessIdSz) != 0))
+    {
+        WOLFSSL_MSG("Server sent different session id");
+        WOLFSSL_ERROR_VERBOSE(INVALID_PARAMETER);
+        return INVALID_PARAMETER;
+    }
+    
+    /* Advance the index pointer */
+    *inOutIdx = args->idx;
+    
+    ssl->options.serverState = SERVER_HELLO_COMPLETE;
+    
+#ifdef HAVE_SECRET_CALLBACK
+    if (ssl->sessionSecretCb != NULL
+#ifdef HAVE_SESSION_TICKET
+            && ssl->session->ticketLen > 0
+#endif
+       ) {
+        int secretSz = SECRET_LEN;
+        ret = ssl->sessionSecretCb(ssl, ssl->session->masterSecret,
+                                   &secretSz, ssl->sessionSecretCtx);
+        if (ret != 0 || secretSz != SECRET_LEN) {
+            WOLFSSL_ERROR_VERBOSE(SESSION_SECRET_CB_E);
+            return SESSION_SECRET_CB_E;
+        }
+    }
+#endif /* HAVE_SECRET_CALLBACK */
+    
+    /*
+     * At this point, version negotiation via extensions has been completed.
+     * If the negotiated protocol is less than TLS 1.3 (typically TLS 1.2),
+     * use legacy processing.
+     */
+    if (!IsAtLeastTLSv1_3(ssl->version)) {
+#ifndef WOLFSSL_NO_TLS12
+        ssl->arrays->sessionIDSz = args->sessIdSz;
+    
+        if (ssl->arrays->sessionIDSz > ID_LEN) {
+            WOLFSSL_MSG("Invalid session ID size");
+            ssl->arrays->sessionIDSz = 0;
+            return BUFFER_ERROR;
+        }
+        else if (ssl->arrays->sessionIDSz) {
+            XMEMCPY(ssl->arrays->sessionID, args->sessId,
+                    ssl->arrays->sessionIDSz);
+            ssl->options.haveSessionId = 1;
+        }
+    
+        /* Force client hello version 1.2 to work for static RSA. */
+        ssl->chVersion.minor = TLSv1_2_MINOR;
+    
+        /* Complete TLS v1.2 processing of ServerHello. */
+        ret = CompleteServerHello(ssl);
+#else
+        WOLFSSL_MSG("Client using higher version, fatal error");
+        WOLFSSL_ERROR_VERBOSE(VERSION_ERROR);
+        ret = VERSION_ERROR;
+#endif
+    
+        WOLFSSL_LEAVE("DoTls13ServerHello", ret);
+        return ret;
+    }
+    
+    /* Advance state and exit the function */
+    ssl->options.asyncState = TLS_ASYNC_FINALIZE;
+    WOLFSSL_LEAVE("DoTls13ServerHello", 0);
+    return 0;
+</repair>

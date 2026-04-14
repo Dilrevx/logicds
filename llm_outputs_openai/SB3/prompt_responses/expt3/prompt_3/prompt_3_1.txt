@@ -1,0 +1,41 @@
+Below is one way to fix the vulnerability. The root cause is that on receipt of msg_userauth_success the client simply assumes that the authenticated method is acceptable without really verifying that the server’s chosen method is among the ones the client originally wanted (or that require additional security such as FIDO2 or SSH-Askpass). An attacker could abuse this weakness to “downgrade” the login process and bypass extra checks (for example, by making the server “choose” public‐key when in fact an agent with additional restrictions should have been used).
+
+One way to fix this is to add an explicit check verifying that the last authentication type is one the client intended to allow. For example, if we only allow “secure” (e.g. FIDO2 or askpass) authentication methods then the code should abort if the server’s success message does not correspond to one of those allowed methods.
+
+Below is a patched version of the snippet that performs such a check:
+
+--------------------------------------------------
+     // Log receipt of the user auth success message 
+     Logger.trace("received msg_userauth_success");
+     
+     // Ensure that the authentication type for which we were expecting success is one 
+     // that requires further security (e.g. FIDO2, SSH_ASKPASS, etc.). If not, abort.
+     if (cli_ses.lastauthtype != ClientSession.AUTH_TYPE_FIDO2 &&
+         cli_ses.lastauthtype != ClientSession.AUTH_TYPE_ASKPASS &&
+         cli_ses.lastauthtype != ClientSession.AUTH_TYPE_PUBKEY_SECURE) {
+         Logger.error("Received success for disallowed or downgraded authentication method: " +
+                      cli_ses.lastauthtype);
+         // Optionally set an error state or even terminate the authentication session:
+         ses.authstate.authdone = false;
+         cli_ses.state = ClientSession.USERAUTH_FAILED;
+         return;  // Stop further processing
+     }
+     
+     // If the check passes, then we’re truly authenticated under a secure protocol.
+     ses.authstate.authdone = true;
+     cli_ses.state = ClientSession.USERAUTH_SUCCESS_RCVD;
+     
+     // (Optionally, clear the last auth type only if it’s no longer needed)
+     cli_ses.lastauthtype = ClientSession.AUTH_TYPE_NONE;
+     
+     // Cleanup any temporary state related to pubkey authentication
+     ClientSession.cli_auth_pubkey_cleanup();
+--------------------------------------------------
+
+Here’s what changed and why:
+
+1. Before marking authentication as complete, we compare cli_ses.lastauthtype against a list of approved, secure authentication methods.
+2. If the last authentication type is not among the expected methods, we log an error, set the client session state to a “failure” state, and abort processing. This prevents an attacker from using a server‐induced “downgrade” to bypass extra security.
+3. Only when the authentication method matches an allowed value will the client proceed to mark the authentication done and update the session state.
+
+In the real implementation you may need to adjust the list of allowed authentication methods (here shown as AUTH_TYPE_FIDO2, AUTH_TYPE_ASKPASS, and a hypothetical AUTH_TYPE_PUBKEY_SECURE) based on your exact security requirements and configuration. This repair ensures that the “success” message is honored only when it complies with the security setup the client expects and prevents the possibility of an attacker using a forwarded agent to bypass additional authentication checks.

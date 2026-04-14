@@ -1,0 +1,14 @@
+The repair addresses the issue by making sure that any extra parameters provided via the OSSL_PARAM array are applied before the key and IV are used by the cipher’s initialization routines. Previously, the code would pass the params array directly to either the encryption or decryption initialization functions (einit/dinit) after the key and IV had already been processed. This order of operations could permit a malicious or malformed set of parameters to override or truncate the IV after it had been established, possibly leading to loss of uniqueness or confidentiality.
+
+Here’s what the repair does:
+
+1. Early Processing of OSSL_PARAMs:
+   After setting up the basic context and ensuring that key padding and other preliminaries are in place, the repair adds a block that checks if the params pointer is non-NULL. If it is, it calls EVP_CIPHER_CTX_set_params(ctx, params) immediately—before the key and IV are used in the core initialization routines. This pre-processing guarantees that modifications implied by the parameters (such as lengths or other configuration options) are applied early in the initialization phase.
+
+2. Bypassing Duplicate Parameter Application:
+   After the parameters are applied, the code passes NULL for the parameters when calling the cipher’s einit() or dinit() functions. This prevents any later processing from inadvertently reapplying or conflicting with the already established cipher parameters. Essentially, it “locks in” the parameters so that subsequent code cannot override the setting in an unsafe order.
+
+3. Prevention of IV Truncation/Overrun:
+   Since the vulnerability stemmed from the IV being processed or possibly altered after initial setup, moving the OSSL_PARAM processing earlier ensures that the IV (and similarly the key) are correctly configured with the full and correct lengths before any cipher-specific routines act on them. This ordering prevents any operation that could lead to inadvertent truncation or overrun of the IV buffer.
+
+In summary, by processing the OSSL_PARAM array first, the repair secures the configuration of the key and IV lengths and other options, ensuring that they are properly set and cannot be tampered with later during encryption/decryption initialization. This change directly fixes the vulnerability where the improper ordering of parameter handling could lead to truncated or overrunning buffers, thereby preserving the confidentiality guarantees of the cipher modes.

@@ -1,0 +1,24 @@
+The repair adds an early validation step that confirms whether the client has supplied a certificate when it is required. Here’s what the repair does and how it fixes the vulnerability:
+
+1. Server Validation:  
+   The new code first checks if the current connection is in server mode (ssl->isServer). This ensures that the certificate check is only applied in scenarios where the server is meant to validate a client’s certificate.
+
+2. Certificate Requirement Check:  
+   The repair then verifies if the server configuration mandates a client certificate. It does this by checking if either ssl->options.requireClientCert or ssl->options.mutualAuth is set to true. Either of these conditions indicates that the server expects the client to provide a certificate for mutual authentication.
+
+3. Certificate Presence Verification:  
+   The code inspects a flag (ssl->clientCertPresent) which indicates whether a valid client certificate was provided. If the client did not supply a certificate, the condition evaluates to true, implying that the certificate isn't present as mandated by the server's configuration.
+
+4. Exception for Session Resumption:  
+   The validation allows an exception if the session is being resumed (checked via ssl->sessionResumed). In resumed sessions, mutual authentication may not be as crucial, so the absence of a certificate doesn't necessarily represent an error.
+
+5. Early Termination on Failure:  
+   If all conditions indicate that a certificate is required but missing, the code calls wolfSSL_Alert to send a fatal alert (of type bad_certificate) to the client. It then immediately returns an error (BAD_PEER_CERT), halting the handshake process. This early exit stops any further processing, including any derivation of cryptographic secrets, thereby preventing the handshake from continuing in an insecure state.
+
+6. Impact on Vulnerability:  
+   Previously, if a client omitted certificate verification (when a certificate was required), the handshake might proceed erroneously. This could be exploited by an attacker to bypass mutual authentication. By introducing this check early in the function, the repair ensures that the handshake process is securely terminated before any cryptographic material derivation occurs, thus stopping the attack before it can progress further.
+
+7. Continuation if Valid:  
+   If the certificate is present or the session is resumed, the function continues to the size check and further processing. This means that only properly authenticated and secure connections advance through the handshake.
+
+Overall, the repair seals the vulnerability by enforcing strict client certificate verification when needed, which upholds the security guarantees expected from TLS v1.3 mutual authentication. The early termination prevents malicious clients from bypassing necessary checks, ensuring that the handshake only continues when all the necessary security requirements have been satisfied.

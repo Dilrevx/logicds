@@ -1,0 +1,38 @@
+<repair>
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, issuer);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+  if (crls != NULL) {
+    for (i = 0; i < sk_X509_CRL_num(crls); i++) {
+      X509_CRL *crl = sk_X509_CRL_value(crls, i);
+      /* Check whether the certificate has been revoked by searching for
+       * a matching serial number in the CRL's list of revoked certificates.
+       */
+      STACK_OF(X509_REVOKED) *revoked_list = X509_CRL_get0_revoke(crl);
+      int j;
+      for (j = 0; j < sk_X509_REVOKED_num(revoked_list); j++) {
+        X509_REVOKED *revoked = sk_X509_REVOKED_value(revoked_list, j);
+        if (ASN1_INTEGER_cmp(X509_get_serialNumber(xs),
+                             X509_REVOKED_get0_serialNumber(revoked)) == 0) {
+          tls_log("Certificate revoked; serial number present in CRL");
+          X509_STORE_CTX_set_error(ctx, X509_V_ERR_CERT_REVOKED);
+          sk_X509_CRL_free(crls);
+          X509_STORE_CTX_cleanup(store_ctx);
+          X509_STORE_CTX_free(store_ctx);
+          return FALSE;
+        }
+      }
+    }
+    sk_X509_CRL_free(crls);
+    crls = NULL;
+  }
+
+  X509_STORE_CTX_cleanup(store_ctx);
+  X509_STORE_CTX_free(store_ctx);
+  return ok;
+</repair>

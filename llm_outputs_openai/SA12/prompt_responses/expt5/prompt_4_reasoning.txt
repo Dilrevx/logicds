@@ -1,0 +1,15 @@
+The repair adds a new conditional block at the very beginning of the function that handles the TLS Finished message. This block performs additional checks before any other processing, ensuring that the client has properly authenticated itself with a valid certificate when mutual authentication is required.
+
+Here’s how the repair works step-by-step:
+
+1. First, the code confirms that it’s running on the server side by checking the role (e.g., ssl.role == SERVER). It ensures that the server is expecting to authenticate clients—this is done by verifying that the configuration option (ssl.config.requireClientCert) is active, meaning that the server mandates that clients present a certificate.
+
+2. The repair then checks if the connection session is a resumed session. In a resumed session (indicated by ssl.session.isResumed), the previous authentication status might have been cached, so additional certificate verification isn’t required each time. This bypass ensures that the new check doesn’t inadvertently disrupt resumed sessions.
+
+3. If the connection is not resumed, and the server requires mutual authentication, the next step is to verify whether the client’s certificate has indeed been checked and found valid. This is accomplished by examining the flag (ssl.peerCertVerified). If this flag is not set, it indicates that the client did not perform the certificate verification process properly—potentially by not sending the certificate_verify message.
+
+4. Detecting a failure in this critical certificate verification step, the code immediately triggers a fatal alert (here, by calling Tls13Helper.SendFatalAlert(ALERT_BAD_CERTIFICATE)). This alert is a mechanism in TLS to indicate a critical error in the handshake process. After sending the alert, the code returns an error code (Constants.BAD_CERTIFICATE) to abort the handshake, ensuring that the client is not allowed to complete the connection without proper authentication.
+
+5. Lastly, if all these conditions are satisfied—that is, either the client has been verified or it’s a resumed session—the code continues to the original functionality, including the buffer size check. This maintains the existing functionality and ensures that other parts of the handshake process continue as expected.
+
+By incorporating these checks, the repair directly addresses the vulnerability where a malicious client could bypass mutual authentication by omitting the certificate_verify message. With this fix, if a client fails to present a verified certificate when it is required, the server will immediately abort the connection rather than proceeding with the handshake, thus closing the security gap.

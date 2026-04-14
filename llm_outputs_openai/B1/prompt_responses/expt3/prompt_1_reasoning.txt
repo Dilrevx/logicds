@@ -1,0 +1,15 @@
+The repair adds an extra check to make sure that if the client certificate is either a signing certificate or specifically a Diffie‐Hellman (DH) certificate (which does not set the signing flag) then the CertificateVerify message must be present in the TLS handshake. Here’s how it works:
+
+1. In the original code, if the message type isn’t SSL3_MT_CERTIFICATE_VERIFY, then the code accepted the situation (by reusing the message and returning success) when the certificate had a signing capability. However, it did not check for certificates that are DH. Since DH certificates rely on the CertificateVerify for proving possession of the private key (and they never have the EVP_PKT_SIGN flag set), an attacker could bypass authentication by using a DH certificate without sending a CertificateVerify.
+
+2. In the repaired code, before reusing the message, we perform a more complete check. Specifically, when the CertificateVerify message is absent, we first check if the peer certificate exists. Then we check if either:
+   - The certificate has the signing capability (i.e., the EVP_PKT_SIGN bit is set), or 
+   - The certificate is a DH certificate (checked using EVP_PKEY_id on the public key extracted from the certificate).
+   
+3. If either condition is true (meaning the certificate is expected to be validated by a CertificateVerify message), the function sets an error code (SSL_AD_UNEXPECTED_MESSAGE) and issues an error (SSL_R_MISSING_VERIFY_MESSAGE), then jumps to error handling (f_err). This ensures that the handshake doesn’t continue successfully without the expected verify message.
+   
+4. Only when the checks pass (i.e., no signing capability or the certificate isn’t DH), the function proceeds with reusing the message and signals success (ret=1).
+
+By implementing this additional condition explicitly for Diffie-Hellman certificates, the repair fixes the vulnerability whereby a malicious client might get authenticated without providing proof of possession of the private key. Now, if a DH certificate is used, the absence of a CertificateVerify message will trigger a failure, thereby enforcing proper client authentication and preventing the potential bypass.
+
+Overall, this check ensures that all certificates, regardless of whether they are marked for signing or are DH certificates, are properly subjected to the CertificateVerify check. This tightened logic eliminates the attack vector described in the vulnerability, ensuring that proper proof of possession is always provided before proceeding.

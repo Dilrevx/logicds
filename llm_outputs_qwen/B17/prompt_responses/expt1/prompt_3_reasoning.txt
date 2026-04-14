@@ -1,0 +1,94 @@
+The original code snippet contained a logical vulnerability that primarily related to the improper handling of Certificate Revocation Lists (CRLs) when verifying a certificate chain. The vulnerability could lead to incorrect validation results, potentially allowing revoked certificates to be accepted as valid.
+
+### Issues Identified
+
+1. **Improper CRL Retrieval Based on Issuer**: 
+   - The code attempted to retrieve CRLs based on the issuer of the current certificate but did not properly handle or use these CRLs to check for revocation status.
+   - Specifically, the logic for retrieving and using CRLs based on the issuer was incomplete and could lead to skipped revocation checks.
+
+2. **Inadequate Revocation Checking**:
+   - The code only verified the signature of CRLs that matched the subject of the current certificate. It did not check if the current certificate was listed in any CRLs that matched the issuer.
+   - Without checking the revocation status against the relevant CRLs, the system could fail to detect revoked certificates.
+
+3. **Potential for False Positives**:
+   - If no CRLs were found for the issuer, the system would not perform any revocation checks, potentially leading to the acceptance of revoked certificates.
+
+4. **Memory Management Concerns**:
+   - Although not directly related to the logical vulnerability, the code did not properly manage memory when dealing with CRLs, which could lead to memory leaks or other issues.
+
+### Repaired Code Explanation
+
+1. **Retrieve CRLs Based on Issuer**:
+   - The repaired code includes a section to retrieve CRLs based on the issuer of the current certificate:
+     ```c
+     crls = NULL;
+     #if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+       !defined(HAVE_LIBRESSL)
+     crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+     #elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+           !defined(HAVE_LIBRESSL)
+     crls = X509_STORE_get1_crls(store_ctx, issuer);
+     #endif /* OpenSSL-1.1.x and later */
+     ```
+   - This ensures that the system retrieves all relevant CRLs for the issuer of the current certificate.
+
+2. **Check for CRL Retrieval Errors**:
+   - After attempting to retrieve CRLs, the code checks for errors:
+     ```c
+     if (crls != NULL) {
+       for (i = 0; i < sk_X509_CRL_num(crls); i++) {
+         X509_CRL *crl = sk_X509_CRL_value(crls, i);
+         int crl_result = X509_STORE_CTX_get1_crls(ctx, crl);
+         if (crl_result <= 0) {
+           tls_log("error retrieving CRLs for issuer: %s", tls_get_errors());
+           sk_X509_CRL_free(crls);
+           X509_STORE_CTX_cleanup(store_ctx);
+           X509_STORE_CTX_free(store_ctx);
+           return FALSE;
+         }
+     ```
+   - This ensures that if there is an error in retrieving the CRLs, the system logs the error and exits early, preventing further incorrect validation.
+
+3. **Verify CRL Signatures**:
+   - The code verifies the signature of each CRL:
+     ```c
+     res = X509_CRL_verify(crl, X509_STORE_CTX_get0_cert(ctx)->sigalg->pkey);
+     if (res <= 0) {
+       tls_log("invalid signature on CRL: %s", tls_get_errors());
+
+       X509_STORE_CTX_set_error(ctx, X509_V_ERR_CRL_SIGNATURE_FAILURE);
+       sk_X509_CRL_free(crls);
+       X509_STORE_CTX_cleanup(store_ctx);
+       X509_STORE_CTX_free(store_ctx);
+       return FALSE;
+     }
+     ```
+   - This ensures that the CRLs are genuine and have not been tampered with.
+
+4. **Check Certificate Revocation Status**:
+   - The code checks if the current certificate is listed in any of the retrieved CRLs:
+     ```c
+     res = X509_CRL_get0_by_serial(crl, NULL, X509_get_serialNumber(xs));
+     if (res != 0) {
+       tls_log("certificate revoked by CRL");
+
+       X509_STORE_CTX_set_error(ctx, X509_V_ERR_CERT_REVOKED);
+       sk_X509_CRL_free(crls);
+       X509_STORE_CTX_cleanup(store_ctx);
+       X509_STORE_CTX_free(store_ctx);
+       return FALSE;
+     }
+     ```
+   - This ensures that if the certificate is listed in any CRL, it is marked as revoked and the validation fails.
+
+5. **Clean Up Resources**:
+   - The code properly cleans up resources after processing:
+     ```c
+     sk_X509_CRL_free(crls);
+     X509_STORE_CTX_cleanup(store_ctx);
+     X509_STORE_CTX_free(store_ctx);
+     return ok;
+     ```
+   - This prevents memory leaks and ensures that all allocated resources are freed.
+
+By addressing these issues, the repaired code ensures that the system correctly checks for certificate revocation using CRLs, thereby enhancing the security and integrity of the certificate validation process.

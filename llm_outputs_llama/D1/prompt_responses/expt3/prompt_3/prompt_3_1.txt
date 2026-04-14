@@ -1,0 +1,48 @@
+To fix the vulnerability, we need to ensure that the media transport does not switch from SRTP to basic RTP upon SRTP restart. Here's a step-by-step approach to repair the buggy code snippet:
+
+### Step 1: Identify the root cause of the vulnerability
+
+The vulnerability occurs when the SRTP restarts and incorrectly switches to basic RTP. This happens when the `srtp_unprotect()` function returns an error, and the code does not properly handle the restart of SRTP.
+
+### Step 2: Ensure SRTP is restarted with the correct policy
+
+To fix the vulnerability, we need to ensure that SRTP is restarted with the correct policy. We can do this by checking the return value of `pjmedia_transport_srtp_start()` and handling any errors that may occur.
+
+### Step 3: Prevent switching to basic RTP upon SRTP restart
+
+To prevent switching to basic RTP, we need to ensure that the `srtp_unprotect()` function is called only when SRTP is successfully restarted. We can do this by adding a check for the return value of `pjmedia_transport_srtp_start()` before calling `srtp_unprotect()`.
+
+### Step 4: Implement the fix
+
+Here's the repaired code snippet:
+```c
+if (srtp->probation_cnt > 0 &&
+    (err == srtp_err_status_replay_old ||
+     err == srtp_err_status_replay_fail))
+{
+    pjmedia_srtp_crypto tx, rx;
+    pj_status_t status;
+
+    /* Stop SRTP first, otherwise srtp_start() will maintain current
+     * roll-over counter.
+     */
+    pjmedia_transport_srtp_stop((pjmedia_transport*)srtp);
+
+    tx = srtp->tx_policy;
+    rx = srtp->rx_policy;
+    status = pjmedia_transport_srtp_start((pjmedia_transport*)srtp,
+                                          &tx, &rx);
+    if (status!= PJ_SUCCESS) {
+        PJ_LOG(5,(srtp->pool->obj_name, "Failed to restart SRTP, err=%s",
+                  get_libsrtp_errstr(err)));
+        /* Handle the error, do not switch to basic RTP */
+        return status;
+    }
+
+    /* Only call srtp_unprotect() when SRTP is successfully restarted */
+    if (!srtp->bypass_srtp) {
+        err = srtp_unprotect(srtp->srtp_rx_ctx, (pj_uint8_t*)pkt, &len);
+    }
+}
+```
+In the repaired code, we added a check for the return value of `pjmedia_transport_srtp_start()` and handled any errors that may occur. We also ensured that `srtp_unprotect()` is called only when SRTP is successfully restarted, preventing the switch to basic RTP.

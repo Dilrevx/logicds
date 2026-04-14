@@ -1,0 +1,13 @@
+The repair removes the conditional check that allowed the code to bypass the CertificateVerify message requirement if the certificate’s signing capabilities (as indicated by (type & Constants.EVP_PKT_SIGN)) weren’t present. Previously, this check was inadvertently accepting a client authentication scenario where a DH certificate, which inherently doesn’t support digital signatures, could be used without proof of possession of the private key. Here’s how the repair fixes the issue:
+
+1. The original code checked whether the message type was not a CertificateVerify. If it wasn’t, it set reuse_message and then only conditionally sent an alert if both a certificate (peer) was provided and the certificate had signing capability. This condition, however, inadvertently allowed a Diffie-Hellman (DH) certificate to slip through since DH certificates naturally lack signing capabilities.
+
+2. In the repaired code, we removed the part of the condition that checked for signing capabilities. Now, it simply verifies if a client certificate (peer) is present when the CertificateVerify message is missing. 
+
+3. Specifically, if s.s3.tmp.message_type is not SSL3_MT_CERTIFICATE_VERIFY and a peer certificate is available, the code immediately flags an error by setting the alert (SSL_AD_UNEXPECTED_MESSAGE), logging the error with SSL_R_MISSING_VERIFY_MESSAGE, and finally sending an alert (using Helper.ssl3_send_alert) before returning. This forces an error condition whenever the CertificateVerify message is missing, regardless of the certificate type.
+
+4. By doing this, the repair ensures that clients presenting any certificate – including those using DH – must send a CertificateVerify message. This change prevents remote attackers from being able to bypass private key verification by using a DH certificate that cannot sign and therefore lacks a valid CertificateVerify message.
+
+5. The logic now clearly mandates that a proper CertificateVerify message must accompany client authentication, eliminating the vulnerability that could allow unauthorized access through specially crafted handshake messages. 
+
+In summary, the repair improves the security of the TLS handshake process by ensuring that every client certificate, including those with DH keys, must prove possession of the corresponding private key by sending a correct CertificateVerify message. This change prevents the exploitation of the previously overlooked scenario where DH certificates were accepted without a mandatory verification step.

@@ -1,0 +1,21 @@
+The repair ensures that the length of the certificate’s serial number, as actually returned by gnutls_x509_crt_get_serial(), is used when comparing it with the OCSP response’s serial number. In the buggy version, the code allocated memory based on the expected length (copied from the OCSP response) and then called gnutls_x509_crt_get_serial(), but it never updated the recorded length with the actual length returned by the call. This could leave extra bytes (potentially uninitialized or leftover data) within the buffer, which an attacker might exploit to bypass validation.
+
+Here’s a breakdown of the key changes and how they fix the vulnerability:
+
+1. Memory Allocation:
+   The code allocates memory for cserial.data using the length from rserial.size. While this is usually sufficient, the certificate’s serial number might have a different actual length. The allocation itself isn’t changed, but it sets up the need to ensure that the stored length is accurate.
+
+2. Capturing the Actual Length:
+   The call to gnutls_x509_crt_get_serial() is passed a variable “t” that initially contains the allocated size. Importantly, after the call, “t” holds the actual number of bytes copied into cserial.data. The repair then immediately updates cserial.size to this actual value (cserial.size = t). This is the critical fix: it ensures that the subsequent comparison between cserial and rserial uses the genuine length of the certificate’s serial number.
+
+3. Accurate Comparison:
+   With cserial.size now correctly reflecting the actual serial number length, the subsequent check:
+     
+     if (rserial.size != cserial.size || memcmp(cserial.data, rserial.data, rserial.size) != 0)
+     
+   becomes robust. If an attacker tried to include trailing bytes or manipulate one of the serial numbers, the size check would fail, and the lengths would not match, thereby rejecting the fabricated certificate. This removal of any ambiguity about the size prevents leftover, potentially malicious bytes from being involved in the validation.
+
+4. Security Implication:
+   By ensuring that both the length and the actual content of the serial number exactly match between the OCSP response and the certificate, the repair significantly reduces any risk of bypassing certificate validation. The extra validation step makes the system resilient against scenarios where arbitrary trailing bytes might be appended to the serial number.
+
+In summary, the repair explicitly captures and uses the actual serial number length returned by the certificate retrieval function. This prevents the possibility of having extraneous trailing bytes affecting the comparison check and ensures that both the data and its length are exactly as expected, thereby closing the vulnerability that allowed certificate validation bypass.

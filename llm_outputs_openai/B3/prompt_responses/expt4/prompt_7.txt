@@ -1,0 +1,40 @@
+<repair>
+void recv_msg_userauth_success() {
+	TRACE(("received msg_userauth_success"));
+
+	/* 
+	 * RFC‐compliant check: we should only accept a userauth_success message
+	 * if an authentication attempt using a valid method has been initiated.
+	 * In previous versions, the code would blindly mark the session as
+	 * authenticated and reset the record of which authentication method
+	 * was used. This could allow a server to alter the login process in its
+	 * favor and bypass additional security measures (e.g. FIDO2 or SSH-Askpass)
+	 * by abusing a forwarded agent.
+	 *
+	 * To repair this, we ensure that the success message is only accepted
+	 * if a valid authentication method was previously attempted.  In particular,
+	 * the client’s last authentication method (stored in cli_ses.lastauthtype)
+	 * must not be AUTH_TYPE_NONE.
+	 */
+	if (cli_ses.lastauthtype == AUTH_TYPE_NONE) {
+		dropbear_log(LOG_WARNING, "Received unexpected userauth_success with no valid auth method; aborting");
+		dropbear_exit("Authentication failure");
+	}
+
+	/* Note: in delayed-zlib mode, setting authdone here 
+	 * will enable compression in the transport layer */
+	ses.authstate.authdone = 1;
+	cli_ses.state = USERAUTH_SUCCESS_RCVD;
+
+	/* 
+	 * SECURITY FIX: Do not reset cli_ses.lastauthtype here.
+	 * Retaining the authentication type prevents a potential bypass 
+	 * of additional security measures that depend on knowing which 
+	 * authentication method was used.
+	 */
+
+#if DROPBEAR_CLI_PUBKEY_AUTH
+	cli_auth_pubkey_cleanup();
+#endif
+}
+</repair>

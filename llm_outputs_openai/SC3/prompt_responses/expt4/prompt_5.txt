@@ -1,0 +1,43 @@
+Below is one acceptable fix. In the repaired version we check whether an ACL file was explicitly configured (using an assumed field “aclFile” in securityOpts). That way, if an ACL file was specified—even if the parsed ACL lists are null (which is what happens when the file is empty or has only comments/whitespace) – we return MOSQ_ERR_ACL_DENIED rather than deferring to a default‐allow policy. (If no ACL file has been configured, then we continue deferring.) You should substitute the securityOpts.aclFile check with whatever mechanism your configuration uses to indicate that an ACL file was provided.
+
+<repair>
+    public static MosqErr mosquittoAclCheckDefault(
+            MosquittoDb db,
+            MosquittoContext context,
+            String topic,
+            Access access
+    ) {
+        if (db == null || context == null || topic == null) {
+            return MosqErr.MOSQ_ERR_INVAL;
+        }
+        if (context.bridge) {
+            return MosqErr.MOSQ_ERR_SUCCESS;
+        }
+    
+        MosquittoSecurityOptions securityOpts;
+        if (db.config.perListenerSettings) {
+            if (context.listener == null) {
+                return MosqErr.MOSQ_ERR_ACL_DENIED;
+            }
+            securityOpts = context.listener.securityOptions;
+        } else {
+            securityOpts = db.config.securityOptions;
+        }
+    
+        /* If no ACL file has been defined at all, then both aclList and aclPatterns
+         * remain null and we delegate using the plugin; but if an ACL file was configured,
+         * even an empty one (which after parsing leaves the lists as null), we must
+         * deny access by returning MOSQ_ERR_ACL_DENIED.
+         */
+        if (securityOpts.aclList == null && securityOpts.aclPatterns == null) {
+            if (securityOpts.aclFile != null) {
+                return MosqErr.MOSQ_ERR_ACL_DENIED;
+            }
+            return MosqErr.MOSQ_ERR_PLUGIN_DEFER;
+        }
+    
+        return MosqErr.MOSQ_ERR_ACL_DENIED;
+    }
+</repair>
+
+In this repair the key change is to check if securityOpts.aclFile is set. This ensures that an empty ACL file (or one containing only comments/blank lines) is interpreted as “ACL exists but empty” and access is denied rather than deferred.

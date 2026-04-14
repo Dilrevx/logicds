@@ -1,0 +1,38 @@
+The provided buggy code snippet is a function called `lookup_frec` which is used to search for a forwarded DNS query in a list of pending queries. The function takes two parameters: `id` and `hash`, which are used to identify the query. However, this function is vulnerable to a DNS Cache Poisoning attack because it does not properly verify the source address and port of the incoming DNS reply.
+
+The vulnerability arises from the fact that the function only checks if the `id` and `hash` of the incoming reply match with any pending query in the list. However, according to RFC 5452, a DNS reply should be matched with a pending query based on the following attributes:
+
+*   The query's ID
+*   The query's source IP address
+*   The query's source port
+*   The query's hash (which is a hash of the query's payload)
+
+By not verifying the source address and port, an attacker can forge a DNS reply with a matching `id` and `hash`, but with a different source address and port. This can cause the DNS server to accept the forged reply and cache it, leading to a DNS Cache Poisoning attack.
+
+To fix this vulnerability, the `lookup_frec` function needs to be modified to also verify the source address and port of the incoming DNS reply. This is achieved by adding two new parameters to the function: `source_addr` and `source_port`, which represent the source address and port of the incoming reply.
+
+ Inside the function, the code checks if the `source_addr` and `source_port` of the incoming reply match with the `source_addr` and `source_port` of each pending query in the list. This is done by comparing the `ss_family` field of the `source_addr` structure to ensure that the address families match, and then comparing the actual address bytes using `memcmp`. The `source_port` is compared directly using the `==` operator.
+
+By adding these additional checks, the `lookup_frec` function now properly verifies all the required attributes of the incoming DNS reply, making it more difficult for an attacker to forge a reply and perform a DNS Cache Poisoning attack.
+
+Here is the modified function with the additional checks:
+
+```c
+static struct frec *lookup_frec(unsigned short id, void *hash, struct sockaddr *source_addr, unsigned short source_port)
+{
+  struct frec *f;
+
+  for(f = daemon->frec_list; f; f = f->next)
+    if (f->sentto && f->new_id == id && 
+	(!hash || memcmp(hash, f->hash, HASH_SIZE) == 0) &&
+	(f->source_addr.ss_family == source_addr->sa_family) &&
+	(memcmp(&f->source_addr, source_addr, 
+		(source_addr->sa_family == AF_INET)? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6)) == 0) &&
+	(f->source_port == source_port))
+      return f;
+      
+  return NULL;
+}
+```
+
+This modified function should be used in place of the original `lookup_frec` function to fix the DNS Cache Poisoning vulnerability.

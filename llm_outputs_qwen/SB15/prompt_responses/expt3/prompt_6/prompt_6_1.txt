@@ -1,0 +1,94 @@
+Based on the vulnerability description and the repair description provided, let's implement the necessary changes in a hypothetical code snippet that might represent the vulnerable section of the BIND software. The following code snippet is a simplified representation of how the repair might look in practice.
+
+### Original Vulnerable Code Snippet (Hypothetical Representation)
+```c
+int process_mirror_zone_data(dns_validator_t *vctx, dns_name_t *name, dns_rdataset_t *rdataset) {
+    dns_keytable_t *secure_roots = vctx->secure_roots;
+    dns_keynode_t *keynode = NULL;
+    dns_key_t *keyOut = NULL;
+    isc_result_t result;
+
+    // Assume some initial setup and loading of keyOut here
+
+    result = dns_keytable_find(secure_roots, name, &keynode);
+    if (result != ISC_R_SUCCESS) {
+        return result; // Vulnerable: does not handle DNS_R_PARTIALMATCH or DNS_R_NOTFOUND
+    }
+
+    while (result == ISC_R_SUCCESS && keynode != NULL) {
+        if (!dst_key_compare(keyOut, keynode->key)) { // Vulnerable: no proper handling if keys do not match
+            dns_keytable_detachkeynode(&keynode);
+            result = dns_keytable_findnextkeynode(secure_roots, name, &keynode);
+            continue;
+        }
+
+        dns_keytable_detachkeynode(&keynode);
+        dns_keytable_detachkeynode(&keynode); // Double detach, likely a bug
+
+        vctx->keyset.trust = dns_trust_secure;
+        vctx->keysigs.trust = dns_trust_secure;
+        goodkey[0] = ISC_TRUE;
+
+        break;
+    }
+
+    // No cleanup of keynode if loop exits without break
+    dns_key_free(&keyOut);
+
+    return result;
+}
+```
+
+### Repaired Code Snippet
+```c
+int process_mirror_zone_data(dns_validator_t *vctx, dns_name_t *name, dns_rdataset_t *rdataset) {
+    dns_keytable_t *secure_roots = vctx->secure_roots;
+    dns_keynode_t *keynode = NULL;
+    dns_key_t *keyOut = NULL;
+    isc_result_t result;
+
+    // Assume some initial setup and loading of keyOut here
+
+    result = dns_keytable_find(secure_roots, name, &keynode);
+    if (result == DNS_R_PARTIALMATCH || result == DNS_R_NOTFOUND) {
+        result = ISC_R_SUCCESS; // Treat partial matches or not found as success
+    }
+    if (result != ISC_R_SUCCESS) {
+        dns_key_free(&keyOut); // Free keyOut on failure
+        return result;
+    }
+
+    while (result == ISC_R_SUCCESS && keynode != NULL) {
+        if (!dst_key_compare(keyOut, keynode->key)) {
+            dns_keytable_detachkeynode(&keynode);
+            result = dns_keytable_findnextkeynode(secure_roots, name, &keynode);
+            continue;
+        }
+
+        dns_keytable_detachkeynode(&keynode); // Correctly detach the keynode
+
+        vctx->keyset.trust = dns_trust_secure;
+        vctx->keysigs.trust = dns_trust_secure;
+        goodkey[0] = ISC_TRUE;
+
+        break;
+    }
+
+    if (keynode != NULL) {
+        dns_keytable_detachkeynode(&keynode); // Ensure keynode is detached if loop exits
+    }
+
+    dns_key_free(&keyOut); // Properly free keyOut
+
+    return result;
+}
+```
+
+### Key Changes Implemented:
+1. **Handling Partial Matches and Not Found**: Adjusted the `result` to `ISC_R_SUCCESS` if it is `DNS_R_PARTIALMATCH` or `DNS_R_NOTFOUND`.
+2. **Early Exit on Failure**: Added an early exit and resource cleanup if the adjusted `result` is still not `ISC_R_SUCCESS`.
+3. **Correct Key Comparison**: Ensured that the loop properly handles key comparisons and detaches key nodes correctly.
+4. **Final Cleanup**: Added a final check to ensure `keynode` is detached if the loop exits without breaking.
+5. **Resource Management**: Ensured that `keyOut` is freed properly to avoid resource leaks.
+
+These changes align with the repair description provided and aim to mitigate the described vulnerability in the BIND software's mirror zone feature.

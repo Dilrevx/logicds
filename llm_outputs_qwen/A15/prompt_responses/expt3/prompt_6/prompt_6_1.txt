@@ -1,0 +1,46 @@
+Based on the provided repair description, here is how you could modify the relevant section of the code in `wpa_supplicant` to address the vulnerability. This assumes you have access to the source code and are familiar with the structure of `wpa_supplicant`.
+
+Let's say the problematic section of the code is in the `eap_peap_process_tlv` function within the `src/eap_peer/eap_peap.c` file. Below is a hypothetical example of what the original and repaired code might look like.
+
+### Original Code (Vulnerable)
+```c
+case EAP_TLV_RESULT_SUCCESS:
+    if (force_failure) {
+        resp_status = EAP_TLV_RESULT_FAILURE;
+        ret->decision = DECISION_FAIL;
+    } else {
+        resp_status = EAP_TLV_RESULT_SUCCESS;
+        ret->decision = DECISION_UNCOND_SUCC;
+    }
+    break;
+```
+
+### Repaired Code
+```c
+case EAP_TLV_RESULT_SUCCESS:
+    if (force_failure) {
+        resp_status = EAP_TLV_RESULT_FAILURE;
+        ret->decision = DECISION_FAIL;
+    } else if (!peap_phase2_sufficient(sm, data)) {
+        wpa_printf(MSG_INFO, "Server indicated Phase 2 success prematurely");
+        resp_status = EAP_TLV_RESULT_FAILURE;
+        ret->decision = DECISION_FAIL;
+    } else {
+        resp_status = EAP_TLV_RESULT_SUCCESS;
+        ret->decision = DECISION_UNCOND_SUCC;
+    }
+    break;
+```
+
+### Explanation of Changes
+1. **Check for `force_failure`**: This condition remains unchanged as it handles cases where a failure should be forced regardless of the server's message.
+2. **New Condition for `peap_phase2_sufficient(sm, data)`**: 
+   - Before accepting the `EAP_TLV_RESULT_SUCCESS` message, the code now checks if Phase 2 authentication has been sufficiently completed using the `peap_phase2_sufficient` function.
+   - If `peap_phase2_sufficient` returns `false`, it indicates that Phase 2 authentication was not completed as expected, and the code handles this by setting `resp_status` to `EAP_TLV_RESULT_FAILURE` and `ret->decision` to `DECISION_FAIL`.
+   - If `peap_phase2_sufficient` returns `true`, it confirms that Phase 2 authentication was completed successfully, and the code proceeds with the original logic.
+
+### Additional Considerations
+- **Logging**: The addition of `wpa_printf(MSG_INFO, "Server indicated Phase 2 success prematurely");` helps in diagnosing issues by logging when the server and client disagree about the state of Phase 2 authentication.
+- **Testing**: After making these changes, thoroughly test the modified code to ensure that it behaves correctly under various scenarios, including legitimate and malicious attempts to authenticate.
+
+This repair ensures that `wpa_supplicant` properly verifies the completion of Phase 2 authentication before accepting an EAP-TLV Success message, thus mitigating the risk of authentication bypass attacks.

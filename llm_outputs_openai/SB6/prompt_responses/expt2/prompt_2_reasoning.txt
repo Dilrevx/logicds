@@ -1,0 +1,15 @@
+The repair replaces the original function call that checked the certificate’s common name (CN) with a new function call, CommonUtils.x509_crt_verify_name. The key difference is that the new function explicitly distinguishes between the types of names present in the subject alternative name (SAN) extension, such as differentiating a domain (DNS name) from an IPv4 or IPv6 address.
+
+Originally, the code used CommonUtils.x509_crt_check_cn to compare the expected name with values extracted from the certificate. This approach had a flaw: if the certificate contained a SAN extension, it would check the expected name against every entry in the SAN list without considering the type of each entry. An attacker could exploit this behavior by controlling an IP address and obtaining a certificate that, while valid for that IP address, would still pass as a valid match for an unrelated domain name if the expected name was inadvertently matched to the IP address entry.
+
+The new function, x509_crt_verify_name, addresses this vulnerability by taking a more nuanced approach:
+1. It first searches for the presence of the SAN extension within the certificate. 
+2. If the SAN extension is found, the function iterates through the list of SAN entries and checks each entry against the expected name. Crucially, it verifies that the type of the SAN entry (e.g., DNS name) matches the intended type of the expected name. This type-aware verification prevents an IP address from being incorrectly accepted if the expected name is a hostname.
+3. In scenarios where no SAN extension is present, the function falls back to verifying the common name, thus preserving standard certificate validation.
+
+This change is significant for several reasons:
+• It enhances security by strictly enforcing the appropriate matching between the expected name and the certificate’s entries. By ensuring that a domain name is only compared against DNS names, it reduces the risk of an attacker exploiting a misinterpretation in the SAN content.
+• The new approach aligns with best practices in certificate validation by ensuring that authentication only succeeds when there is explicit type compatibility between the certificate’s names and the expected identity.
+• It maintains backwards compatibility and expected behavior when the SAN extension is missing, thus avoiding unnecessary disruptions in environments that rely on the traditional common name verification.
+
+In summary, the repair fixes the vulnerability by shifting the name verification logic to a function that correctly interprets the subject alternative name extension. This proactive check against the type of each SAN entry prevents attackers from bypassing authentication checks using mismatched name types (like submitting an IP address certificate to impersonate a domain). The update makes the verification process more robust, ensuring that invalid matches (such as a 4-byte or 16-byte IP address matching a domain) are correctly rejected, thereby mitigating the risk of certificate misinterpretation and impersonation attacks.

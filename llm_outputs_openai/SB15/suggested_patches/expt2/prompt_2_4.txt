@@ -1,0 +1,90 @@
+package main;
+
+import commons.*;
+
+public class KeyVerifier {
+    public static int check_dnskey_sigs(Vctx vctx,
+                                        DnsRdataDnskey dnskey,
+                                        RData rdata,
+                                        boolean is_ksk)
+    {
+        byte[] active_keys  = is_ksk ? vctx.ksk_algorithms : vctx.zsk_algorithms;
+        byte[] standby_keys = is_ksk ? vctx.standby_ksk    : vctx.standby_zsk;
+        boolean[] goodkey   = is_ksk ? vctx.goodksk         : vctx.goodzsk;
+
+        if (Dnssec.dns_dnssec_selfsigns(rdata,
+                vctx.origin, vctx.keyset, vctx.keysigs, false, vctx.mctx))
+        {
+            if ((active_keys[dnskey.algorithm] & 0xFF) != 255) {
+                active_keys[dnskey.algorithm]++;
+            }
+        }
+        else if (!is_ksk &&
+                Dnssec.dns_dnssec_signs(rdata,
+                        vctx.origin, vctx.soaset, vctx.soasigs, false, vctx.mctx))
+        {
+            if ((active_keys[dnskey.algorithm] & 0xFF) != 255) {
+                active_keys[dnskey.algorithm]++;
+            }
+            return Commons.ISC_R_SUCCESS;
+        }
+        else {
+            if ((standby_keys[dnskey.algorithm] & 0xFF) != 255) {
+                standby_keys[dnskey.algorithm]++;
+            }
+            return Commons.ISC_R_SUCCESS;
+        }
+        if (vctx.secroots == null) {
+            goodkey[0] = true;
+            return Commons.ISC_R_SUCCESS;
+        }
+        DstKey[] keyOut = new DstKey[1];
+        int result = Dnssec.dns_dnssec_keyfromrdata(
+                vctx.origin, rdata, vctx.mctx, keyOut);
+        if (result != Commons.ISC_R_SUCCESS) {
+            return result;
+        }
+        DstKey key = keyOut[0];
+        Keynode[] knOut = new Keynode[1];
+        result = Keytable.dns_keytable_findkeynode(
+                vctx.secroots, vctx.origin,
+                Dst.dst_key_alg(key), Dst.dst_key_id(key),
+                knOut);
+
+    // If the result is not a confirmed success, cleanup and exit immediately.
+    if (result != Commons.ISC_R_SUCCESS) {
+        // For DNS_R_PARTIALMATCH or NOTFOUND cases, reset to success before cleanup.
+        result = Commons.ISC_R_SUCCESS;
+        Dst.dst_key_free(keyOut);
+        return result;
+    }
+
+    // When result indicates success, iterate over the keynodes to verify trust.
+    boolean validKeyFound = false;
+    for (Keynode keynode : knOut) {
+        // Use a dedicated comparison routine to check if the current keynode
+        // matches the expected trusted key.
+        if (Keynode.compare(keynode, keyOut)) {   // Assume Keynode.compare() returns true if they match.
+            // The correct trusted key has been found.
+            Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[] { keynode });
+            Rdataset.dns_rdataset_settrust(vctx.keyset, Commons.dns_trust_secure);
+            Rdataset.dns_rdataset_settrust(vctx.keysigs, Commons.dns_trust_secure);
+            goodkey[0] = true;
+            validKeyFound = true;
+            break;
+        } else {
+            // Detach any keynode that does not match the expected key to remove forged data.
+            Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[] { keynode });
+        }
+    }
+
+    // If no valid key was identified, ensure that the goodkey flag remains false.
+    if (!validKeyFound)
+        goodkey[0] = false;
+
+    // Clean up allocated key data.
+    Dst.dst_key_free(keyOut);
+    return result;
+
+    }
+}

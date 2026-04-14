@@ -1,0 +1,25 @@
+The provided repair addresses a critical security vulnerability in the wolfSSL library related to TLS 1.3 client implementations, specifically focusing on how the library handles different signature algorithms during the TLS handshake process. The vulnerability allows a malicious actor in a privileged network position to impersonate a TLS 1.3 server and potentially bypass authentication by manipulating the signature algorithms used in the handshake.
+
+### Vulnerability Analysis
+
+The original code snippet checks for the presence of various types of public keys (ED25519, ED448, ECC, and RSA) based on the signature algorithm (`args->sigAlgo`) provided by the peer (the server). If a specific type of key is expected based on the signature algorithm but is not present, the code logs a message indicating an issue ("Oops, peer sent ... key but not in verify"). However, it does not terminate the handshake process or return an error for some cases, particularly when the peer sends an RSA key without proper verification.
+
+This lack of enforcement can allow an attacker to exploit the situation by sending a signature algorithm that the client expects to see (e.g., ED25519), but not actually providing the corresponding key. The client logs a warning but continues with the handshake, which can lead to a successful man-in-the-middle (MITM) attack where the attacker can impersonate the legitimate server.
+
+### Repair Implementation
+
+The repair involves modifying the existing code to ensure that the presence of the expected public key is strictly enforced. If the expected key is not present, the handshake should be immediately terminated with an appropriate error. This change ensures that the client does not proceed with the handshake unless all necessary cryptographic material is correctly verified.
+
+#### Detailed Changes:
+
+1. **Logging and Error Handling**: For each signature algorithm check, the `WOLFSSL_MSG` function is used to log a message indicating the issue. However, this logging alone is insufficient to prevent the vulnerability. The repair adds `ERROR_OUT(INVALID_PARAMETER, exit_dcv);` after each logging statement. This macro call terminates the handshake process and returns an `INVALID_PARAMETER` error, effectively preventing the client from continuing with an unauthenticated server.
+
+2. **Consistency Across Algorithms**: The repair ensures that the same error handling mechanism is applied consistently across all signature algorithms (ED25519, ED448, ECC, and RSA). This uniformity is crucial for maintaining the integrity of the TLS handshake process.
+
+3. **Specific Case for RSA**: In the original code, the RSA case was partially handled with an error for PKCS#1.5 signatures but not for RSA-PSS signatures if the key was missing. The repair corrects this inconsistency by adding the `ERROR_OUT` macro call for both RSA signature types, ensuring that the absence of any expected RSA key results in an immediate termination of the handshake.
+
+### Security Implications
+
+By enforcing strict checks and terminating the handshake upon detection of any discrepancies in the cryptographic material, the repair significantly enhances the security of the TLS 1.3 client implementation. It prevents attackers from exploiting the lack of validation to impersonate servers and perform MITM attacks. This change aligns with best practices in secure coding and ensures that the wolfSSL library adheres to the security requirements of the TLS protocol.
+
+In summary, the repair addresses a critical vulnerability by ensuring that all expected cryptographic material is present and validated before proceeding with the TLS handshake. This modification not only fixes the immediate security issue but also strengthens the overall robustness and security of the wolfSSL library against potential future attacks.

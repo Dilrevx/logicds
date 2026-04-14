@@ -1,0 +1,13 @@
+The repair introduces logic to select the right identifier for performing the CRL lookup. Previously, the code hard-coded the lookup based solely on the certificate’s subject without considering that the Distribution Point (DP) might include a cRLIssuer field. This was the crux of the vulnerability: by always using the subject, the CRL issuer wasn’t verified correctly when the DP provided an alternative issuer.
+
+Step by step, here’s what the repair does:
+
+1. It defines a new variable, crl_name, whose value is determined based on the DP content. If the DP structure (which we assume is accessible via the variable dp) contains a non-null cRLIssuer, then that field is used as the CRL lookup name. Otherwise, the code falls back to using the certificate issuer from the cert structure.
+
+2. After determining the appropriate crl_name, the code calls the CRL retrieval functions. Depending on the OpenSSL version and whether LibreSSL is being used, it has two different function-calling conventions. However, both calls now use crl_name instead of subject alone. This ensures that if the DP contains a cRLIssuer (as per specification), it is used to retrieve the corresponding CRL.
+
+3. The specification requires that if cRLIssuer is present in the DP, the CRL’s issuer must match that field and that an issuing distribution point extension is properly validated. Even though the deeper validation isn’t shown in this snippet, using the correct identifier here is crucial as a preliminary check to retrieve the right CRL candidates.
+
+By using either dp->cRLIssuer or cert->issuer appropriately, the repair addresses the vulnerability wherein the incorrect (subject-only) name could lead to wrong CRL retrieval. This mistake might allow a revoked certificate to be mistakenly validated because CRLs relevant to the certificate's revocation status were never correctly considered.
+
+In essence, the solution enables the proper verification of CRL issuer and scope, ensuring that the CRL retrieved corresponds correctly based on the DP (if specified) or on the certificate issuer. This alignment with the specification helps prevent revoked certificates from bypassing the revocation check, thereby fixing the original vulnerability.

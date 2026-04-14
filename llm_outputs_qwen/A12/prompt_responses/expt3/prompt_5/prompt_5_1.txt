@@ -1,0 +1,69 @@
+Certainly! Let's go through the repair process step-by-step to ensure that the TLS v1.3 server correctly enforces mutual authentication, preventing clients from bypassing the need to present a valid certificate.
+
+### Step-by-Step Repair Implementation
+
+1. **Preprocessing Directives**:
+   We start by ensuring that our checks are only applied when certificates and client authentication are enabled. This is done using preprocessing directives.
+
+2. **Check Server Side**:
+   We need to make sure that the checks are performed only on the server side since the vulnerability pertains to servers requiring mutual authentication.
+
+3. **Mutual Authentication Requirement Check**:
+   Check if mutual authentication is required (`ssl->options.mutualAuth`) or if the server is configured to fail the handshake if no certificate is provided by the client (`ssl->options.failNoCert`).
+
+4. **Peer Verification Check**:
+   Ensure that the server has not already verified the peer's certificate (`ssl->options.havePeerVerify`), and that the session is not being resumed (`!ssl->options.resuming`).
+
+5. **Handle Missing Certificate**:
+   If the conditions indicate that mutual authentication is required but the client has not provided a certificate, send a fatal alert and return an error code.
+
+6. **Continue Existing Logic**:
+   After ensuring the necessary checks, continue with the existing logic for processing the `Finished` message.
+
+Here's how you can implement these steps in the code:
+
+```c
+WOLFSSL_START(WC_FUNC_FINISHED_DO);
+WOLFSSL_ENTER("DoTls13Finished");
+
+/* check against totalSz */
+if (*inOutIdx + size + ssl->keys.padSz > totalSz)
+    return BUFFER_E;
+
+#if !defined(NO_CERTS) && !defined(WOLFSSL_NO_CLIENT_AUTH)
+    if (ssl->options.side == WOLFSSL_SERVER_END) { // Check if it's the server side
+        if ((ssl->options.mutualAuth || ssl->options.failNoCert) && 
+            !ssl->options.havePeerVerify && 
+            !ssl->options.resuming) {
+            int ret = NO_PEER_CERT; // Define NO_PEER_CERT appropriately if not defined
+            DoCertFatalAlert(ssl, ret); // Send fatal alert
+            return ret; // Return error code
+        }
+    }
+#endif
+
+if (ssl->options.handShakeDone) {
+    ret = DeriveFinishedSecret(ssl, ssl->clientSecret,
+                               ssl->keys.client_write_MAC_secret);
+    if (ret != 0)
+        return ret;
+
+    secret = ssl->keys.client_write_MAC_secret;
+}
+```
+
+### Explanation of Changes
+
+- **Preprocessing Directives**: `#if !defined(NO_CERTS) && !defined(WOLFSSL_NO_CLIENT_AUTH)` ensures that the code modifications are only applied when certificates and client authentication are enabled.
+  
+- **Server-Side Check**: `ssl->options.side == WOLFSSL_SERVER_END` ensures that the checks are performed only on the server side.
+
+- **Mutual Authentication Requirement Check**: `(ssl->options.mutualAuth || ssl->options.failNoCert)` checks if mutual authentication is required or if the server should fail the handshake without a client certificate.
+
+- **Peer Verification Check**: `!ssl->options.havePeerVerify && !ssl->options.resuming` ensures that the server hasn't already verified the client's certificate and that the session is not being resumed.
+
+- **Error Handling**: `DoCertFatalAlert(ssl, ret)` sends a fatal alert to the client, and `return ret;` terminates the handshake process with an error code if the client does not provide a certificate.
+
+- **Continuation of Existing Logic**: The existing logic for processing the `Finished` message continues after the added security checks.
+
+This repair ensures that the TLS v1.3 server correctly enforces mutual authentication requirements, preventing unauthorized clients from bypassing the need to present a valid certificate.

@@ -1,0 +1,20 @@
+The repair strengthens the certificate verification process by ensuring that the signature algorithm (sigAlgo) used in the TLS handshake is consistent with the actual certificate presented by the peer. Here’s how the changes address the vulnerability:
+
+1. For each supported public-key type (such as ED25519, ED448, ECC, and post-quantum options like Falcon) the code now explicitly checks two conditions:  
+  a. If the certificate is present (e.g., ssl->peerEd25519KeyPresent is true), then the sigAlgo must exactly match the expected algorithm for that key type (e.g., ed25519_sa_algo).  
+  b. Conversely, if the certificate corresponding to a key type is absent, then the code explicitly rejects any signature using that algorithm.  
+This bi-directional check prevents scenarios where a client might incorrectly accept a mismatching signature algorithm that does not refer to any actual certificate key. This fixes the vulnerability by eliminating the possibility that a TLS client might bypass the certificate check based on a mismatched sigAlgo.
+
+2. The modified structure for each section has two distinct branches:  
+  - An "if (certificate present)" branch to verify that the signature algorithm is what is expected, and  
+  - An "else if" branch to catch any attempt to use a signature algorithm when the appropriate certificate is not provided.  
+This refined logic ensures that any deviation (i.e., the algorithm in the CertificateVerify message not matching the certificate) results in an immediate error and termination of the handshake.
+
+3. For RSA, the repair enforces that the only allowed signature algorithm in TLSv1.3 is RSA-PSS.  
+  - If an RSA certificate is present, sigAlgo must be rsa_pss_sa_algo.  
+  - If no RSA certificate is available, the code will reject any RSA-PSS or PKCS#1.5 attempts.  
+This avoids fallback to outdated or insecure methods (like PKCS#1.5), and similarly ensures that the algorithm strictly corresponds to an actual RSA certificate.
+
+4. The repair includes a final safety check ensuring that at least one valid certificate (from any supported type) was present. Without any valid certificate matching the sigAlgo, the handshake will be aborted. This overall verification ensures consistency and integrity throughout the authentication process.
+
+By enforcing these stricter checks, the repair closes the vulnerability where a client might be tricked into accepting a server using a mismatched signing algorithm. The updates ensure that the signature used for authentication is directly tied to a corresponding certificate, thereby preventing a potential bypass during the certificate verify step of the TLS handshake.

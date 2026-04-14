@@ -1,0 +1,13 @@
+The repair forces the protocol to require a CertificateVerify message whenever a client certificate is provided, regardless of the signing capability of the certificate. In the original code, there was a condition checking if the message type was not SSL3_MT_CERTIFICATE_VERIFY. If this condition was met and if the peer was not NULL and the certificate type had signing enabled (EVP_PKT_SIGN), then an error was raised. However, this check was not sufficient because even if a DH certificate (which doesn’t have signing capability) was used for client authentication, the absence of a CertificateVerify message was mistakenly considered acceptable. This allowed an attacker to bypass verification by using a DH certificate and omitting the CertificateVerify message, thereby gaining unauthorized access.
+
+In the repair, the check for the absence of the CertificateVerify message now unconditionally results in an error if any client certificate is provided (i.e., if peer != NULL). Specifically, the problematic code was modified to always issue an error if the required CertificateVerify message is missing when a client certificate was provided. 
+
+The important change here is the removal of the condition that allowed the omission of the verify message when the certificate type does not support signing. Now, regardless of whether the certificate possesses signing capability or not, if a certificate is used then the protocol expects a corresponding CertificateVerify message. This enforces the proper handshake flow as defined by the TLS specification, which clearly indicates that the CertificateVerify message is a required step when client authentication is involved.
+
+In effect, the repair eliminates the possibility of bypassing authentication using a DH certificate without a valid signature check. The check in the code:
+
+  if (peer != NULL)
+
+ensures that whenever the server receives a client certificate, it does not choose to simply reuse the previous message and proceed without requiring a CertificateVerify. Instead, the handshake is terminated with an unexpected message alert. This properly aligns with the TLS protocol requirements and closes the security vulnerability.
+
+Overall, the change enhances security by mandating the verification of the certificate's authenticity through the CertificateVerify message. This prevents remote attackers from exploiting the handshake protocol to bypass the cryptographic check, ensuring the client actually possesses the private key corresponding to its certificate.

@@ -1,0 +1,19 @@
+The repair adds an explicit check to ensure that the signature algorithm advertised in the certificate message (recorded in ssl->peerCertSigAlgo) matches the algorithm used in the CertificateVerify message (args->sigAlgo). Here’s how the fix works step by step:
+
+1. Conditional Check for TLS 1.3:
+  - The repair introduces a new block, wrapped in an #ifdef TLS1_3 directive. This block is executed only for TLS 1.3 connections.
+  - It compares ssl->peerCertSigAlgo (the algorithm associated with the certificate) to args->sigAlgo (the algorithm used by the peer when signing the CertificateVerify message). If these two do not match, the connection is rejected ("Mismatch between certificate and CertificateVerify signature algorithm") by setting ret to SIG_VERIFY_E and jumping to the cleanup label. 
+
+2. Rationale Behind the Check:
+  - The original vulnerability allowed an attacker to potentially bypass proper certificate verification. An attacker could manipulate or use a different signature algorithm in the CertificateVerify message than the one used in the certificate, thereby misleading the handshake process.
+  - By ensuring that both values match, we force consistency between the certificate's advertised signature algorithm and the algorithm used for the handshake’s digital signature. This prevents a mismatch that could be exploited to bypass authentication.
+
+3. Existing Checks Remain Intact:
+  - The remaining sections (for ED25519, ED448, ECC, Falcon, and RSA) already verify that if a signature using a given algorithm is sent, then the corresponding certificate data must be present.
+  - These checks continue to ensure that the correct key type is provided for the valid signature, but now, with the additional overall TLS 1.3 check, the system won’t overlook mismatches between the certificate and CertificateVerify message.
+
+4. Effective Defense:
+  - The added check ensures that any attempt to supply a CertificateVerify message with a mismatched signature algorithm (compared to the certificate’s algorithm) is immediately detected and flagged.
+  - This prevents an attacker from using an alternate or lower-security algorithm in the CertificateVerify step to bypass certificate checks performed earlier in the protocol.
+
+In summary, the repair enforces consistency between the certificate’s reported signing algorithm and that used in signing the CertificateVerify message under TLS 1.3. This effectively prevents an attacker from exploiting the previously possible mismatch to bypass certificate verification, thereby fixing the vulnerability while preserving other individual algorithm-specific checks.

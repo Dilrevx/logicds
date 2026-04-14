@@ -1,0 +1,19 @@
+The repair introduces an additional validation step to ensure that a ChangeCipherSpec (CCS) message is processed only when it is expected during the TLS handshake. Here’s a walkthrough of the changes:
+
+1. First, the repair retains the original validations checking that:
+   - The record length is exactly 1,
+   - The offset is at 0, and 
+   - The single byte in the record equals the expected CCS value.
+   These checks confirm the initial format and content of the CCS message.
+
+2. Next, it still verifies that a new cipher has been negotiated (i.e., s->s3->tmp.new_cipher is not NULL). This ensures that the CCS message is not received too early when no cipher change is available.
+
+3. The critical addition is the check for a newly introduced state flag, s->s3->ccs_allowed. This flag is set by the handshake logic when a CCS message is expected. By verifying if this flag is enabled, the repair prevents unsolicited or out-of-sequence CCS messages from being processed. If the flag isn’t set, it indicates that the message has been received at an unexpected time, and the code then raises an unexpected message alert, logs the error (with SSL_R_UNEXPECTED_CCS), and exits with an error. 
+
+4. Immediately after the check passes (i.e., the CCS message is confirmed to be expected), the code clears the ccs_allowed flag. This is an important step because it prevents the possibility of processing a second CCS message during an ongoing handshake. It ensures that even if another CCS message is received later, it will not pass this state check, thereby mitigating the risk of an attacker injecting multiple CCS messages.
+
+5. Finally, the record’s length is set to 0 (marking the CCS message as "consumed"), any registered message callback is invoked, and the routine proceeds with the process of changing the cipher via ssl3_do_change_cipher_spec.
+
+Overall, by tying the CCS message acceptance to a specific handshake state (indicated via the ccs_allowed flag), the repair effectively mitigates the "CCS Injection" vulnerability. This vulnerability exploited the absence of a check for whether a CCS message was expected, allowing a malicious actor to inject a CCS and trigger the use of a zero-length master key. The additional check for the ccs_allowed flag, and its subsequent clearing, ensures that only a legitimate, expected CCS message is processed, thereby protecting against session hijacking or extraction of sensitive session data.
+
+In summary, the repair ensures proper state management during the handshake, making the processing of CCS messages both precise and secure.

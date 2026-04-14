@@ -1,0 +1,58 @@
+Below is one example of how to repair the snippet. In this version each branch that finds a signature without its expected certificate now sets an error code and immediately jumps to an exit/cleanup section, preventing further processing. For example, the ED25519, ED448, ECC, and both RSA cases now clearly log an error, mark the error condition, and direct the flow into cleanup via a goto statement.
+
+------------------------------------------------
+/* Repaired Code Snippet */
+#ifdef HAVE_ED25519
+    if (args->sigAlgo == ed25519_sa_algo && !ssl->peerEd25519KeyPresent) {
+        WOLFSSL_MSG("Error: ED25519 signature provided but no matching ED25519 certificate found.");
+        ret = SIG_VERIFY_ERROR;  /* Assign an error code indicating signature verification error */
+        goto exit_dcv;           /* Immediately jump to error cleanup */
+    }
+#endif
+
+#ifdef HAVE_ED448
+    if (args->sigAlgo == ed448_sa_algo && !ssl->peerEd448KeyPresent) {
+        WOLFSSL_MSG("Error: ED448 signature provided but no matching ED448 certificate found.");
+        ret = SIG_VERIFY_ERROR;
+        goto exit_dcv;
+    }
+#endif
+
+#ifdef HAVE_ECC
+    if (args->sigAlgo == ecc_dsa_sa_algo && !ssl->peerEccDsaKeyPresent) {
+        WOLFSSL_MSG("Error: ECC signature provided but no matching ECC certificate found.");
+        ret = SIG_VERIFY_ERROR;
+        goto exit_dcv;
+    }
+#endif
+
+#ifndef NO_RSA
+    if (args->sigAlgo == rsa_sa_algo) {
+        WOLFSSL_MSG("Error: PKCS#1.5 signature provided but certificate missing or in an incorrect format.");
+        ret = SIG_VERIFY_ERROR;
+        goto exit_dcv;
+    }
+    if (args->sigAlgo == rsa_pss_sa_algo &&
+        (ssl->peerRsaKey == NULL || !ssl->peerRsaKeyPresent)) {
+        WOLFSSL_MSG("Error: RSA PSS signature provided but no corresponding RSA certificate found.");
+        ret = SIG_VERIFY_ERROR;
+        goto exit_dcv;
+    }
+#endif
+
+/* ... continue with the rest of the code ... */
+
+exit_dcv:
+    /* cleanup or further error-handling routine */
+    return ret;
+------------------------------------------------
+
+Explanation of Key Changes:
+
+1. For each supported algorithm (ED25519, ED448, ECC), the code now checks if the corresponding certificate flag is missing. If the mismatch occurs, it logs a clear error message, sets a return code (here we use SIG_VERIFY_ERROR as an example error identifier) and immediately goes to an error-handling section.
+
+2. In the RSA checks, a similar approach is used. For the traditional PKCS#1.5 signature, the code now considers this a proper error by setting the error code and halting further processing. For RSA PSS, the conditions are refined so that if either the RSA key is NULL or the certificate presence flag is false, the same error handling is triggered.
+
+3. The jump to the exit_dcv label is used for centralizing the cleanup and error management. This ensures that if the peer’s certificate does not match the expected signature algorithm, no further processing can occur—which mitigates the risk of man-in-the-middle attacks through signature spoofing.
+
+This repair makes the certificate–signature verification much more robust by enforcing proper error handling whenever an expected certificate is missing, thus reducing vulnerability exposure from a man-in-the-middle attack.

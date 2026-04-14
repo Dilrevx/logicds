@@ -1,0 +1,48 @@
+Below is an example of how the code can be modified so that when an ACL file is explicitly provided—even if it is empty or contains only comments/blank lines—the broker enforces a deny‐all policy rather than falling back to the default allow behavior.
+
+For example, suppose the original code looked like this:
+
+--------------------------------------------------
+/* Original behavior: if both the in‐memory ACL lists and ACL patterns 
+   are null, assume no ACL file was provided and return early so that the 
+   default (allow) policy is applied. */
+if (in_memory_acls == NULL && acl_patterns == NULL) {
+    return MOSQ_ERR_PLUGIN_DEFER;  // signal “no ACL file provided”
+}
+--------------------------------------------------
+
+We can repair the vulnerability by adding an extra check to verify whether an ACL file pointer exists. The change distinguishes between “no ACL file configured” and “ACL file configured but lacking valid rules.” One possible patch is as follows:
+
+--------------------------------------------------
+/* Improved behavior: Check if both the in‐memory ACL lists and ACL patterns 
+   are null. If so, then determine whether an ACL file was explicitly configured.
+   - If no ACL file is configured (pointer is NULL) then return early,
+     indicating that no ACL file exists.
+   - Otherwise, if an ACL file was provided (even if empty) then enforce a deny‐all policy.
+*/
+if (in_memory_acls == NULL && acl_patterns == NULL) {
+    if (acl_file == NULL) {
+        /* No ACL file was specified by the administrator—
+           continue with the default allow policy by deferring plugin handling. */
+        return MOSQ_ERR_PLUGIN_DEFER;
+    }
+    else {
+        /* An ACL file was explicitly provided, but no valid ACL rules were loaded,
+           for example if the file is empty, or only has comments/blank lines.
+           In such a case we enforce a secure default (deny-all). */
+        log_error("ACL file was provided but contains no valid rules - enforcing deny-all policy");
+        return MOSQ_ERR_ACL_DENIED;  // Or set an internal flag to enforce deny-all for connection requests.
+    }
+}
+--------------------------------------------------
+
+Key points in the repair:
+1. The outer conditional still checks that both the in-memory ACL lists and ACL patterns are null.
+2. A nested if/else now checks whether the ACL file pointer is NULL.
+   • If the ACL file is not provided, the original behavior (returning MOSQ_ERR_PLUGIN_DEFER) is used.
+   • If the ACL file is provided—even if empty—the function now returns an error (or sets
+     an explicit deny-all mode) so that no default allow is inadvertently applied.
+3. The log message (or similar notification) is used to alert operators that an ACL file was
+   configured but did not contain valid operational rules. This makes troubleshooting easier.
+
+This patch ensures that the administrator’s explicit configuration is respected. The system no longer mistakes an empty or comment-only ACL file for the absence of any ACL file, keeping the broker secure by creating a deny-all policy when no valid ACL entries exist.

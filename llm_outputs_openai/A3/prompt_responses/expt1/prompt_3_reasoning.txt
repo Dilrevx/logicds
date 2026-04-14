@@ -1,0 +1,14 @@
+The repair adds extra checks when the existing cipher and its associated engine are reused. In the original vulnerability, when reinitializing an existing context (one that already has an ENGINE and cipher), the code would simply jump to the initialization step without verifying if new key or IV values were provided. That meant an attacker or inadvertent caller could supply new key or IV values during reinitialization, and the changes might be ignored silently, potentially leading to insecure operation.
+
+Here's the breakdown of the changes:
+
+1. In the block checking whether ctx->engine and ctx->cipher are non-null, the original code would jump straight to skip_to_init if either no new cipher was provided (cipher == NULL) or if the new cipher had the same nid (numerical identifier) as the current cipher. In the repair, we add an extra check: if either a non-NULL key or IV is provided along with the same cipher, the routine raises an error instead of silently dropping them. This prevents accidental or malicious reinitializations that might bypass necessary key updates.
+
+2. The error condition:
+   - If either key or IV is not NULL, the code calls ERR_raise with a new error code (EVP_R_REINITIALIZATION_WITH_NEW_KEY_OR_IV) and returns 0. This prevents a full reinitialization that silently ignores key or IV changes.
+
+3. Additionally, if a different cipher (new cipher) is provided, the code forces a full reinitialization by explicitly finishing (releasing) the previous ENGINE before continuing. This ensures that if an attacker tries to change the algorithm without properly resetting the context, the legacy ENGINE is not improperly reused.
+
+4. After these conditions are checked and enforced, if none of the problematic conditions exist, the older behavior is maintained: the code goes to skip_to_init (legacy initialization) with assurance that no new key or IV was unexpectedly passed.
+
+By introducing the key/IV validation, the repair ensures consistency in the initialization process. Reinitializations with new cryptographic materials are now strictly handled, preventing a silent acceptance of conflicting parameters. This hardening step makes it clear that if the caller intends to change critical parameters (key or IV), they must perform a fresh full initialization rather than relying on legacy context reuse. This prevents any logical vulnerabilities that could degrade the security of the cipher initialization process.

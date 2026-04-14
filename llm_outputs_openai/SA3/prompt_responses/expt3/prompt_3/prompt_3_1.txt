@@ -1,0 +1,31 @@
+Below is one example of a repaired version of the snippet. In this fix we explicitly check whether the custom cipher’s NID is NID_undef. If that is the case the legacy initialization path is aborted rather than falling back to the fetched “NULL” cipher from the default provider. (In a complete application you would likely want to return an error code or otherwise signal the misconfiguration.) For example:
+
+------------------------------------------------------------
+/* Example repair: Check for an undefined NID before doing legacy handling */
+if (cipher.getNID() == NID_undef) {
+    /* The NID for a custom cipher must be a defined unique identifier.
+       Using NID_undef may cause the NULL cipher to be fetched from
+       the provider, leading to plaintext being emitted as ciphertext.
+       Abort initialization to avoid this vulnerability. */
+    reportError("Invalid custom cipher: NID_undef is not allowed");
+    return FAILURE;
+}
+
+if (ctx.getEngine() != null || (!OPENSSL_NO_ENGINE && !FIPS_MODULE && tmpImpl != null)
+        || impl != null) {
+
+    if (ctx.getCipher() == ctx.getFetchedCipher()) {
+        ctx.setCipher(null);
+    }
+    EvpCipher.free(ctx.getFetchedCipher());
+    ctx.setFetchedCipher(null);
+    return legacyHandling(ctx, cipher, impl, tmpImpl, enc);
+}
+------------------------------------------------------------
+
+Step-by-step explanation:
+1. We begin by checking the cipher’s NID via cipher.getNID(). If it is equal to NID_undef, the function immediately reports an error and aborts. This is crucial because accepting NID_undef might lead OpenSSL to mistakenly match and fetch the NULL cipher for encryption/decryption.
+2. If the NID is valid, then the rest of the logic runs as before: if any engine or implementation pointers are present, the fetched cipher is released (and set to null after possible adjustment on the ctx’s cipher pointer) and the legacy-handling function is called.
+3. This alters the control flow so that custom ciphers with an undefined NID are not improperly falling through to use the provider’s NULL cipher.
+
+This repair avoids the vulnerability whereby an incorrectly configured custom cipher (with NID_undef) can be used to enact a "no-encryption" scenario.

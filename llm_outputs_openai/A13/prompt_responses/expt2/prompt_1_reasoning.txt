@@ -1,0 +1,17 @@
+The repair ensures that whenever a DLZ database is configured (i.e., the dlz_searched list is not empty), the code always calls the dns_dlzallowzonexfr function. In the original snippet, the DLZ authorization was only attempted in the error path (result != ISC_R_SUCCESS) from the normal zone table lookup. This meant that if a writable DLZ zone existed and the normal zone table lookup returned ISC_R_SUCCESS, the DLZ-specific zone transfer control check was skipped. Consequently, attackers might abuse this oversight to perform unauthorized zone transfers.
+
+Here’s a detailed walkthrough of the repair:
+
+1. DLZ Check First:  
+   The modified code first checks whether a DLZ database is configured by verifying that the dlz_searched list is not empty. If so, it calls dns_dlzallowzonexfr irrespective of the previous success from the normal zone table lookup. This ensures that even if the zone appears valid from the normal lookup, DLZ zones (especially writable ones) undergo the proper authorization check.
+
+2. Handling Denial:  
+   If dns_dlzallowzonexfr returns ISC_R_NOPERM (indicating the transfer is not permitted), the repair logs a security error and sets the result to DNS_R_REFUSED before jumping to the failure routine. This behavior provides a clear denial for unauthorized transfers, and the logging helps in auditing and debugging.
+
+3. Error Propagation:  
+   If the result from dns_dlzallowzonexfr is any error other than ISC_R_SUCCESS, the code now explicitly fails the authorization check for the zone transfer. This ensures that any non-success response from the DLZ authorization function results in the correct unauthorized state being signaled.
+
+4. Handling Non-DLZ Cases:  
+   In cases where no DLZ configuration exists (the dlz_searched list is empty) and normal lookup also fails (result != ISC_R_SUCCESS), the code falls back to rejecting the zone transfer due to the zone not being authoritative. This maintains the proper behavior for non-DLZ zones.
+
+By restructuring the code to check DLZ authorization separately and unconditionally when a DLZ is configured, the repair guarantees that the allowzonexfr method is always invoked for writable DLZ zones. This eliminates the vulnerability where a successful normal zone lookup could inadvertently bypass critical DLZ transfer controls.

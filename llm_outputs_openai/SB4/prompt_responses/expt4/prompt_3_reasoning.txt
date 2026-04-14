@@ -1,0 +1,13 @@
+The original vulnerability arises because the code directly compares the OCSP response’s certificate serial number (rserial) with the expected serial (cserial) using memcmp. However, if rserial.data has extra bytes left over from previous allocations, a direct memcmp might “compare” extra, unintended data, potentially bypassing a correct match if maliciously crafted input is used. 
+
+In the repair, we take two steps:
+
+1. We first check the length (size) of the rserial against that of the cserial. By doing this, we ensure that they are expected to have the same declared length. This check immediately returns an error if the lengths don’t match, preventing further processing.
+
+2. Even if the lengths match, there might still be an issue with trailing garbage bytes left in the allocated buffer for rserial. To mitigate this, the repair creates a new trimmed byte array (rserial_trimmed) that is exactly the size declared in rserial.size. It then copies the first rserial.size bytes from rserial.data into this new array. This way, any trailing bytes present in the original allocated buffer (which might exceed rserial.size) will be discarded, ensuring that the subsequent comparison in memcmp only uses the valid bytes.
+
+By isolating the valid portion of the OCSP response data through rserial_trimmed, we prevent unwanted data from interfering with the certificate validation. Essentially, this repair “sanitizes” the input data for comparison by eliminating any potential garbage data that might have been left over from previous allocations. 
+
+The memcmp is then performed between cserial.data and the trimmed rserial_trimmed, ensuring it assesses only the exact number of valid bytes as specified. If the two values are not identical, an error code is returned, maintaining the integrity of the certificate validation process.
+
+Overall, this repair addresses the vulnerability by guaranteeing that comparisons are made strictly on the intended data size without any extraneous bytes. This prevents attackers from exploiting leftover bytes in memory to bypass the intended validation mechanism, ensuring that the certificate validation remains secure and reliable.

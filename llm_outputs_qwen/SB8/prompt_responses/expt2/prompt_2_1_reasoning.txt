@@ -1,0 +1,29 @@
+The repair introduced to the provided code snippet addresses a significant security vulnerability in the handling of TLS 1.3 sessions within the wolfSSL library. This vulnerability arises when a TLS 1.3 client connects to a server and receives neither a Pre-Shared Key (PSK) extension nor a Key Share Extension (KSE). In such cases, the client may use a default, predictable buffer as the Input Keying Material (IKM) for generating the session master secret. An attacker can exploit this predictable IKM to compromise the session keys, leading to potential eavesdropping or tampering with the session's contents.
+
+### Understanding the Vulnerability
+
+In TLS 1.3, two primary mechanisms are used for key exchange: Pre-Shared Keys (PSKs) and ephemeral key exchanges like ECDHE (Elliptic Curve Diffie-Hellman Ephemeral). PSKs allow clients and servers to reuse previously established keys, while ephemeral key exchanges provide forward secrecy by generating new keys for each session. Both mechanisms are crucial for ensuring the security of the TLS session.
+
+The vulnerability stems from the client's behavior when neither of these mechanisms is properly negotiated. Specifically, if the server does not include a PSK extension or a KSE in its ServerHello message, the client should not proceed with the handshake using a default, predictable IKM. Instead, it should terminate the handshake process to prevent the establishment of an insecure session.
+
+### Analysis of the Original Code
+
+The original code snippet handles the PSK extension by checking if it exists and if a chosen PSK is present. If no suitable PSK is found, it resets the PSK-related options and clears the PSK key array. However, it lacks a check to ensure that a valid key share mechanism (KSE) is present. As a result, if neither a PSK nor a KSE is available, the client might use a default IKM, which compromises the session's security.
+
+### The Repair Strategy
+
+The repair strategy involves introducing a validation step to ensure that at least one of the required key exchange mechanisms (PSK or KSE) is properly established before proceeding with the handshake. Here’s a detailed breakdown of the repair:
+
+1. **Preservation of Existing PSK Handling**: The existing logic for handling PSKs remains unchanged. The code checks for the presence of the PSK extension, iterates through the list of PSKs to find a chosen one, and sets up the PSK key if available. If no suitable PSK is found, it resets the PSK-related options and clears the PSK key array.
+
+2. **Introduction of Named Group Check**: After handling the PSK, the repair introduces a new condition: `if (!ssl.options.pskNegotiated && ssl.session.namedGroup == 0)`. This condition checks whether a PSK was not negotiated (`!ssl.options.pskNegotiated`) and if the named group (related to the Key Share Extension) is unset (`ssl.session.namedGroup == 0`). The named group is a critical component of the KSE, specifying the elliptic curve or finite field used for the ephemeral key exchange.
+
+3. **Returning Error for Missing Extensions**: If both conditions are met—indicating that neither a valid PSK nor a valid key share mechanism is available—the function returns `CommonsConstants.EXT_MISSING`. This action halts the handshake process and signals an error, preventing the establishment of a session based on a predictable IKM. By returning an error, the client ensures that the session cannot proceed without a secure key exchange mechanism.
+
+4. **Continuation of Handshake**: If either a PSK is negotiated or a valid named group is present, the handshake continues as usual. The encryption is turned on (`ssl.keys.encryptionOn = true`), and the server state is updated to reflect the completion of the ServerHello phase (`ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE`).
+
+### Benefits of the Repair
+
+The repair effectively mitigates the risk of session key compromise by ensuring that the TLS 1.3 session cannot proceed unless at least one of the required key exchange mechanisms is properly established. This change prevents the use of a default, predictable IKM, thereby maintaining the integrity and confidentiality of the communication channel. By enforcing the presence of a secure key exchange mechanism, the repair enhances the overall security posture of the TLS implementation, protecting against potential attacks that exploit predictable IKMs.
+
+In summary, the repair addresses a critical vulnerability in the TLS 1.3 handshake process by introducing a validation step that ensures the presence of a secure key exchange mechanism. This enhancement is essential for maintaining the security of TLS sessions and preventing unauthorized access or tampering.

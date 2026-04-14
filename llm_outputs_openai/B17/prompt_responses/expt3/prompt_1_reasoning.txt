@@ -1,0 +1,25 @@
+The vulnerability stemmed from using the wrong parameter (subject) when trying to retrieve CRLs. When validating a certificate, CRLs are issued by the certificate authority (the issuer), not by the subject of the certificate. In the buggy code, the same subject variable was mistakenly used in both OpenSSL version branches. This error meant that the CRL lookup might have been incorrect—particularly when the CRL was keyed on the issuer’s identification—and valid CRLs could be missed. As a result, clients with revoked certificates might be mistakenly allowed to connect.
+
+In our repair, we change the lookup parameter to issuer rather than subject. Specifically, the code now retrieves CRLs by passing issuer to X509_STORE_CTX_get1_crls and X509_STORE_get1_crls. This simple change ensures that the appropriate certificate revocation list is accessed for checking whether the peer certificate (or any in the chain) has been revoked.
+
+To break it down:
+
+1. For OpenSSL version 1.1.0 and later:  
+   We altered the call from:
+     crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+   to:
+     crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+   This function now correctly references the issuer, which is used to look up the CRL.
+
+2. For OpenSSL version 1.0.0 through 1.1.0:  
+   Similarly, the function call is adjusted from:
+     crls = X509_STORE_get1_crls(store_ctx, subject);
+   to:
+     crls = X509_STORE_get1_crls(store_ctx, issuer);
+   Again this change ensures that the CRL lookup is done using the issuer's information.
+
+3. For older versions of OpenSSL (prior to 1.0.0), the code continues to indicate that the library needs to be upgraded because the proper CRL checking mechanism does not exist.
+
+The essential effect of our change is that the CRL lookup now references the correct component of the certificate. Since CRLs are issued by certification authorities (the issuers), using the issuer identifier ensures that revoked certificates can be accurately detected. This directly addresses the vulnerability by preventing the scenario where a revoked certificate might be inadvertently allowed because its CRL was incorrectly retrieved.
+
+In summary, the repair works by correcting the lookup logic: the correct field (issuer) is now used for obtaining CRL entries. This change enhances security by ensuring CRLs are properly processed, thereby preventing revoked certificates from being mistakenly accepted during a TLS connection establishment.

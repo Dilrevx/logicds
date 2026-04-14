@@ -1,0 +1,38 @@
+The provided repair addresses the "CCS Injection" vulnerability, which is a critical security flaw in the way OpenSSL handles ChangeCipherSpec (CCS) messages during the TLS handshake process. This vulnerability allows a man-in-the-middle (MITM) attacker to inject a CCS message, potentially leading to the use of a zero-length master key, and subsequently hijacking sessions or obtaining sensitive information.
+
+### Understanding the Vulnerability
+
+In the original code snippet, the handling of the `SSL3_RT_CHANGE_CIPHER_SPEC` message type does not sufficiently validate the context in which the CCS message is received. Specifically, the code does not ensure that the CCS message is received at the appropriate point in the TLS handshake sequence. In a typical TLS handshake, the CCS message should only be sent after the `ServerHelloDone` message in the server-side handshake, or after the `ClientKeyExchange` message in the client-side handshake. If a CCS message is received out of order, it can lead to improper state transitions and potential security breaches.
+
+### The Repair Explanation
+
+The repair introduces an additional check to ensure that the CCS message is received at the correct time in the handshake sequence. This is achieved by checking the `SSL3_FLAGS_CCS_OK` flag, which indicates whether the receipt of a CCS message is expected at that point in the handshake. Here's a detailed breakdown of the changes:
+
+1. **Check for Expected CCS Reception:**
+   ```c
+   /* Ensure that the CCS is received after the ServerHelloDone */
+   if (!(s->s3->flags & SSL3_FLAGS_CCS_OK))
+       {
+       al=SSL_AD_UNEXPECTED_MESSAGE;
+       SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_CCS_RECEIVED_EARLY);
+       goto f_err;
+       }
+   ```
+   - This line checks if the `SSL3_FLAGS_CCS_OK` flag is set. This flag should only be set once the handshake has progressed to the point where a CCS message is expected.
+   - If the flag is not set, indicating that a CCS message was received too early, the function sets an alert level (`al`) to `SSL_AD_UNEXPECTED_MESSAGE`, logs an error using `SSLerr`, and jumps to the `f_err` label to handle the error.
+
+2. **Setting the `SSL3_FLAGS_CCS_OK` Flag:**
+   - While not shown in the provided snippet, this flag should be set appropriately during the handshake process. For example, it could be set after the `ServerHelloDone` message is processed on the client side, or after the `ClientKeyExchange` message is processed on the server side.
+   - This ensures that the CCS message can only be received when it is valid within the protocol sequence, preventing out-of-order messages from being processed.
+
+3. **Maintaining Protocol Integrity:**
+   - By ensuring that the CCS message is received at the correct time, the repair maintains the integrity of the TLS handshake protocol. This prevents attackers from injecting a CCS message prematurely, which could lead to the use of a zero-length master key or other security issues.
+   - The additional check does not introduce significant overhead or complexity, as it simply involves checking a boolean flag.
+
+4. **Error Handling:**
+   - If the CCS message is received too early, the function correctly sets an alert level and logs an error. This provides clear feedback about the nature of the problem and allows for proper error handling and logging.
+   - The use of `goto f_err` ensures that the function exits gracefully, cleaning up any resources and returning an appropriate error code to the caller.
+
+### Conclusion
+
+The repair effectively mitigates the CCS Injection vulnerability by enforcing the correct ordering of messages during the TLS handshake. By introducing a simple but crucial check for the `SSL3_FLAGS_CCS_OK` flag, the code ensures that the CCS message is only processed when it is valid within the protocol sequence. This change enhances the security of the TLS implementation, protecting against MITM attacks that exploit the vulnerability.

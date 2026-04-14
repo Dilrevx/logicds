@@ -1,0 +1,64 @@
+The provided code snippet is part of a function `tls_verify_crl` designed to verify Certificate Revocation Lists (CRLs) during the TLS certificate verification process. The goal is to ensure that the client's certificate has not been revoked by the Certificate Authority (CA) issuing it. The vulnerability addressed in the repair pertains to the logical flow of checking whether a certificate is revoked based on the CRLs.
+
+### Original Vulnerability
+
+In the original code, the retrieval and verification of CRLs based on the issuer's name were not fully implemented. Specifically, after retrieving CRLs for the issuer of the current certificate, there was no logic to check if the current certificate was listed as revoked in those CRLs. This means that even if a certificate was revoked, the function would not detect it, leading to a security vulnerability.
+
+### Repair Explanation
+
+The repair involves adding the necessary logic to check if the current certificate is listed as revoked in any of the CRLs retrieved based on the issuer's name. Here’s a detailed breakdown of the changes made:
+
+1. **Retrieving CRLs Based on Issuer Name**:
+   ```c
+   crls = NULL;
+   #if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+     !defined(HAVE_LIBRESSL)
+   crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+   #elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+         !defined(HAVE_LIBRESSL)
+   crls = X509_STORE_get1_crls(store_ctx, issuer);
+   #endif /* OpenSSL-1.1.x and later */
+   ```
+   This section of the code retrieves CRLs from the store that match the issuer name of the current certificate. The macros check the OpenSSL version to use the appropriate function for retrieving CRLs.
+
+2. **Checking Each CRL for Revocation**:
+   ```c
+   if (crls != NULL) {
+     for (i = 0; i < sk_X509_CRL_num(crls); i++) {
+       X509_CRL *crl = sk_X509_CRL_value(crls, i);
+       X509_REVOKED *revoked;
+       int j;
+
+       for (j = 0; j < sk_X509_REVOKED_num(X509_CRL_get_REVOKED(crl)); j++) {
+         revoked = sk_X509_REVOKED_value(X509_CRL_get_REVOKED(crl), j);
+         if (ASN1_INTEGER_cmp(revoked->serialNumber, X509_get_serialNumber(xs)) == 0) {
+           tls_log("certificate %s is revoked", tls_x509_name_oneline(subject));
+
+           X509_STORE_CTX_set_error(ctx, X509_V_ERR_CERT_REVOKED);
+           sk_X509_CRL_free(crls);
+           X509_STORE_CTX_cleanup(store_ctx);
+           X509_STORE_CTX_free(store_ctx);
+           return FALSE;
+         }
+       }
+     }
+
+     sk_X509_CRL_free(crls);
+     crls = NULL;
+   }
+   ```
+   If CRLs are found (`crls != NULL`), the code iterates over each CRL. For each CRL, it retrieves the list of revoked certificates using `X509_CRL_get_REVOKED`. It then iterates over these revoked certificates and compares their serial numbers with the serial number of the current certificate using `ASN1_INTEGER_cmp`.
+
+   If a match is found, indicating that the current certificate is revoked, the function logs an error message, sets the verification error to `X509_V_ERR_CERT_REVOKED`, cleans up resources, and returns `FALSE` to indicate that the certificate verification has failed.
+
+3. **Resource Cleanup**:
+   ```c
+   X509_STORE_CTX_cleanup(store_ctx);
+   X509_STORE_CTX_free(store_ctx);
+   return ok;
+   ```
+   Regardless of whether a CRL was found or not, the function ensures that the `store_ctx` is cleaned up and freed to prevent memory leaks. If no issues were detected (no CRLs found or the certificate is not revoked), the function returns the original `ok` value, indicating successful verification.
+
+### Conclusion
+
+The repair addresses a critical logical flaw in the certificate revocation checking process by ensuring that each certificate is properly checked against relevant CRLs. This enhancement significantly improves the security of the TLS certificate verification process by preventing the acceptance of revoked certificates.

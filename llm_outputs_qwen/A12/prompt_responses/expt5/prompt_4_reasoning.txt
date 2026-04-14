@@ -1,0 +1,32 @@
+The repair introduced addresses a critical vulnerability in the handling of TLS v1.3 handshakes, specifically in scenarios where mutual authentication is required. Mutual authentication is a security mechanism in which both parties (the client and the server) verify each other's identities before establishing a secure connection. In the context of TLS, this typically involves the exchange of certificates and the validation of these certificates by both parties. The vulnerability described allows a malicious client to bypass this mutual authentication requirement by failing to send a `CertificateVerify` message, which is crucial for proving the validity of the client's certificate.
+
+### Key Components of the Repair
+
+1. **Preprocessing Directives:**
+   - `#if !defined(NO_CERTS) && !defined(WOLFSSL_NO_CLIENT_AUTH)`
+   - These directives ensure that the additional checks are only included when certificates are enabled (`NO_CERTS` is not defined) and client authentication is not disabled (`WOLFSSL_NO_CLIENT_AUTH` is not defined). This means that the code modification will only apply under configurations where both certificates and client authentication are supported. This is important because the vulnerability and its fix are relevant only in environments where mutual authentication is a requirement.
+
+2. **Server-Side Check:**
+   - `if (ssl->options.side == WOLFSSL_SERVER_END)`
+   - This condition ensures that the following checks are only performed on the server side. The issue pertains to servers requiring mutual authentication from clients, so these checks should not be applied on the client side.
+
+3. **Mutual Authentication Requirement Check:**
+   - `(ssl->options.mutualAuth || ssl->options.failNoCert)`
+   - This condition checks if mutual authentication is required (`ssl->options.mutualAuth`) or if the server is configured to fail the handshake if no certificate is provided by the client (`ssl->options.failNoCert`). This dual condition ensures that the server enforces mutual authentication policies effectively. By checking for either condition, the server ensures that it will not proceed with the handshake unless the client provides a valid certificate.
+
+4. **Peer Verification Check:**
+   - `!ssl->options.havePeerVerify && !ssl->options.resuming`
+   - The code then checks if the server has not successfully verified the peer's certificate (`!ssl->options.havePeerVerify`). Additionally, it checks if the session is not being resumed (`!ssl->options.resuming`). Resumed sessions might have already established trust, so this check prevents unnecessary verification in such cases. This ensures that the server only performs these checks when establishing a new connection where mutual authentication is required.
+
+5. **Error Handling:**
+   - `int ret = NO_PEER_CERT; DoCertFatalAlert(ssl, ret); return ret;`
+   - If the server determines that mutual authentication is required but the client has not provided a certificate (`NO_PEER_CERT`), it triggers a fatal alert to the client using `DoCertFatalAlert(ssl, ret)`. This function call informs the client that the handshake must terminate due to a missing or invalid certificate. After sending the alert, the server returns an error code (`ret`) indicating the failure of the handshake process. This action ensures that the connection cannot proceed without proper client authentication, thus preventing unauthorized access.
+
+6. **Continuation of Existing Logic:**
+   - After the added security checks, the existing logic for processing the `Finished` message continues as before. This includes checking the buffer size and deriving the finished secret if the handshake is not yet complete. Ensuring that the existing logic is preserved guarantees that the rest of the handshake process functions correctly while addressing the specific vulnerability.
+
+### Impact of the Repair
+
+By incorporating these steps, the repair ensures that a TLS v1.3 server correctly enforces mutual authentication requirements. It prevents malicious clients from bypassing the need to present a valid certificate during the handshake process, which is a fundamental aspect of securing communications over TLS. This modification strengthens the security posture of the server by adhering strictly to the TLS protocol specifications for mutual authentication. It ensures that all connections established with the server are authenticated and secure, thereby protecting sensitive data from unauthorized access.
+
+In summary, the repair introduces necessary checks and error handling mechanisms to enforce mutual authentication in TLS v1.3 handshakes, addressing the vulnerability by ensuring that the server will not proceed with the handshake unless the client provides a valid certificate. This enhancement is crucial for maintaining the integrity and security of communications in environments where mutual authentication is a requirement.

@@ -1,0 +1,59 @@
+Below is one example of a repair. The idea is to first map each signature algorithm to a flag indicating that the matching certificate key was provided. We then reject an unsupported algorithm (RSA PKCS#1.5) early. Finally, we perform one uniform check to ensure that the appropriate certificate key is present. For instance:
+
+---------------------------------------------------------
+/* Begin repair: check that the certificate matches the used signature algorithm */
+bool validSignatureCertificate = false;
+
+switch(args.sigAlgo) {
+    case CommonsConstants.ed25519_sa_algo:
+        Wslib.WOLFSSL_MSG("Peer sent ED25519 signature");
+        validSignatureCertificate = ssl.peerEd25519KeyPresent;
+        break;
+    case CommonsConstants.ed448_sa_algo:
+        Wslib.WOLFSSL_MSG("Peer sent ED448 signature");
+        validSignatureCertificate = ssl.peerEd448KeyPresent;
+        break;
+    case CommonsConstants.ecc_dsa_sa_algo:
+        Wslib.WOLFSSL_MSG("Peer sent ECC DSA signature");
+        validSignatureCertificate = ssl.peerEccDsaKeyPresent;
+        break;
+    case CommonsConstants.falcon_level1_sa_algo:
+        Wslib.WOLFSSL_MSG("Peer sent Falcon Level 1 signature");
+        validSignatureCertificate = ssl.peerFalconKeyPresent;
+        break;
+    case CommonsConstants.falcon_level5_sa_algo:
+        Wslib.WOLFSSL_MSG("Peer sent Falcon Level 5 signature");
+        validSignatureCertificate = ssl.peerFalconKeyPresent;
+        break;
+    case CommonsConstants.rsa_pss_sa_algo:
+        Wslib.WOLFSSL_MSG("Peer sent RSA-PSS signature");
+        validSignatureCertificate = (ssl.peerRsaKey != NULL && ssl.peerRsaKeyPresent);
+        break;
+    case CommonsConstants.rsa_sa_algo:
+        /* RSA PKCS#1.5 is not allowed in TLS 1.3. Reject immediately. */
+        Wslib.WOLFSSL_MSG("Peer sent PKCS#1.5 algo but not in certificate");
+        return CommonsConstants.INVALID_PARAMETER;
+    default:
+        Wslib.WOLFSSL_MSG("Peer sent unsupported signature algorithm");
+        return CommonsConstants.INVALID_PARAMETER;
+}
+
+if (!validSignatureCertificate) {
+    Wslib.WOLFSSL_MSG("Mismatch between signature algorithm and certificate provided");
+    return CommonsConstants.SIG_VERIFY_E;
+}
+
+/* Continue processing since the certificate matches the signature algorithm */ 
+---------------------------------------------------------
+
+Explanation of the repair steps:
+
+1. A Boolean flag (validSignatureCertificate) is declared to accumulate whether the certificate matches the signature algorithm.
+
+2. A single switch-case block is used. For each supported algorithm (ED25519, ED448, ECC DSA, Falcon Level 1, Falcon Level 5, and RSA-PSS), we log which signature algorithm was used and then set the flag based on whether the expected certificate key is present.  
+
+3. In the case of RSA PKCS#1.5 (rsa_sa_algo) and any unsupported algorithm, the code exits immediately with an error. This guarantees that the insecure algorithm isn’t inadvertently accepted.
+
+4. After the switch, a single final check ensures that validSignatureCertificate is true. If it is false, an error is reported and processing stops, thereby closing the possible bypass if the certificate content does not match the signature algorithm used.
+
+By centralizing the certificate check logic into a unified final validation, this repair prevents an attacker from bypassing certificate verification by mismatching the sig_algo used in the CertificateVerify message versus that included in the certificate.

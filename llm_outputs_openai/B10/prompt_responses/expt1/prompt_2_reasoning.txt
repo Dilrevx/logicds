@@ -1,0 +1,15 @@
+The repair addresses a vulnerability that occurs when operating in asynchronous mode. Under asynchronous conditions, wolfSSL_AsyncPop may return a value differing from WC_NOT_PENDING_E. In such a situation, the pointer args, which is supposed to point to freshly initialized memory (either a local structure or the asynchronous buildArgs structure), might inadvertently reference stale or uninitialized data. This can lead to unpredictable behavior or security issues when that data is later used for building the message.
+
+Here's what the repair does:
+
+1. It preserves the existing check that ensures the entire message (whose size is stored in args->sz) does not exceed the provided output buffer. This check remains critical to prevent buffer overflow errors.
+
+2. The newly added code is wrapped in an #ifdef WOLFSSL_ASYNC_CRYPT block. It checks if asynchronous processing was requested (asyncOkay is true) and whether the return code from wolfSSL_AsyncPop is not equal to WC_NOT_PENDING_E. This condition implies that we are in asynchronous mode but have not received the usual “not pending” flag, which may indicate that the asynchronous operation resulted in an intermediate state.
+
+3. When the condition is met, the repair explicitly zeroes out the data structure (using XMEMSET on ssl->async.buildArgs). This reinitialization ensures that any stale or residual values previously stored in the asynchronous context are cleared out and do not affect the current message building process.
+
+4. After wiping the structure clean, the code then reassigns the pointer args to point to the fresh asynchronous buildArgs. Additionally, it resets the build state (ssl->options.buildMsgState) to begin the message build process afresh. This reset guarantees that functions using this structure start with a known good state.
+
+By ensuring that, in asynchronous mode, the buildArgs structure is fully reinitialized whenever the asynchronous function does not return WC_NOT_PENDING_E, the repair eliminates a logical vulnerability. This condition could have otherwise resulted in using uninitialized memory or applying unintended state in building the message, potentially leading to errors during processing or even memory corruption.
+
+In summary, the repair guarantees a safe restart of the asynchronous message-building process by explicitly initializing the asynchronous build arguments and resetting the build state. This eliminates risks associated with stale data, thus fortifying the function against the identified asynchronous vulnerability.

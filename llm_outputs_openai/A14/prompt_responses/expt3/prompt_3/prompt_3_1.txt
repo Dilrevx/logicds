@@ -1,0 +1,62 @@
+Below is one example of a fix. The idea is to add extra checks so that a ChangeCipherSpec (CCS) record is only accepted when it is received in the proper handshake state and only once. In practice the patch added a state‐check and rejected a CCS if one had already been processed or if it occurred “too early.” For example, you might change the code like this:
+
+------------------------------------------------------------
+  if (rr->type == SSL3_RT_CHANGE_CIPHER_SPEC)
+  {
+    /* Verify that the record has exactly the expected byte */
+    if ((rr->length != 1) || (rr->off != 0) ||
+      (rr->data[0] != SSL3_MT_CCS))
+    {
+      al = SSL_AD_ILLEGAL_PARAMETER;
+      SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_BAD_CHANGE_CIPHER_SPEC);
+      goto f_err;
+    }
+
+    /* Reject a duplicate CCS (or one arriving out-of-order). */
+    if (s->s3->change_cipher_spec)
+    {
+      al = SSL_AD_UNEXPECTED_MESSAGE;
+      SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+      goto f_err;
+    }
+
+    /* Ensure that the CCS message is received at the correct point
+     * in the handshake. (SSL3_ST_SR_CHANGE_CIPHER_SPEC represents the expected state.)
+     */
+    if (s->state != SSL3_ST_SR_CHANGE_CIPHER_SPEC)
+    {
+      al = SSL_AD_UNEXPECTED_MESSAGE;
+      SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+      goto f_err;
+    }
+
+    /* Check that a new cipher has been negotiated already */
+    if (s->s3->tmp.new_cipher == NULL)
+    {
+      al = SSL_AD_UNEXPECTED_MESSAGE;
+      SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+      goto f_err;
+    }
+
+    rr->length = 0;  /* clear the record after validity checking */
+
+    if (s->msg_callback)
+      s->msg_callback(0, s->version, SSL3_RT_CHANGE_CIPHER_SPEC,
+        rr->data, 1, s, s->msg_callback_arg);
+
+    s->s3->change_cipher_spec = 1;
+    if (!ssl3_do_change_cipher_spec(s))
+      goto err;
+    else
+      goto start;
+  }
+------------------------------------------------------------
+
+Step by step, here is what this patch does:
+1. It first verifies that the CCS record is exactly one byte long with the expected content.
+2. It then checks if a CCS has already been processed (by testing s->s3->change_cipher_spec). This prevents an attacker from injecting a second, possibly malicious, CCS.
+3. It checks that the handshake is in the correct state to accept a CCS (here we assume that SSL3_ST_SR_CHANGE_CIPHER_SPEC is the only valid state). If the state does not match the expected one, the message is rejected.
+4. Finally, it makes sure that a new cipher was negotiated (s->s3->tmp.new_cipher != NULL). Without this guarantee an attacker might try to force a zero-length master key.
+5. Only after all these checks does it clear the record, invoke the callback, mark that a CCS has been received, and call the function to actually change the cipher spec.
+
+This extra state and duplication check prevents the CCS Injection vulnerability described. (Note that in a real-world release the exact state value or check might vary based on the OpenSSL version and handshake state machine definitions. However, the core idea is to validate that the CCS is received exactly once and exactly when allowed.)

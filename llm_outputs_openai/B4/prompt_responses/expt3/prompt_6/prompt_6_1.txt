@@ -1,0 +1,65 @@
+Below is an example patch that implements the fix. In this example the function that retrieves the certificate’s serial number (here represented by gnutls_x509_crt_get_serial) returns the actual serial length in a temporary variable. The patch then immediately updates the certificate’s serial number structure with this length before comparing it to the serial data from the OCSP response. This ensures that no extra (trailing or garbage) bytes can be exploited by an attacker.
+
+-------------------------
+/* Example patched function for certificate and OCSP response serial number verification */
+int gnutls_ocsp_resp_check_crt(gnutls_x509_crt_t crt,
+                               const gnutls_datum_t *ocsp_serial)
+{
+    int ret;
+    unsigned int tmp_serial_len;
+    gnutls_datum_t cert_serial;
+
+    /* Allocate memory for retrieving the certificate serial.
+       Assume MAX_SERIAL_SIZE is a defined constant providing an upper bound.*/
+    cert_serial.data = gnutls_malloc(MAX_SERIAL_SIZE);
+    if (cert_serial.data == NULL) {
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    /* 
+     * Retrieve the certificate's serial number.
+     * get_cert_serial (here represented by gnutls_x509_crt_get_serial) writes the
+     * effective length into tmp_serial_len.
+     */
+    tmp_serial_len = MAX_SERIAL_SIZE; /* Initialize maximum available size */
+    ret = gnutls_x509_crt_get_serial(crt, cert_serial.data, &tmp_serial_len);
+    if (ret < 0) {
+        gnutls_free(cert_serial.data);
+        return ret;
+    }
+
+    /* Critical fix: update the serial number size in the certificate serial structure */
+    cert_serial.size = tmp_serial_len;
+
+    /*
+     * Now check: The certificate's serial length must exactly match that of the OCSP response.
+     * A mis-match indicates trailing bytes or memory leftovers that might have been exploited.
+     */
+    if (cert_serial.size != ocsp_serial->size) {
+        gnutls_free(cert_serial.data);
+        return GNUTLS_E_PK_AND_PARAMS_MISMATCH;
+    }
+
+    /* Compare the actual byte sequences */
+    if (memcmp(cert_serial.data, ocsp_serial->data, cert_serial.size) != 0) {
+        gnutls_free(cert_serial.data);
+        return GNUTLS_E_PK_AND_PARAMS_MISMATCH;
+    }
+
+    gnutls_free(cert_serial.data);
+    return 0;
+}
+
+-------------------------
+
+Explanation of the fix:
+
+1. The certificate’s serial number is retrieved using a function that outputs both the serial data and its actual length in a temporary variable (tmp_serial_len).
+
+2. Immediately after ensuring that getting the serial was successful, we explicitly update the size field (cert_serial.size) with the value from tmp_serial_len.
+
+3. Before comparing the certificate serial with the OCSP response serial, the code first checks if the lengths match. If the lengths differ, the function returns an error, preventing any further processing that could be exploited by trailing bytes.
+
+4. Finally, if the lengths match, a memory comparison (memcmp) is used to verify that the actual byte sequences are identical.
+
+This patch ensures that both the length and the contents are verified correctly, which prevents any manipulation involving trailing bytes from a memory allocation, effectively closing the vulnerability.

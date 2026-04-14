@@ -1,0 +1,48 @@
+The vulnerability described pertains to a security flaw in a TLS v1.3 server implementation that requires mutual authentication. Mutual authentication ensures that both the server and the client verify each other's identities using digital certificates. In this specific scenario, the server is supposed to enforce mutual authentication, meaning it should reject connections from clients that do not present a valid certificate and a corresponding `CertificateVerify` message.
+
+### Analysis of the Buggy Code
+
+The original code snippet provided is part of a function named `DoTls13Finished`, which appears to handle the `Finished` message in the TLS handshake process. The `Finished` message is sent by both the client and the server to indicate that they have received and verified all previous handshake messages. However, the snippet does not include any checks to ensure that the client has sent a `CertificateVerify` message if mutual authentication is required.
+
+```c
+Tls13Helper.WOLFSSL_ENTER("DoTls13Finished");
+
+if (inOutIdx[0] + size + ssl.keys.padSz > totalSz)
+    return Constants.BUFFER_E;
+```
+
+The existing code only checks if there is enough buffer space to process the incoming data. It does not validate whether the client has provided the necessary `CertificateVerify` message when mutual authentication is required.
+
+### Proposed Repair
+
+To address this vulnerability, the repair introduces a check to ensure that the `CertificateVerify` message has been received from the client if mutual authentication is enabled. This check is performed before processing the `Finished` message.
+
+```c
+Tls13Helper.WOLFSSL_ENTER("DoTls13Finished");
+
+// Check if mutual authentication is required and the CertificateVerify message has been received
+if (ssl.handshake.needPeerCertVerify && !ssl.handshake.peerCertVerifyReceived) {
+    return Constants.MUTUAL_AUTH_FAILED;
+}
+
+if (inOutIdx[0] + size + ssl.keys.padSz > totalSz)
+    return Constants.BUFFER_E;
+```
+
+#### Explanation of the Repair
+
+1. **Mutual Authentication Requirement Check (`ssl.handshake.needPeerCertVerify`)**:
+   - This condition checks if mutual authentication is required for the current connection. The variable `ssl.handshake.needPeerCertVerify` is a boolean flag that indicates whether the server expects the client to provide a certificate and a `CertificateVerify` message.
+
+2. **CertificateVerify Message Receipt Check (`!ssl.handshake.peerCertVerifyReceived`)**:
+   - This condition checks whether the `CertificateVerify` message has been received from the client. The variable `ssl.handshake.peerCertVerifyReceived` is another boolean flag that is set to `true` once the server successfully receives and verifies the `CertificateVerify` message from the client.
+
+3. **Return Error on Failure**:
+   - If mutual authentication is required (`ssl.handshake.needPeerCertVerify` is `true`) but the `CertificateVerify` message has not been received (`ssl.handshake.peerCertVerifyReceived` is `false`), the function returns an error code `Constants.MUTUAL_AUTH_FAILED`. This prevents the server from proceeding with the handshake and establishing a connection with a client that has not authenticated itself properly.
+
+4. **Buffer Space Check**:
+   - After ensuring that the `CertificateVerify` message has been received, the code proceeds to check if there is sufficient buffer space to process the incoming data. This is the original functionality of the code snippet and remains unchanged.
+
+### Conclusion
+
+By adding the check for the receipt of the `CertificateVerify` message, the repair ensures that the server enforces mutual authentication as intended. This prevents unauthorized clients from bypassing the authentication process and establishes a secure connection only with clients that have presented a valid certificate and verified their identity. The repair maintains the integrity of the TLS handshake process and protects the server from potential security threats posed by unauthenticated clients.

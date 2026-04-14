@@ -1,0 +1,56 @@
+To address the CCS Injection vulnerability in the provided OpenSSL code snippet, we need to ensure that the `ChangeCipherSpec` (CCS) message is handled securely and in accordance with the TLS protocol specifications. The main issue here is that the current implementation does not properly restrict the processing of CCS messages, which can be exploited by an attacker.
+
+### Key Points to Address:
+1. **Sequence of Messages**: Ensure that the CCS message is received at the correct point in the TLS handshake sequence.
+2. **Prevent Early CCS**: Make sure that a CCS message is not processed before the appropriate cryptographic parameters have been established.
+3. **Check for Valid Handshake State**: Verify that the handshake state allows for the processing of a CCS message.
+
+### Proposed Fixes:
+1. **Check Handshake State**: Add a check to ensure that the CCS message is received only after the `ServerHelloDone` message in the client-side handshake, or after the `ClientKeyExchange` message in the server-side handshake.
+2. **Implement Early CCS Detection**: Implement logic to detect and reject any CCS messages that are received too early in the handshake process.
+
+### Revised Code:
+Below is the revised code snippet incorporating these fixes:
+
+```c
+if (rr->type == SSL3_RT_CHANGE_CIPHER_SPEC) {
+    /* 'Change Cipher Spec' is just a single byte, so we know
+     * exactly what the record payload has to look like */
+    if ((rr->length != 1) || (rr->off != 0) || (rr->data[0] != SSL3_MT_CCS)) {
+        al = SSL_AD_ILLEGAL_PARAMETER;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_BAD_CHANGE_CIPHER_SPEC);
+        goto f_err;
+    }
+
+    /* Check we have a cipher to change to */
+    if (s->s3->tmp.new_cipher == NULL) {
+        al = SSL_AD_UNEXPECTED_MESSAGE;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+        goto f_err;
+    }
+
+    /* Check if CCS is received at the correct time in the handshake */
+    if (!s->s3->change_cipher_spec_ok) {
+        al = SSL_AD_UNEXPECTED_MESSAGE;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+        goto f_err;
+    }
+
+    rr->length = 0;
+
+    if (s->msg_callback)
+        s->msg_callback(0, s->version, SSL3_RT_CHANGE_CIPHER_SPEC, rr->data, 1, s, s->msg_callback_arg);
+
+    s->s3->change_cipher_spec = 1;
+    if (!ssl3_do_change_cipher_spec(s))
+        goto err;
+    else
+        goto start;
+}
+```
+
+### Additional Considerations:
+- **Handshake State Management**: Ensure that the `change_cipher_spec_ok` flag is set appropriately in the handshake state machine. This flag should be set only when the handshake reaches a state where a CCS message is expected.
+- **Testing**: Thoroughly test the modified code to ensure that it correctly handles both legitimate and malicious CCS messages without introducing new vulnerabilities.
+
+By implementing these changes, the code should be more resistant to the CCS Injection vulnerability, adhering more closely to the TLS protocol's security requirements.

@@ -1,0 +1,67 @@
+The vulnerability addressed in the provided repair pertains to the "CCS Injection" attack, specifically targeting the improper handling of `ChangeCipherSpec` (CCS) messages in OpenSSL. This vulnerability allows a man-in-the-middle (MITM) attacker to inject a CCS message into the TLS handshake process, potentially leading to the use of a zero-length master key, which can hijack secure sessions or expose sensitive information.
+
+### Understanding the Vulnerability
+
+In the Transport Layer Security (TLS) protocol, the `ChangeCipherSpec` message is used to indicate that the sender will start using the newly negotiated security parameters for all subsequent records. Typically, this message follows the `Finished` message during the handshake process. However, if a CCS message is injected before the `Finished` message, it can disrupt the expected sequence of events and lead to security issues.
+
+The original code snippet did not adequately enforce the proper sequence of messages in the TLS handshake. Specifically, it did not verify whether a `ChangeCipherSpec` message was received at the appropriate time in the handshake process. This oversight allowed an attacker to inject a CCS message prematurely, potentially causing the server to use incorrect security parameters, including a zero-length master key, which compromises the security of the session.
+
+### The Repair
+
+The repair involves adding a check to ensure that a `ChangeCipherSpec` message is only processed if it is expected at that point in the handshake. This is achieved by introducing a flag, `SSL3_FLAGS_CCS_OK`, which indicates whether a CCS message is acceptable at the current stage of the handshake.
+
+#### Detailed Explanation of the Repair
+
+1. **Flag Initialization**: The `SSL3_FLAGS_CCS_OK` flag should be initialized appropriately during the handshake process. This flag is typically set after the `Finished` message has been received from the peer, indicating that both parties have completed their part of the handshake and are ready to transition to the new encryption parameters.
+
+2. **Checking the Flag**: Before processing a `ChangeCipherSpec` message, the code checks whether the `SSL3_FLAGS_CCS_OK` flag is set. If the flag is not set, it means that the CCS message is being received out of order, and the code should handle this as an error.
+
+   ```c
+   if (!(s->s3->flags & SSL3_FLAGS_CCS_OK))
+   {
+       al=SSL_AD_UNEXPECTED_MESSAGE;
+       SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_CCS_RECEIVED_EARLY);
+       goto f_err;
+   }
+   ```
+
+   This check ensures that the CCS message is only processed if it is expected, preventing premature changes in encryption parameters.
+
+3. **Processing the CCS Message**: If the flag is set, the code proceeds to validate the CCS message. It checks that the message length is exactly one byte and that the byte value is `SSL3_MT_CCS`, which is the correct value for a `ChangeCipherSpec` message.
+
+   ```c
+   if ((rr->length != 1) || (rr->off != 0) || (rr->data[0] != SSL3_MT_CCS))
+   {
+       al=SSL_AD_ILLEGAL_PARAMETER;
+       SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_BAD_CHANGE_CIPHER_SPEC);
+       goto f_err;
+   }
+   ```
+
+4. **Verifying New Cipher Availability**: The code also checks that there is a new cipher suite available to switch to. This is crucial because the CCS message indicates that the sender will start using new encryption parameters, and these parameters must be established beforehand.
+
+   ```c
+   if (s->s3->tmp.new_cipher == NULL)
+   {
+       al=SSL_AD_UNEXPECTED_MESSAGE;
+       SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_CCS_RECEIVED_EARLY);
+       goto f_err;
+   }
+   ```
+
+5. **Updating State and Performing Change**: If all checks pass, the code updates the state to indicate that a CCS message has been received (`s->s3->change_cipher_spec=1`) and performs the actual change in cipher specifications using the `ssl3_do_change_cipher_spec` function.
+
+   ```c
+   rr->length=0;
+
+   if (s->msg_callback)
+       s->msg_callback(0, s->version, SSL3_RT_CHANGE_CIPHER_SPEC, rr->data, 1, s, s->msg_callback_arg);
+
+   s->s3->change_cipher_spec=1;
+   if (!ssl3_do_change_cipher_spec(s))
+       goto err;
+   else
+       goto start;
+   ```
+
+By implementing these checks, the repair ensures that `ChangeCipherSpec` messages are only processed when they are expected, thereby mitigating the risk of CCS injection attacks. This enhancement maintains the integrity and security of the TLS handshake process, protecting against potential exploitation by malicious actors.

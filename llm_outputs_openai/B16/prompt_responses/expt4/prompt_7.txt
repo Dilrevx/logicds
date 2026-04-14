@@ -1,0 +1,49 @@
+<repair>
+static struct frec *lookup_frec(unsigned short id, const void *hash,
+                                const struct sockaddr *reply_dest)
+{
+    struct frec *f;
+
+    /*
+     * In addition to matching the id and the query hash, we now also verify that
+     * the reply’s destination address/port (reply_dest) matches what we expect for
+     * the pending forwarded query. This ensures that even if an attacker can guess
+     * id and hash, the forged reply will be rejected unless it comes to the correct
+     * destination port.
+     *
+     * It is assumed that each forwarded query record (struct frec) has a 'dest'
+     * member of type struct sockaddr_storage that represents the expected reply
+     * destination (both address and port) for this query.
+     */
+    for (f = daemon->frec_list; f; f = f->next) {
+        if (f->sentto && f->new_id == id &&
+            (!hash || memcmp(hash, f->hash, HASH_SIZE) == 0)) {
+
+            /* Check that the reply destination address family matches */
+            if (reply_dest->sa_family != ((struct sockaddr *)&f->dest)->sa_family)
+                continue;
+
+            /* Now check that the port in the reply destination equals that in the pending query */
+            if (reply_dest->sa_family == AF_INET) {
+                const struct sockaddr_in *r4 = (const struct sockaddr_in *)reply_dest;
+                const struct sockaddr_in *f4 = (const struct sockaddr_in *)&f->dest;
+                if (r4->sin_port != f4->sin_port)
+                    continue;
+            } else if (reply_dest->sa_family == AF_INET6) {
+                const struct sockaddr_in6 *r6 = (const struct sockaddr_in6 *)reply_dest;
+                const struct sockaddr_in6 *f6 = (const struct sockaddr_in6 *)&f->dest;
+                if (r6->sin6_port != f6->sin6_port)
+                    continue;
+            }
+            else {
+                /* Unknown address family; skip this record */
+                continue;
+            }
+
+            return f;
+        }
+    }
+
+    return NULL;
+}
+</repair>

@@ -1,0 +1,58 @@
+<repair>
+static int x509_crt_verify_subject_alt_name( const mbedtls_x509_crt *crt,
+                                             const char *cn, size_t cn_len )
+{
+    const mbedtls_x509_sequence *cur;
+
+    /* Iterate through all the Subject Alternative Name entries,
+     * but only consider those of the permitted type (e.g. DNS names).
+     * This prevents matching against names of other types such as IP addresses.
+     */
+    for( cur = &crt->subject_alt_names; cur != NULL; cur = cur->next )
+    {
+        /* Only check DNS names. Assume MBEDTLS_X509_SAN_DNS_NAME is the tag indicating
+         * a DNS entry. Other types, such as IP addresses, are skipped.
+         */
+        if( cur->buf.tag == MBEDTLS_X509_SAN_DNS_NAME )
+        {
+            if( x509_crt_check_cn( &cur->buf, cn, cn_len ) == 0 )
+            {
+                return 0; /* Valid match found */
+            }
+        }
+    }
+
+    return -1; /* No valid match in SAN */
+}
+
+static void x509_crt_verify_name( const mbedtls_x509_crt *crt,
+                                  const char *cn,
+                                  uint32_t *flags )
+{
+    const mbedtls_x509_name *name;
+    size_t cn_len = strlen( cn );
+
+    if( crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME )
+    {
+        /* Use the specialized helper function for a type-aware check.
+         * Only DNS-type entries in the SAN will be considered.
+         */
+        if( x509_crt_verify_subject_alt_name( crt, cn, cn_len ) == 0 )
+        {
+            return;
+        }
+        /* Fall back to verifying the Common Name in the subject */
+    }
+
+    for( name = &crt->subject; name != NULL; name = name->next )
+    {
+        if( MBEDTLS_OID_CMP( MBEDTLS_OID_AT_CN, &name->oid ) == 0 &&
+            x509_crt_check_cn( &name->val, cn, cn_len ) == 0 )
+        {
+            return;
+        }
+    }
+
+    *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+}
+</repair>

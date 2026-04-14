@@ -1,0 +1,52 @@
+Below is one example of how you might “patch” the vulnerable TSIG‐verification code. In our fix we do two things:
+
+1. We check that the call to dns_rdata_tostruct succeeds rather than asserting it via INSIST (which would typically crash the server rather than return an error).  
+2. We add an extra authorization check for zone transfers (AXFR and NOTIFY messages) so that even if an attacker knows a valid TSIG key name, the request will be rejected unless it comes from an allowed source address (or – more generally – passes an ACL check). That way, simply “knowing the key name” is not enough to bypass protection.
+
+In a simplified example the patch might look like this:
+
+------------------------------------------------------------
+/* Convert the rdata field to a TSIG structure. */
+result = dns_rdata_tostruct(&rdata, &tsig, NULL);
+if (result != ISC_R_SUCCESS) {
+	/* Return a proper error rather than crashing via INSIST. */
+	return result;
+}
+
+/*
+ * First check that the TSIG verification completed without error.
+ * Then, if the request is an AXFR (or NOTIFY) we perform an additional ACL check.
+ * (You will need to implement the is_authorized_client() function according to your ACL configuration.)
+ */
+if (msg->tsigstatus != dns_rcode_noerror || tsig.error != dns_rcode_noerror) {
+	result = DNS_R_TSIGVERIFYFAILURE;
+} else if (msg->opcode == DNS_OPCODE_QUERY && msg->isaxfr) {
+	/* this is an AXFR request – enforce additional ACL checking */
+	if (!is_authorized_client(msg->client_address)) {
+		result = DNS_R_TSIGVERIFYFAILURE;
+	} else {
+		result = ISC_R_SUCCESS;
+	}
+} else if (msg->opcode == DNS_OPCODE_NOTIFY) {
+	/* for NOTIFY messages also make sure the sender is allowed for this zone */
+	if (!is_authorized_client(msg->client_address)) {
+		result = DNS_R_TSIGVERIFYFAILURE;
+	} else {
+		result = ISC_R_SUCCESS;
+	}
+} else {
+	result = ISC_R_SUCCESS;
+}
+
+return result;
+------------------------------------------------------------
+
+Comments on the patch:
+
+• Instead of unconditionally using INSIST() (which causes a fatal error if the TSIG record is malformed) we now check the return value and return an error code; this prevents an attacker from forcing a crash or undefined behavior.
+
+• For requests that can leak full zone data (AXFR) or cause unwanted updates (NOTIFY), an extra check is performed via is_authorized_client() (this function should validate the client IP against a zone‐transfer ACL configured for the zone). Even if the TSIG key name is known, only clients passing the ACL check can succeed.
+
+• You may need to adjust the field names (e.g. msg->isaxfr, msg->opcode, msg->client_address) and error codes (DNS_R_TSIGVERIFYFAILURE) to match the rest of your codebase.
+
+This patch demonstrates one approach to “defense in depth” by requiring TSIG authentication AND an ACL check for particularly sensitive operations.

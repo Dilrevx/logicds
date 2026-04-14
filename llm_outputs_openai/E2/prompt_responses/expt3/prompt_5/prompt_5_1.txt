@@ -1,0 +1,91 @@
+Below is one example of how you might repair the code to mitigate a NAS command replay attack. In this example, we add a sequence number check immediately after unpacking the header and introduce a flag (here assumed to be part of a security context variable) so that plain NAS messages are rejected when a security context is established. (In your actual implementation, be sure to replace context variables and names with those that match your code base.)
+
+-----------------------------------------------------------
+/* Example repaired code snippet */
+
+#define MAX_SEQ_VALUE 0xFFFFFFFF  // assume maximum sequence number value
+
+// Assume these context variables are available:
+// bool security_context_established;   // is a valid security context already set?
+// uint32_t expected_seq_number;        // maintained counter for message sequencing
+
+if (nas_msg.unpack_outer_hdr(pdu) != SRSRAN_SUCCESS) {
+  logger.error("Unable to unpack outer NAS header");
+  return SRSRAN_ERROR;
+}
+
+// REPLAY PROTECTION: Verify the sequence number immediately after unpack
+uint32_t received_seq = nas_msg.hdr.sequence_number; // assume this field exists in the header
+if (received_seq != MAX_SEQ_VALUE && received_seq < expected_seq_number) {
+  logger.warn("Sequence number replay attack detected: expected seq %u, received %u",
+              expected_seq_number, received_seq);
+  return SRSRAN_ERROR;
+}
+
+// Track the sort of message being processed (for debugging/tracing)
+int current_msg_flag = -1;
+
+switch (nas_msg.hdr.security_header_type) {
+  case nas_5gs_hdr::security_header_type_opts::plain_5gs_nas_message:
+    // Reject plain NAS messages if a security context is already established
+    if (security_context_established) {
+      logger.error("Rejecting plain NAS message: security context already established");
+      return SRSRAN_ERROR;
+    }
+    current_msg_flag = 0;
+    break;
+
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected:
+    // Integrity check must pass and update message flag.
+    current_msg_flag = 1;
+    if (!integrity_check(pdu.get())) {
+      logger.error("Message integrity check failed for integrity protected NAS message");
+      return SRSRAN_ERROR;
+    }
+    break;
+
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered:
+    current_msg_flag = 2;
+    if (!integrity_check(pdu.get())) {
+      logger.error("Message integrity check failed for integrity protected and ciphered NAS message");
+      return SRSRAN_ERROR;
+    } else {
+      cipher_decrypt(pdu.get());
+    }
+    break;
+
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_with_new_5G_nas_context:
+    current_msg_flag = 3;
+    // Fall through if further checks are added in the future.
+    break;
+
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered_with_new_5G_nas_context:
+    logger.error("Rejecting NAS message: unsupported new context type (integrity protected and ciphered with new 5G NAS context)");
+    return SRSRAN_ERROR;
+
+  default:
+    logger.error("Not handling NAS message with unknown security header");
+    return SRSRAN_ERROR;
+}
+
+// Continue processing the NAS message ...
+// (update expected_seq_number if needed, and take other actions based on current_msg_flag)
+  
+return SRSRAN_SUCCESS;
+
+-----------------------------------------------------------
+
+Explanation of the key changes:
+
+1. Sequence Number Check:
+   • After unpacking the NAS header, we extract the message’s sequence number.
+   • The code compares the received sequence number with an expected value (expected_seq_number). If the received value is less than expected (and not a special “maximum” value), the packet is considered a replay and processing is aborted.
+
+2. Plain Message Check:
+   • In the case for plain NAS messages, before accepting the message we now check if a security context is already established. This prevents older plain messages (possibly replayed) from being accepted after registration.
+  
+3. Consistent Handling:
+   • For integrity-protected or ciphered messages, we keep the integrity check and, upon success, proceed with additional decryption if necessary.
+   • A flag (current_msg_flag) is updated in each case for possible debugging and to standardize message type handling.
+
+This combination of sequence number validation and strict context-based rejection (particularly for plain NAS messages) helps mitigate the vulnerability where a UE accepts replayed NAS command messages after registration is complete.

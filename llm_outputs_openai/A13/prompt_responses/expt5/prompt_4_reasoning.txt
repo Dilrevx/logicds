@@ -1,0 +1,19 @@
+The repair changes the condition that decides when to perform the DLZ-specific authorization check. In the original code, the DLZ lookup was only performed if the normal zone table lookup failed (i.e., when result != ISC_R_SUCCESS). This logic was vulnerable because if a DLZ zone was successfully found in the normal zone table, the allowzonexfr check would be skipped—even if that zone should be subject to DLZ-specific transfer controls.
+
+Here’s how the repair fixes the issue:
+
+1. Modified Condition:  
+   The revised code adds an extra check using a function (is_dlz_zone) that determines whether the zone is a DLZ zone. Instead of checking only result != ISC_R_SUCCESS, the condition now reads:  
+   if (result != ISC_R_SUCCESS || is_dlz_zone(...))  
+   This means that even if the normal zone lookup returned success, if the zone is identified as a DLZ type zone, the DLZ transfer control check is still executed. This ensures that all DLZ zones receive proper authorization for zone transfers.
+
+2. DLZ Authorization Check:  
+   Once the condition is met (either due to failure of the initial zone lookup or because the zone is DLZ), the code proceeds to search the DLZ database. Here, it invokes dns_dlzallowzonexfr, which is responsible for deciding whether the zone transfer is allowed based on the DLZ configuration.
+
+3. Handling Unauthorized Transfers:  
+   If dns_dlzallowzonexfr returns ISC_R_NOPERM (indicating that the client does not have permission), the code logs a specific error message with a formatted zone name and class. It then sets the result to DNS_R_REFUSED, ensuring that the unauthorized transfer is explicitly refused. This explicit refusal protects the zone by enforcing the DLZ transfer control.
+
+4. Error Handling and Fallback:  
+   If the DLZ function returns a status other than ISC_R_SUCCESS and it’s not a permission issue, the code calls FAILQ with a DNS_R_NOTAUTH error, indicating that the transfer request comes from a non-authoritative zone. Additionally, if no DLZ databases are found (ISC_LIST_EMPTY returns true), the code also marks the zone as non-authoritative and halts processing.
+
+Overall, the repair ensures that even if a DLZ zone is present in the normal zone table, it will still be subjected to the DLZ-specific authorization check. By combining these conditions, the fix guarantees that the allowzonexfr function is always called when necessary, thus enforcing the correct access controls for writable DLZ zones. This eliminates the vulnerability where a successful lookup in the normal table could bypass critical DLZ transfer controls.

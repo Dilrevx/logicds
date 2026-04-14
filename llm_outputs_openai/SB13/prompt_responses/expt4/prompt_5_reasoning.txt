@@ -1,0 +1,20 @@
+The repair adds an Access Control List (ACL) check immediately before the function returns successfully. Here’s a walkthrough of the changes and how they fix the vulnerability:
+
+1. Initial Checks and Buffer Setup:
+ • The function still begins by validating that the DNS message (msg) and signer are valid, that the message is in the appropriate state (DNS_MESSAGE_INTENTPARSE), and that at least one signature (TSIG or SIG(0)) exists.
+ • It verifies that the message’s signature has been attempted and, if needed, allocates a buffer for the signer.
+
+2. Processing Signatures:
+ • The code processes SIG(0) if present. It extracts the record, converts it to a structured form, and checks that it is valid. The signer field is then updated with the signer’s name from the record.
+ • If a TSIG record is present instead, the code extracts and converts it similarly. It then determines the overall TSIG verification result (ensuring that errors are handled correctly). The signer is updated from the tsigkey identity if available.
+
+3. Added ACL Validation:
+ • The new block of code, added near the bottom of the function, performs an extra layer of security. This ACL check is activated only when the DNS operation is a zone transfer request (AXFR) or a NOTIFY message.
+ • The rationale is that attackers might exploit TSIG authentication solely to force unauthorized transfers or notifications if they know a valid key name. By incorporating ACL validation (via TsigACL.checkAuthorization), the function ensures that even if TSIG is used, the remote requester must be explicitly authorized to perform these sensitive operations.
+ • The ACL check verifies the requester’s IP address (msg.remoteAddress) against expected access policies for the signer. If the ACL check fails (indicating the requester is not permitted), the function returns an error code instead of proceeding.
+ • This additional check effectively mitigates the vulnerability described, where an attacker could bypass TSIG authentication by constructing a malicious message packet to obtain a zone transfer or send unauthorized NOTIFY packets.
+
+4. Result Handling:
+ • After the ACL check, if everything is in order, the function returns the result of the signature verification. Otherwise, the erroneous ACL result is returned, blocking unauthorized access.
+
+Overall, this repair reinforces the security posture by not relying solely on TSIG keys. Even with a valid key name present, only authorized IPs (as defined by the ACL configuration) can perform critical operations like zone transfer or notifications—blocking potential attackers who might exploit TSIG-only authentication.

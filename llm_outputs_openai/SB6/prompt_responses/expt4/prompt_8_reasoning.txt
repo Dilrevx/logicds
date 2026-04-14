@@ -1,0 +1,25 @@
+The repair introduces a dedicated function call (CommonUtils.x509_crt_verify_san) to handle the Subject Alternative Name (SAN) verification in a more secure and type-specific way.
+
+Originally, when a certificate contained a SAN extension, the code would iterate over all SAN entries and invoke a generic function (CommonUtils.x509_crt_check_cn) without discriminating between different name types. This oversight allowed attackers to manipulate certificates by using an IP address entry to impersonate a domain name, as the function did not verify whether the type of the SAN entry (e.g., DNS name versus IP address) was appropriate for the expected common name.
+
+Here’s how the repair addresses this:
+
+1. Detection of the SAN Extension:  
+   The code still starts by checking if the certificate has a SAN extension (using the crt.extTypes flag). This ensures that if the extension is present, the verification logic now follows a separate, more secure pathway.
+
+2. Type-Specific Verification:  
+   Instead of the generic check, the repair calls CommonUtils.x509_crt_verify_san with the list of SAN entries, the expected common name (cn), and its length (cn_len). This dedicated function is designed to handle the nuances of SAN validation by:
+   - Distinguishing between different types of entries (e.g., DNS names vs. IP addresses).
+   - Ensuring that the expected common name is matched only against SAN entries of the appropriate type.
+   
+   By doing so, the function prevents an attacker from exploiting the mismatch between name types (for example, using an IP address entry to impersonate a domain name).
+
+3. Fallback to the Common Name:  
+   If the certificate does not contain a SAN extension, the repair retains the original behavior by verifying the subject's common name from the certificate’s subject field. It iterates over the common name entries and compares them against the expected value using CommonUtils.x509_crt_check_cn.
+
+4. Flag Update on Mismatch:  
+   In both cases, if the expected name is not found in the correctly validated SAN entries or in the subject field (in absence of SAN), the code sets an error flag (MBEDTLS_X509_BADCERT_CN_MISMATCH). This flag informs the higher-level logic that the certificate’s name did not match the expected input.
+
+By segregating the verification logic into a specialized function for SAN entries, the repair directly addresses the vulnerability. The function now ensures that only SAN entries matching the correct name type are considered for validation, thereby mitigating the risk that an attacker could bypass certificate verification by presenting a certificate with a SAN entry of an inappropriate type (such as an IP address entry replacing a domain name).
+
+In summary, the repair shifts from a generic SAN check to a rigorous, type-aware verification process for SAN entries, while maintaining backward compatibility by falling back to standard common name verification when no SAN extension is present. This aligns the certificate validation process with best practices and secures it against the previously exploitable flaw.

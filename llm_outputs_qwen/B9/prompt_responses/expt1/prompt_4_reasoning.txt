@@ -1,0 +1,53 @@
+The original code snippet contained a logical vulnerability related to the verification of the signature algorithm against the type of public key present in the peer's certificate. The vulnerability stemmed from incorrect or incomplete checks that could allow mismatches between the expected and actual types of keys, potentially leading to security issues such as accepting an invalid signature.
+
+### Analysis of the Vulnerability
+
+In the original code, there were several conditional checks to ensure that the signature algorithm used by the peer matches the type of public key they have presented. However, these checks were either missing or incorrectly implemented for certain algorithms:
+
+- **ED25519 and ED448**: These checks were correctly implemented to verify if the peer has provided the corresponding EdDSA keys.
+- **ECC (Elliptic Curve Cryptography)**: Similarly, the check for ECC was correct, ensuring the presence of an ECC key.
+- **PQC (Post-Quantum Cryptography)**: For Falcon, the checks were partially correct but needed consolidation since both Falcon levels (level 1 and level 5) were checked separately. This redundancy could lead to oversight if only one level is ever used or if future changes affect both conditions.
+- **RSA**: The RSA checks had two issues:
+  1. For `rsa_sa_algo`, it incorrectly assumed that this algorithm would never be valid, which is not true if the peer uses PKCS#1 v1.5 padding with an RSA key.
+  2. For `rsa_pss_sa_algo`, it correctly checked for the presence of an RSA key but did not handle the case where `rsa_sa_algo` might be valid, leading to potential confusion and possible bypasses.
+
+### Repair Strategy
+
+The repair strategy involved correcting the logical errors and ensuring that all signature algorithms are properly verified against the available public keys:
+
+1. **Consolidation of PQC Checks**: Instead of checking each Falcon level separately, the repair consolidates these checks into a single condition. This simplifies the code and ensures that any Falcon signature algorithm will trigger the same validation logic if the Falcon key is not present.
+
+2. **Correct RSA Checks**:
+   - For `rsa_sa_algo`, the repair removes the erroneous assumption that this algorithm is always invalid. Instead, it verifies the presence of an RSA key, similar to how `rsa_pss_sa_algo` is handled.
+   - For `rsa_pss_sa_algo`, the repair retains the existing check but ensures that it correctly identifies the absence of an RSA key.
+
+3. **Generalization of Key Presence Checks**: The repair ensures that each signature algorithm is matched with its corresponding key type, preventing mismatches that could lead to security vulnerabilities.
+
+### Implementation Details
+
+Here's a breakdown of the changes made in the repair:
+
+- **PQC (Falcon)**: The two separate checks for `falcon_level1_sa_algo` and `falcon_level5_sa_algo` are combined into a single check using a logical OR (`||`). This ensures that any Falcon signature algorithm triggers the same validation logic:
+  ```c
+  if ((args->sigAlgo == falcon_level1_sa_algo || args->sigAlgo == falcon_level5_sa_algo) && !ssl->peerFalconKeyPresent) {
+      WOLFSSL_MSG("Peer sent Falcon sig but not Falcon cert");
+      ret = SIG_VERIFY_E;
+      goto exit_dcv;
+  }
+  ```
+
+- **RSA**: The check for `rsa_sa_algo` is corrected to verify the presence of an RSA key, similar to `rsa_pss_sa_algo`. This ensures that RSA signatures are only accepted if an RSA key is present:
+  ```c
+  if (args->sigAlgo == rsa_sa_algo && (ssl->peerRsaKey == NULL || !ssl->peerRsaKeyPresent)) {
+      WOLFSSL_MSG("Peer sent RSA sig but not RSA cert");
+      ret = SIG_VERIFY_E;
+      goto exit_dcv;
+  }
+  if (args->sigAlgo == rsa_pss_sa_algo && (ssl->peerRsaKey == NULL || !ssl->peerRsaKeyPresent)) {
+      WOLFSSL_MSG("Peer sent RSA PSS sig but not RSA cert");
+      ret = SIG_VERIFY_E;
+      goto exit_dcv;
+  }
+  ```
+
+By implementing these corrections, the code now accurately verifies that the signature algorithm used by the peer corresponds to the type of public key they have presented. This addresses the logical vulnerability and enhances the security of the TLS 1.3 certificate verification process.

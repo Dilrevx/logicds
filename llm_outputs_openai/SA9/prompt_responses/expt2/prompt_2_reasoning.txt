@@ -1,0 +1,23 @@
+The original code snippet incorrectly checked the state of the DTLS handshake, particularly with respect to the HelloVerifyRequest. It would call generateClientRandom() when no HelloVerifyRequest had been received (i.e., when getHskHelloVerifyRequests() equals 0). This was problematic because, in DTLS, a proper random value must be generated only after receiving a HelloVerifyRequest. Otherwise, the client random might be generated using a default value (in this case, 32 zero bytes), undermining the protocol’s security guarantees.
+
+In the repair, we inverted the condition that checks the number of HelloVerifyRequests. By replacing "== 0" with "!= 0", the code now ensures that the client random is generated only when the count of HelloVerifyRequests is not zero. This means that the random generation is deferred until at least one HelloVerifyRequest has been confirmed, triggering the use of truly random data.
+
+Here’s a step-by-step breakdown of the changes and how it fixes the vulnerability:
+
+1. The condition originally checked:
+   - The handshake flags did not indicate a HelloRetryRequest (HRR).
+   - The session is a DTLS session and no HelloVerifyRequests have been received yet.
+   
+   This check allowed generateClientRandom() to be executed too early in the DTLS handshake, leading to an insecure client random filled with zeros.
+
+2. The repair distinguishes the timing for generating client randomness:
+   - It modifies the DTLS-specific condition to check that getHskHelloVerifyRequests() is not equal to 0.
+   - This change guarantees that client random is generated only after at least one HelloVerifyRequest has been processed.
+   
+   In DTLS, the HelloVerifyRequest is essential to mitigate denial-of-service attacks and ensure correct handshake sequencing. With the new condition, generateClientRandom() is invoked only when there is an actual verification step, hence ensuring that the client random now incorporates the intended cryptographic randomness.
+
+3. The consequence of this condition change ensures that the cryptographic entropy during the handshake is preserved. By preventing the generation of a client random with zero bytes, we eliminate the risk of replay or prediction attacks, which rely on the randomness being weak or predictable.
+
+4. Lastly, the repair aligns the behavior with DTLS protocol requirements, thereby preventing any security flaws that could have arose from using a static, insecure, and predictable client random value. This subtle fix ensures that other parts of the DTLS negotiation are not compromised by an early or incorrect client random generation.
+
+In summary, by simply altering the condition to check for a non-zero count of HelloVerifyRequests, the repair ensures that the DTLS client employs proper cryptographic randomness. This small but critical change safeguards the handshake process and preserves the overall security of the DTLS negotiation.

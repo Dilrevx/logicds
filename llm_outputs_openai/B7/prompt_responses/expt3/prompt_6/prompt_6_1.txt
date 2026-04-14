@@ -1,0 +1,123 @@
+Below is an example in C that shows one way to modify the code so that errors from leaf certificate verification are captured and stored before the chain is duplicated. (Note that the exact function names, context structure members, and error values may vary in your codebase; adjust accordingly.)
+
+----------------------------------------------------------------
+/* 
+ * Revised version of x509_verify_ctx_add_chain that:
+ *  1. Verifies the leaf certificate (including hostname check) before duplicating the chain.
+ *  2. Captures any error from the leaf verification in the chain’s error array.
+ *  3. Duplicates the chain only after handling leaf errors.
+ *  4. Returns an appropriate error if chain duplication fails.
+ */
+ 
+int x509_verify_ctx_add_chain(X509_VERIFY_CTX *ctx, X509 *leaf, STACK_OF(X509) *chain)
+{
+    int ret = 0;
+    int leaf_verify_error = 0;
+    /* Assume error constants are defined somewhere, e.g.: 
+       X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY, X509_V_OK, etc.
+       Also assume that ctx->error_depth is initialized to an initial value (e.g. -1)
+       and that ctx->chain_errors[] is an array large enough to hold error codes for the chain.
+    */
+    
+    /* First, perform any legacy chain validation.
+       If this fails, do not continue. */
+    ret = legacy_chain_verify(ctx, chain);
+    if (ret != 1) {
+        return ret;  /* legacy validation failure: exit early */
+    }
+    
+    /*
+     * Step 1: Verify the leaf certificate’s validity and hostname before duplicating the chain.
+     * This ensures that any error coming from leaf verification is caught early.
+     */
+    ret = verify_leaf_certificate(leaf);
+    if (ret != 1) {
+        leaf_verify_error = ERR_get_error(); /* capture the error from certificate verification */
+    }
+    
+    /* Optionally verify hostname if applicable.
+       (Assume verify_leaf_hostname sets an error on failure and returns 1 on success) */
+    if (ctx->expected_hostname != NULL) {
+        ret = verify_leaf_hostname(leaf, ctx->expected_hostname);
+        if (ret != 1) {
+            leaf_verify_error = ERR_get_error(); /* capture hostname verification error */
+        }
+    }
+    
+    /*
+     * Step 2: If an error was reported by the leaf verification and if the error depth
+     * hasn't been updated later, record it explicitly in ctx’s chain_errors array.
+     */
+    if ((ctx->error_depth == INITIAL_ERROR_DEPTH) &&
+        (leaf_verify_error != 0) &&
+        (leaf_verify_error != X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY))
+    {
+        /* Record the leaf-specific verification error.
+           For example, record it at position 0 of the chain errors array. */
+        ctx->chain_errors[0] = leaf_verify_error;
+    }
+    
+    /*
+     * Step 3: Now duplicate the certificate chain.
+     * Note that if the duplication fails (e.g. due to memory issues), the error should reflect that.
+     */
+    STACK_OF(X509) *dup_chain = dup_chain_function(chain);
+    if (dup_chain == NULL) {
+        /* Chain duplication failed, return an out-of-memory (or similar) error.
+           The original leaf error is preserved in chain_errors if valid. */
+        return X509_V_ERR_OUT_OF_MEM;
+    }
+    
+    /* Save the duplicated chain in the verification context */
+    ctx->dup_chain = dup_chain;
+    
+    /* Increment the count of valid chains in the context */
+    ctx->valid_chain_count++;
+    
+    /*
+     * Step 4: After successfully processing and duplicating the chain, clear the context error
+     * and update the error depth to signal that the chain has been processed.
+     */
+    ctx->error = X509_V_OK;
+    ctx->error_depth = UPDATED_ERROR_DEPTH; /* UPDATED_ERROR_DEPTH should be set to an appropriate value */
+    
+    return 1;  /* Return success */
+}
+
+ 
+/* 
+ * Notes:
+ *
+ *  - legacy_chain_verify(ctx, chain):
+ *        Function that performs the initial legacy verification of the chain.
+ * 
+ *  - verify_leaf_certificate(leaf):
+ *        Function that validates the leaf certificate’s signature, expiration, etc.
+ *
+ *  - verify_leaf_hostname(leaf, expected_hostname):
+ *        Function that verifies the leaf certificate’s hostname matches the expected hostname.
+ *
+ *  - dup_chain_function(chain):
+ *        Function that duplicates the certificate chain. It should return NULL on memory allocation error.
+ *
+ *  - ERR_get_error():
+ *        Function that retrieves the last error code from the verification routines.
+ *
+ *  - The storage of errors in ctx->chain_errors is done immediately upon detecting a leaf error,
+ *    ensuring that later processing does not override the important error information.
+ *
+ *  - The order of operations ensures that any error in leaf verification is identified and recorded before
+ *    chain duplication happens. This prevents any situation where a verification callback that advises
+ *    continuation could inadvertently hide the error.
+ *
+ *  - The proper error is returned if any stage (e.g. chain duplication) fails.
+ */
+----------------------------------------------------------------
+
+This repair ensures that:
+• The leaf certificate’s validity (and the hostname, if applicable) is checked before the chain is duplicated.
+• Any error generated by the leaf verification is explicitly stored in the certificate chain’s error array.
+• Errors such as an inability to duplicate the chain (due to memory issues) are properly reported.
+• The overall context error is cleared only after the chain has been successfully duplicated and recorded.
+
+Adjust the names and error constants as needed to match your particular codebase.

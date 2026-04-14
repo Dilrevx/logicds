@@ -1,0 +1,67 @@
+Below is an example in C that illustrates the patch. In this example, during the processing of the certificate_verify message the code now checks early on that if the connection is on the server side and the configuration requires the client to authenticate (via mutual authentication or strict certificate policy), then a flag (here represented as tmp.cert_verify_seen) must indicate that a certificate_verify message was received. If that flag isn’t set—and the handshake isn’t a resumed session—the function calls a fatal alert routine before proceeding further. This prevents a malicious client from bypassing the required certificate verification.
+
+----------------------------------------------------------------
+/* Example: TLS v1.3 certificate_verify message processing */
+
+/* This function is called during the TLSv1.3 handshake when a certificate_verify
+   message is expected from the client. It has been patched to ensure that if the server
+   requires mutual authentication, the client must send a certificate_verify message.
+*/
+int tls13_process_certificate_verify(SSL *s, PACKET *pkt)
+{
+    /*
+     * Early check: if running on the server side and the configuration requires a client
+     * certificate (either for mutual authentication or via a strict policy) and the
+     * session is non-resumed, then ensure that the certificate_verify message has arrived.
+     */
+    if (s->server)
+    {
+        /* Determine if a certificate is required. Depending on the design, this could be set
+           because of mutual authentication (e.g., SSL_CERT_FLAG_REQUIRE_MATLS) or by an
+           explicitly configured strict certificate policy (here represented as s->strict_cert_policy). */
+        int certificate_required = (s->cert != NULL && (s->cert->flags & SSL_CERT_FLAG_REQUIRE_MATLS))
+                                   || s->strict_cert_policy;
+
+        /* If a certificate is required, and we are not resuming a session (where mutual auth might be relaxed),
+           verify that the client indeed provided the certificate_verify message. */
+        if (certificate_required && !s->hit && !s->s3->tmp.cert_verify_seen)
+        {
+            /*
+             * Missing expected certificate verification.
+             * Invoke a fatal alert (here SSL_AD_HANDSHAKE_FAILURE) with an appropriate error code
+             * (e.g., SSL_R_MISSING_CERTIFICATE_VERIFY), then abort the handshake.
+             */
+            SSLfatal(s, SSL_AD_HANDSHAKE_FAILURE, SSL_R_MISSING_CERTIFICATE_VERIFY);
+            return 0;
+        }
+    }
+
+    /* Continue with processing of the certificate_verify message.
+       For example, check the size against the expected bounds, verify cryptographic values,
+       etc. This part is unchanged from the original code. */
+
+    // ... [processing/parsing code here] ...
+
+    /* If the handshake had already finished processing, derive the finished secret for further encryption.
+       Any error here should also return an error value so that the handshake terminates properly. */
+    if (s->handshake_complete)
+    {
+        if (!tls13_derive_finished_secret(s))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+----------------------------------------------------------------
+
+Explanation:
+1. The patch begins with a check to ensure that the server side of the connection is active.
+2. It then determines whether a client certificate is required (either through mutual authentication or via strict policy).
+3. If a certificate is required and the connection is not a session resumption (indicated by s->hit), the code verifies whether a certificate_verify message was previously flagged as seen (s->s3->tmp.cert_verify_seen).
+4. If the flag is missing, the function calls SSLfatal() to log the error, sends a TLS fatal alert (e.g., SSL_AD_HANDSHAKE_FAILURE), and aborts the handshake.
+5. Only if the required certificate message is present (or not needed) does the function continue with further processing.
+
+This repair thus prevents a malicious client from bypassing the mutual authentication requirement by omitting the certificate_verify message.

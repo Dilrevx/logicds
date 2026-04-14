@@ -1,0 +1,80 @@
+Based on the provided vulnerability and repair descriptions, here's how you can implement the fix in the `gnutls_ocsp_resp_check_crt` function. The key change involves ensuring that `cserial.size` is set to the correct length returned by `gnutls_x509_crt_get_serial`.
+
+Below is a sample code snippet demonstrating the necessary changes:
+
+```c
+#include <gnutls/gnutls.h>
+
+int gnutls_ocsp_resp_check_crt(gnutls_ocsp_resp_t resp, gnutls_x509_crt_t crt, unsigned int flags)
+{
+    int ret;
+    gnutls_datum_t cserial = {NULL, 0}; // Certificate serial number
+    gnutls_datum_t rserial = {NULL, 0}; // OCSP response serial number
+    size_t t;
+
+    // Allocate memory for certificate serial number
+    cserial.data = gnutls_malloc(20); // Initial allocation, adjust as needed
+    if (!cserial.data) {
+        ret = GNUTLS_E_MEMORY_ERROR;
+        goto cleanup;
+    }
+    cserial.size = 20; // Initial size, will be updated
+
+    // Get the certificate serial number
+    t = cserial.size; // Set t to the initial allocated size
+    ret = gnutls_x509_crt_get_serial(crt, cserial.data, &t);
+    if (ret < 0) {
+        gnutls_assert();
+        goto cleanup;
+    }
+
+    // Update cserial.size with the actual size returned by gnutls_x509_crt_get_serial
+    cserial.size = t;
+
+    // Check if the allocated buffer is sufficient, if not reallocate
+    if (cserial.size > 20) {
+        void *new_data = gnutls_realloc(cserial.data, cserial.size);
+        if (!new_data) {
+            ret = GNUTLS_E_MEMORY_ERROR;
+            goto cleanup;
+        }
+        cserial.data = new_data;
+    }
+
+    // Get the OCSP response serial number
+    ret = gnutls_ocsp_resp_get_single(resp, 0, NULL, &rserial, NULL, NULL, NULL, NULL, NULL);
+    if (ret < 0) {
+        gnutls_assert();
+        goto cleanup;
+    }
+
+    // Compare the lengths of the serial numbers
+    if (cserial.size != rserial.size) {
+        ret = GNUTLS_E_OCSP_RESPONSE_ERROR;
+        goto cleanup;
+    }
+
+    // Compare the serial numbers
+    if (memcmp(cserial.data, rserial.data, cserial.size) != 0) {
+        ret = GNUTLS_E_OCSP_RESPONSE_ERROR;
+        goto cleanup;
+    }
+
+    // If everything matches, return success
+    ret = 0;
+
+cleanup:
+    // Free allocated memory
+    gnutls_free(cserial.data);
+    gnutls_free(rserial.data);
+
+    return ret;
+}
+```
+
+### Key Points:
+- **Memory Management**: Ensure that the allocated memory for `cserial.data` is sufficient. If not, reallocate it using `gnutls_realloc`.
+- **Size Update**: Always update `cserial.size` with the actual size returned by `gnutls_x509_crt_get_serial`.
+- **Comparison**: Perform size and content comparisons to ensure the serial numbers match.
+
+This code snippet should help mitigate the vulnerability by ensuring that the serial number size is accurately managed and compared, thus preventing potential bypasses through trailing bytes.

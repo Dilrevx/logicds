@@ -1,0 +1,56 @@
+<repair>
+    rc = ssh_buffer_get_u8(packet, &first_kex_packet_follows);
+    if (rc != 1) {
+        goto error;
+    }
+    rc = ssh_buffer_add_u8(session->in_hashbuf, first_kex_packet_follows);
+    if (rc < 0) {
+        goto error;
+    }
+
+    /* 
+     * The RFC requires that the next 4 bytes (reserved field) be zero.
+     * Bug: The original code did not actually read these 4 bytes from the packet,
+     * instead it assumed zero by default. An attacker might send non‐zero data,
+     * causing inconsistency in the session hash.
+     * Fix: Read the reserved uint32 from the packet and verify that it is zero.
+     */
+
+    rc = ssh_buffer_get_u32(packet, &kexinit_reserved);
+    if (rc != 1) {
+        ssh_set_error(session, SSH_FATAL,
+                      "ssh_packet_kexinit: unable to read reserved field");
+        goto error;
+    }
+    if (kexinit_reserved != 0) {
+        ssh_set_error(session, SSH_FATAL,
+                      "ssh_packet_kexinit: non-zero reserved field detected");
+        goto error;
+    }
+    rc = ssh_buffer_add_u32(session->in_hashbuf, kexinit_reserved);
+    if (rc < 0) {
+        goto error;
+    }
+
+    /*
+     * Remember whether 'first_kex_packet_follows' was set and the client
+     * guess was wrong: in this case the next SSH_MSG_KEXDH_INIT message
+     * must be ignored on the server side.
+     * Client needs to start the Key exchange over with the correct method
+     */
+
+    return SSH_OK;
+
+error:
+    {
+        int j;
+        /* Free any allocated strings in case of error */
+        for (j = 0; j < SSH_KEX_METHODS; j++) {
+            if (strings[j] != NULL) {
+                ssh_xfree(strings[j]);
+                strings[j] = NULL;
+            }
+        }
+    }
+    return rc;
+</repair>

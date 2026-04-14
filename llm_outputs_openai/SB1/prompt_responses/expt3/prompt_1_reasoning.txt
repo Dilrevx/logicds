@@ -1,0 +1,23 @@
+Below is the explanation for the repair:
+
+The original code snippet allowed a special case: if the message type received was not SSL3_MT_CERTIFICATE_VERIFY, then the code would set a reuse flag and only later check certain conditions based on the certificate type (using the bitmask Constants.EVP_PKT_SIGN). This opening meant that when a client with a DH certificate sent a non-CertificateVerify message, the function could bypass the expected certificate verification, allowing an attacker to potentially complete the TLS handshake without a genuine possession of a private key.
+
+The repair removes the branch that allowed reuse of the message by eliminating the conditional reuse block. Instead, if the message type isn’t exactly SSL3_MT_CERTIFICATE_VERIFY, the function immediately sends an alert ("unexpected message") and treats the situation as a fatal error. This ensures that the TLS handshake will not continue unless the client provides a valid CertificateVerify message.
+
+The key changes and their effects are as follows:
+
+1. Removed the reuse_message flag assignment:
+   - Previously: If the message type wasn’t CertificateVerify, the code set the reuse flag and later conditionally returned success (1) if certain conditions weren’t met.
+   - Now: The code strictly disallows any non-CertificateVerify message, thereby eliminating the possibility for the handshake process to mistakenly consider a DH client certificate valid without proper proof (i.e. a certificate verify message).
+
+2. Immediate error return:
+   - The function now immediately logs an error and sends an alert with an appropriate alert level. In doing so, it forces the handshake to fail if the CertificateVerify message is missing.
+   - This change prevents any crafted TLS handshake attempt from bypassing authentication by simply omitting the correct CertificateVerify message.
+
+3. Tightened control flow:
+   - The revised logic clearly requires a correct CertificateVerify message before allowing the handshake to proceed, ensuring that any deviation is met with termination.
+   - This strict handling is essential to counter the vulnerability, which relied on the misinterpretation of a non-certificate verify message as acceptable under certain conditions.
+
+By implementing these changes, clients that do not present a valid CertificateVerify message, including those using DH certificates, are not inadvertently authenticated. This repair thereby addresses the vulnerability by mandating proper authentication proof as part of the handshake process.
+
+This change is encapsulated within the <repair> tags, ready to be copied into the source code to replace the original buggy snippet.

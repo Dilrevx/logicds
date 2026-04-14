@@ -1,0 +1,36 @@
+The repair addresses a critical security vulnerability in a TLS v1.3 server implementation where mutual authentication is required but not properly enforced. Mutual authentication in TLS involves both the server and the client proving their identities to each other using digital certificates. This ensures that both parties are who they claim to be, which is essential for secure communication.
+
+### Vulnerability Explanation
+
+In the original code snippet, there was no check to ensure that the client had sent a `CertificateVerify` message before proceeding with the handshake. The `CertificateVerify` message is crucial in mutual authentication as it contains a signature from the client that proves possession of the private key corresponding to the public key in its certificate. Without this message, a malicious client could bypass the authentication process and establish a connection without presenting a valid certificate, thereby compromising the security of the communication.
+
+### Repair Implementation
+
+To address this vulnerability, the repair introduces a new condition to check whether mutual authentication is required (`ssl->options.mutualAuth`) and whether the `CertificateVerify` message has been received (`ssl->options.haveCertVerify`). If mutual authentication is enabled but the `CertificateVerify` message has not been received, the function immediately returns an error code (`MISSING_CERT_VERIFY_E`), halting the handshake process.
+
+#### Detailed Steps:
+
+1. **Check Mutual Authentication Requirement:**
+   ```c
+   if (ssl->options.mutualAuth && !ssl->options.haveCertVerify) {
+       return MISSING_CERT_VERIFY_E;
+   }
+   ```
+   - `ssl->options.mutualAuth`: This flag indicates whether mutual authentication is required by the server.
+   - `ssl->options.haveCertVerify`: This flag should be set to true only after the server successfully processes the `CertificateVerify` message from the client.
+
+2. **Return Error on Missing Certificate Verification:**
+   - If mutual authentication is required and the `CertificateVerify` message has not been received, the function returns `MISSING_CERT_VERIFY_E`, which is a custom error code indicating that the `CertificateVerify` message is missing. This prevents the handshake from progressing further without proper client authentication.
+
+3. **Ensure Proper Sequence of Operations:**
+   - The check for the `CertificateVerify` message is placed before any operations that depend on the successful completion of the mutual authentication process. In this case, it precedes the derivation of the finished secret, which is a critical step in establishing the session keys used for encrypting the communication.
+
+### Benefits of the Repair
+
+- **Enhanced Security:** By ensuring that the `CertificateVerify` message is received and verified before completing the handshake, the server can prevent unauthorized clients from establishing a secure connection without proper authentication.
+- **Compliance with TLS Standards:** The repair aligns the server's behavior with the TLS v1.3 specification, which mandates that mutual authentication must be enforced when required.
+- **Robustness Against Attacks:** The addition of this check makes the server more resilient to attacks that attempt to bypass authentication, such as man-in-the-middle attacks or client impersonation.
+
+### Conclusion
+
+The repair effectively mitigates the risk associated with the described vulnerability by enforcing the requirement for mutual authentication through the presence of the `CertificateVerify` message. This ensures that only authenticated clients can establish secure connections with the server, thereby maintaining the integrity and confidentiality of the data transmitted over the connection.

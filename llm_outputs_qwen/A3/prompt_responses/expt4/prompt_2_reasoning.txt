@@ -1,0 +1,32 @@
+The repair implemented addresses a significant vulnerability in OpenSSL versions 3.0.0 to 3.0.5, specifically concerning the handling of custom ciphers when using the `EVP_EncryptInit_ex2()`, `EVP_DecryptInit_ex2()`, and `EVP_CipherInit_ex2()` functions. This vulnerability arises when a custom cipher is created with `NID_undef` as its Numerical Identifier (NID). In such cases, OpenSSL incorrectly interprets this as a request for the NULL cipher, leading to scenarios where plaintext is output as ciphertext, thus bypassing encryption entirely.
+
+### Understanding the Vulnerability
+
+In OpenSSL, custom ciphers can be defined using the `EVP_CIPHER_meth_new()` function, which requires a unique NID to identify the cipher. When initializing encryption or decryption processes, OpenSSL attempts to find an equivalent cipher among the available providers based on the NID provided. If `NID_undef` is used, OpenSSL defaults to the NULL cipher, which performs no encryption or decryption. This behavior poses a severe security risk, as it allows sensitive data to be transmitted unencrypted if the NULL cipher is inadvertently selected.
+
+### Analysis of the Buggy Code
+
+The original code snippet is part of the initialization process for encryption and decryption contexts. It checks if the context (`ctx`) is associated with an engine or an implementation (`impl`). If so, it proceeds to use the legacy method for cipher initialization, ensuring compatibility with hardware engines or specific software implementations.
+
+However, the original code does not account for the scenario where a custom cipher with `NID_undef` might be used. This oversight allows the code to proceed without correctly identifying and handling the custom cipher, potentially leading to the selection of the NULL cipher.
+
+### The Repair Strategy
+
+The repair strategy involves enhancing the condition under which the code proceeds to use the legacy method for cipher initialization. The key additions are designed to check the origin and type of the cipher being used:
+
+1. **Check for Legacy Custom Ciphers**:
+   - The repair introduces a condition to check if the `cipher` variable is not null and its origin is `EVP_ORIG_METH`. This indicates that the cipher was created using the legacy method (`EVP_CIPHER_meth_new()`). The function `EVP_CIPHER_get0_provider(ctx->cipher) == NULL` ensures that the cipher does not have an associated provider, which is typical for legacy ciphers.
+   - Additionally, it checks if the `cipher` variable is null, but `ctx->cipher` is not null and its origin is `EVP_ORIG_METH`. This scenario can occur if the `cipher` parameter is not explicitly provided during the initialization function call, but the context already has a reference to a legacy custom cipher.
+
+2. **Preventing NULL Cipher Usage**:
+   - By incorporating these additional checks, the code ensures that any custom cipher created via the legacy method is handled correctly. If the cipher's origin is identified as `EVP_ORIG_METH`, the code correctly routes the process through the legacy path, ensuring that the intended custom cipher is used instead of falling back to the NULL cipher.
+
+3. **Maintaining Backward Compatibility**:
+   - The modifications preserve the existing logic that handles engines and implementations, ensuring that applications relying on these features continue to function as expected. At the same time, the new checks add a layer of security by addressing the vulnerability without disrupting the normal operation of OpenSSL.
+
+4. **Consistent State Management**:
+   - The repair ensures that the state of the cipher context (`ctx`) remains consistent. It frees the fetched cipher and resets the `fetched_cipher` pointer before proceeding to the legacy method, maintaining the integrity of the context and preventing memory leaks.
+
+### Conclusion
+
+The repair effectively mitigates the risk of data exposure due to the improper handling of custom ciphers. By enhancing the condition checks to identify and handle legacy custom ciphers correctly, the code prevents the selection of the NULL cipher when a custom cipher with `NID_undef` is used. This ensures that encryption and decryption operations are performed as intended, maintaining the security and integrity of data processed by OpenSSL.

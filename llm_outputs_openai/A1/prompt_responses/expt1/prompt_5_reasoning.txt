@@ -1,0 +1,15 @@
+The repair introduces a validation step that checks key and IV lengths specified in the provided OSSL_PARAM array against the lengths already established in the EVP_CIPHER_CTX. Here’s how it works:
+
+1. Initialization of the algorithm context remains the same. Once ctx->algctx is created using the provider's newctx method, the newly added validation block is executed before any cipher-specific initialization routines are called.
+
+2. The repair first checks if the OSSL_PARAM array (params) is non-null. If it is provided, it locates two specific parameters: OSSL_CIPHER_PARAM_KEYLEN and OSSL_CIPHER_PARAM_IVLEN. These parameters are expected to represent the desired lengths for the key and IV, respectively.
+
+3. For each parameter found (key length and IV length), we retrieve the value using OSSL_PARAM_get_size_t(). If the retrieval fails, an error is raised (via ERR_raise) and the function returns an error code. This ensures that malformed parameter data does not go undetected.
+
+4. If a non-zero key length or IV length is specified in the OSSL_PARAM array, the repair checks that these values exactly match the lengths returned by EVP_CIPHER_CTX_get_key_length(ctx) and EVP_CIPHER_CTX_get_iv_length(ctx). If there is any mismatch, an appropriate error is raised, and the function exits early.
+
+5. Following the parameter validation, the repair proceeds to the padding configuration and then the calls to either the encryption or decryption initialization functions. These functions (ctx->cipher->einit for encryption or ctx->cipher->dinit for decryption) now receive validated key and IV parameters.
+
+This repair is crucial because it ensures that the key and IV passed in via the parameters array cannot inadvertently (or maliciously) override the expected lengths. In the previous code, there could be a logical vulnerability where the parameters might induce truncation or buffer overruns; for example, if an attacker provided a key length or IV length shorter than required, sensitive cryptographic operations could be weakened (as truncated IVs might no longer be unique across encryptions).
+
+By enforcing an exact match on the provided lengths with the context’s established lengths, the repair eliminates the possibility of unintended truncation or misuse. It essentially guarantees that the cryptographic context remains consistent with the size expectations of the underlying cipher algorithm. This validation step is a robust safeguard, preventing potential misuse of the API that could lead to confidentiality issues in cipher modes where IV uniqueness is critical.

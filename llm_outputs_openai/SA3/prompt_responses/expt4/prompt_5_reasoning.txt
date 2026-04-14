@@ -1,0 +1,13 @@
+The repair explicitly checks if the cipher’s NID is set to the undefined value (EvpCipher.NID_UNDEF) and, if so, raises an error instead of proceeding with further initialization. Here’s what happens in the patch:
+
+1. Before attempting to fetch or use the provider-specific cipher, the repair adds an if-statement:
+  if (cipher.getNid() == EvpCipher.NID_UNDEF) { ... }
+This check is crucial because, according to the vulnerability description, passing NID_UNDEF may cause the OpenSSL functions to fall back to the NULL cipher, which would emit plaintext as ciphertext. By detecting the undefined NID early, the code prevents the scenario where an application could inadvertently (or maliciously) bypass encryption.
+
+2. When this condition is met, the code calls Err.raise("EVP", "Invalid cipher NID") and returns 0 immediately. This prevents any further execution that might fetch a provider cipher based on an undefined NID. Without this check, the subsequent code would attempt to use Obj.nidToSn(cipher.getNid()) to retrieve a string name for the cipher, and if NID_UNDEF were passed, it might resolve to "NULL" (or something unexpected), leading to the selection of an insecure (NULL) cipher.
+
+3. The remaining logic is unchanged. If the cipher has a valid NID, the code continues as before—this includes fetching a provider-based cipher if needed, setting up the algorithm context, padding configuration, and finally calling the appropriate initialization function (for encryption or decryption). Thus, authorization for using the cipher is performed only when the cipher identifier is valid, thereby maintaining intended secure behavior.
+
+4. Overall, the patch directly addresses the core issue mentioned in the vulnerability description: preventing the misuse of NID_UNDEF, which could allow a fallback to a NULL cipher. By adding this safeguard early in the initialization process, the code no longer permits an undefined cipher to be used.
+
+In summary, the repair fixes the vulnerability by detecting if the cipher’s NID is undefined (EvpCipher.NID_UNDEF) and halting further processing with an error. This prevents the system from mistakenly fetching or using the default/null cipher, thereby eliminating the exposure of unencrypted data as ciphertext.

@@ -1,0 +1,16 @@
+The repair makes a couple of important changes:
+
+1. Always Resetting the Trust Flag:  
+   The repair starts by explicitly setting *goodkey to false before processing. This ensures that any previous state is cleared and that only keys that have been explicitly validated will later get marked as trusted.
+
+2. Strict Trust Anchor Verification:  
+   In the original code, when the key wasn’t found or only partially matched (indicating that the trust anchor isn’t present), the code reset the result to ISC_R_SUCCESS. This means that even if the key was not in the trust anchor table, the process proceeded without any error. This is exactly what allows an attacker in the network path to inject forged data that bypasses proper DNSSEC validation.  
+   The repair changes this behavior: for cases DNS_R_PARTIALMATCH and ISC_R_NOTFOUND, instead of resetting result to success, it now sets the result to DNS_R_INVALIDTRUSTANCHOR. In this way, if the key does not exist in the trust anchor table, the function signals an error rather than silently accepting untrusted data.
+
+3. Preventing Mirror Zone Exploitation:  
+   By ensuring that a forged key (or missing trust anchor) isn’t blindly accepted as secure (which in the context of a mirror zone could lead to serving potentially falsified zone data), the new check prevents an on-path attacker from exploiting the fallback to traditional recursion. The code now requires that any key being used must strictly be present in the trust anchor table—if not, it will return an error and abort the secure caching of the zone data.
+
+Why It Fixes the Vulnerability:  
+The vulnerability stemmed from the fact that mirror zones were allowed to use the mirror data if trust anchor checks failed, due to the relaxation of security by reassigning a successful status even when the key was not trusted. By not resetting the result in such cases, the repair ensures that the DNSSEC validation is not bypassed, thereby preventing an attacker from supplying forged keys that would be erroneously accepted as valid. Thus, the patch eliminates the risk of replacing validated trust anchor data with forged zone data and ensures that only data verified through DNSSEC with a trusted anchor is used.
+
+Together, these changes enforce a rigorous check on whether the key is part of the configured trust anchors and prevent unauthorized fallbacks, effectively closing the vulnerability described.

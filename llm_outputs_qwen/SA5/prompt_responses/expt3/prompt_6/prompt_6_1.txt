@@ -1,0 +1,57 @@
+To apply the repair described in the `repair_description`, we need to modify the `OCSP_basic_verify` function in the OpenSSL library. Below is a hypothetical example of how you might implement these changes in the source code. Please note that this is a conceptual example, and the actual implementation details may vary based on the specific version of OpenSSL you are working with.
+
+```c
+#include <openssl/err.h>
+#include <openssl/ocsp.h>
+
+int OCSP_basic_verify(OCSP_BASICRESP *bs, STACK_OF(X509) *certs,
+                     X509_STORE *store, unsigned long flags)
+{
+    int ret = 0;
+    X509_STORE_CTX *ctx = NULL;
+
+    // Create and initialize the X509_STORE_CTX
+    if (!(ctx = X509_STORE_CTX_new()))
+        goto err;
+
+    // Set up the context for verification
+    if (!X509_STORE_CTX_init(ctx, store, NULL, certs))
+        goto err;
+
+    // Perform the verification
+    ret = OCSP_BASICRESP_verify(bs, NULL, ctx, flags);
+
+    // If verification failed and OCSP_NOCHECKS is not set, handle the error
+    if (ret <= 0 && !(flags & OCSP_NOCHECKS)) {
+        int err = ERR_get_error(); // Store the error code
+
+        // Raise a more descriptive error
+        ERR_raise_data(ERR_LIB_OCSP, OCSP_R_CERTIFICATE_VERIFY_ERROR,
+                       "Certificate verification error: %s", ERR_reason_error_string(err));
+
+        // Free the context to prevent resource leaks
+        X509_STORE_CTX_free(ctx);
+        return ret; // Return the verification result (which is <= 0 indicating failure)
+    }
+
+    // Clean up the context if verification was successful or OCSP_NOCHECKS was set
+    X509_STORE_CTX_free(ctx);
+    return ret; // Return the verification result
+err:
+    if (ctx)
+        X509_STORE_CTX_free(ctx);
+    return -1; // Return -1 to indicate a fatal error
+}
+```
+
+### Key Changes Made:
+
+1. **Error Code Retrieval**: Introduced a variable `err` to store the error code retrieved from the context using `ERR_get_error()`.
+
+2. **Clearer Error Message**: Modified the error message to "OCSP_R_CERTIFICATE_VERIFY_ERROR" to clearly indicate that an error occurred during certificate verification.
+
+3. **Resource Management**: Added a call to `X509_STORE_CTX_free(ctx)` to ensure that the context is freed, preventing resource leaks.
+
+4. **Preserved Function Behavior**: Retained the original `return ret;` statement to ensure the function continues to return the result of the verification process accurately.
+
+These changes should help mitigate the vulnerability by ensuring that the function behaves correctly when the `OCSP_NOCHECKS` flag is not set, and provides clear and accurate feedback about verification failures.

@@ -1,0 +1,39 @@
+Below is one way to fix the issue. In the buggy code the “leaf‐certificate” verification errors (from certificate validity and hostname checks) are simply causing the function to return 0 without recording the error in the context. That means that when an installed verification callback later tells the verifier to “continue” despite an invalid certificate, the original error isn’t stored and a wrong error code may eventually be returned.
+
+A typical repair is to capture the error code from the leaf verification routines and then pass that error along via the helper function (x509_verify_cert_error) so that ctx.error is set accordingly. For example, assuming that the verification routines can report a specific error (for instance via an output parameter), the patched code could look like this:
+
+------------------------------------------------
+/* Create a local variable to hold any error from leaf checks */
+int err = X509Constants.X509_V_OK;
+
+/* Duplicate the chain and check that we have room */
+if ((ctx.chains_count < ctx.max_chains
+         ? (ctx.chains[ctx.chains_count] = X509Utils.x509_verify_chain_dup(chain))
+         : null) == null) {
+    return X509Utils.x509_verify_cert_error(ctx, last, depth,
+                X509Constants.X509_V_ERR_OUT_OF_MEM, 0);
+}
+
+/* Verify the leaf certificate validity.
+   Note: x509_verify_cert_valid now returns an error code via &err if verification fails. */
+if (!X509Utils.x509_verify_cert_valid(ctx, leaf, &err))
+    return X509Utils.x509_verify_cert_error(ctx, last, depth, err, 0);
+
+/* Verify the leaf certificate hostname.
+   Again, capture the error and return it so that it is stored in the context. */
+if (!X509Utils.x509_verify_cert_hostname(ctx, leaf, name))
+    return X509Utils.x509_verify_cert_error(ctx, last, depth,
+                X509Constants.X509_V_ERR_HOSTNAME_MISMATCH, 0);
+
+/* If we reach here the chain is valid; update the chain count and clear errors */
+ctx.chains_count++;
+ctx.error = X509Constants.X509_V_OK;
+
+------------------------------------------------
+
+Explanation of the changes:
+1. A local variable (err) is declared to capture the error code that a leaf verification function may determine.
+2. Instead of directly returning 0 when leaf certificate validity or hostname checks fail, the code now calls x509_verify_cert_error(...) with the captured error code. This helper then properly records the error in ctx.error.
+3. By propagating the actual error (even if the installed verification callback instructed a “continue”), the context reflects the true reason for failure rather than a generic or incorrect error code.
+
+This repair ensures that errors occurring during leaf certificate verification are “stored” in the verification context and can be reported correctly.

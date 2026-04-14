@@ -1,0 +1,49 @@
+Below is one approach to a fix. The vulnerability report indicates that only a small number of NAS messages should be handled “in the clear” (i.e. without integrity protection): specifically Detach Request, EMM Information, and EMM Status, plus Attach/Service Reject (and Service Reject) only when the embedded EMM cause equals 25. However, the original code permits other message types (for example Identity Request, Authentication Request/Reject, Detach Accept, and Tracking Area Update Reject) in plaintext – which increases the attack surface.
+
+A safe repair would be to tighten the allowed plaintext message types. In the revised snippet below, we only allow plaintext processing for the following:
+  – EMM Information, EMM Status, and Detach Request (without extra condition), and
+  – Attach Reject (and Service Reject) only if the embedded emm_cause equals 25.
+Any other message type with no integrity protection is rejected with an error.
+
+For example, the revised code might look like this:
+
+--------------------------------------------------------------------
+if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS) {
+    switch (msg_type) {
+        // Allow these messages in plaintext
+        case LIBLTE_MME_MSG_TYPE_EMM_INFORMATION:
+        case LIBLTE_MME_MSG_TYPE_EMM_STATUS:
+        case LIBLTE_MME_MSG_TYPE_DETACH_REQUEST:
+            break;
+
+        // For Attach/Service Reject, only allow if emm_cause equals 25
+        case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+        case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT:
+            if (emm_cause != 25) {
+                logger.error("Rejecting unprotected NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X and invalid emm_cause=%d",
+                             msg_type,
+                             sec_hdr_type,
+                             emm_cause);
+                return;
+            }
+            break;
+
+        // Reject any other NAS message if not integrity-protected
+        default:
+            logger.error("Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X without integrity protection!",
+                         msg_type,
+                         sec_hdr_type);
+            return;
+    }
+}
+--------------------------------------------------------------------
+
+Step-by-step explanation:
+
+1. We first check if the security header type is plaintext.
+2. In the switch on msg_type, we only allow:
+  • EMM_INFORMATION, EMM_STATUS, and DETACH_REQUEST unconditionally.
+3. For Attach/Service Reject (and by extension Service Reject if applicable), we check the emm_cause and only accept the message if it equals 25. (This follow the vulnerability note; if your implementation calls the cause by some other constant name or value, adjust accordingly.)
+4. For any other NAS message type arriving without integrity protection, an error is logged and processing stops.
+
+This change ensures that only the messages explicitly safe to process without integrity are handled in plaintext, reducing the potential for abuse as identified in the vulnerability report.

@@ -1,0 +1,85 @@
+Certainly! Let's walk through the steps to apply the repair described in the `<repair_description>` to the provided `<buggy_code>`. We'll add the necessary validation to ensure that the TLS 1.3 session does not proceed if neither a PSK nor a KSE is present.
+
+### Original Buggy Code
+
+```java
+if (extMsgType[0] == CommonsConstants.server_hello) {
+    PreSharedKey psk = null;
+    TlsExtension ext = TLSX.find(ssl.extensions, CommonsConstants.TLSX_PRE_SHARED_KEY);
+    if (ext != null)
+        psk = (PreSharedKey) ext.data;
+    while (psk != null && !psk.chosen)
+        psk = psk.next;
+    if (psk == null) {
+        ssl.options.resuming = false;
+        ssl.arrays.psk_keySz = 0;
+        for (int i = 0; i < ssl.arrays.psk_key.length; i++)
+            ssl.arrays.psk_key[i] = 0;
+    }
+    else {
+        ret = SetupPskKey(ssl, psk, 0);
+        if (ret != 0)
+            return ret;
+        ssl.options.pskNegotiated = true;
+    }
+    ssl.keys.encryptionOn = true;
+    ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE;
+}
+```
+
+### Step-by-Step Repair
+
+1. **Check for PSK as Before**:
+   - The existing logic for checking and processing the PSK remains unchanged.
+   
+2. **Add a Check for Key Share Extension (KSE)**:
+   - We need to determine if a Key Share Extension is present. This can be done similarly to how the PSK extension is checked.
+   
+3. **Introduce Validation for Missing Extensions**:
+   - After determining the absence of a suitable PSK, we should check if a valid named group (from the KSE) is present.
+   - If neither a PSK nor a valid named group is found, the function should return an error indicating that required extensions are missing.
+
+### Modified Code with Repairs
+
+```java
+if (extMsgType[0] == CommonsConstants.server_hello) {
+    PreSharedKey psk = null;
+    TlsExtension ext = TLSX.find(ssl.extensions, CommonsConstants.TLSX_PRE_SHARED_KEY);
+    if (ext != null)
+        psk = (PreSharedKey) ext.data;
+    while (psk != null && !psk.chosen)
+        psk = psk.next;
+    if (psk == null) {
+        ssl.options.resuming = false;
+        ssl.arrays.psk_keySz = 0;
+        for (int i = 0; i < ssl.arrays.psk_key.length; i++)
+            ssl.arrays.psk_key[i] = 0;
+    }
+    else {
+        ret = SetupPskKey(ssl, psk, 0);
+        if (ret != 0)
+            return ret;
+        ssl.options.pskNegotiated = true;
+    }
+
+    // Check for Key Share Extension
+    TlsExtension kseExt = TLSX.find(ssl.extensions, CommonsConstants.TLSX_KEY_SHARE);
+    boolean keySharePresent = kseExt != null;
+
+    // Validate that at least one of PSK or Key Share is present
+    if (!ssl.options.pskNegotiated && !keySharePresent) {
+        return CommonsConstants.EXT_MISSING; // Assuming CommonsConstants.EXT_MISSING is defined
+    }
+
+    ssl.keys.encryptionOn = true;
+    ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE;
+}
+```
+
+### Explanation of Changes
+
+- **Key Share Extension Check**: A new `TlsExtension` object `kseExt` is created to find the Key Share Extension in `ssl.extensions`. The presence of the extension is stored in `keySharePresent`.
+- **Validation Logic**: Before setting up encryption and updating the server state, the code checks if neither a PSK was negotiated (`!ssl.options.pskNegotiated`) nor a Key Share Extension is present (`!keySharePresent`). If both conditions are true, the function returns `CommonsConstants.EXT_MISSING`, which is assumed to be a predefined constant indicating a missing extension error.
+- **Continuation of Handshake**: If either a PSK is negotiated or a Key Share Extension is present, the handshake continues normally.
+
+This repair ensures that the TLS 1.3 session cannot proceed without at least one of the required key exchange mechanisms, thus mitigating the vulnerability described.

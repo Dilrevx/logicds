@@ -1,0 +1,51 @@
+<repair>
+result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+                                  dst_key_alg(key), dst_key_id(key),
+                                  &keynode);
+/* If the lookup returned an error other than no match/partial match, exit immediately. */
+if (result != ISC_R_SUCCESS && result != DNS_R_PARTIALMATCH &&
+    result != ISC_R_NOTFOUND) {
+    goto cleanup;
+}
+
+/* Assume no valid key has been found until proven otherwise */
+*goodkey = false;
+
+/* Loop over all candidate keynodes */
+while (keynode != NULL) {
+    /*
+     * Use a dedicated function to fully compare the candidate's key with the supplied key.
+     * A return value of 0 indicates that the keys match exactly.
+     */
+    if (dst_key_compare(keynode->key, key) == 0) {
+        /* Found a matching trust anchor. Detach this keynode to avoid further use. */
+        dns_keytable_detachkeynode(vctx->secroots, &keynode);
+        /* Mark the DNSSEC datasets as secure. */
+        dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+        dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+        *goodkey = true;
+        /* Valid trust anchor found; exit the loop. */
+        break;
+    } else {
+        /* The candidate does not match the supplied key.
+           Detach it to avoid returning an incorrect or stale node. */
+        dns_keytable_detachkeynode(vctx->secroots, &keynode);
+
+        /* Retrieve the next matching keynode.
+           It is assumed that dns_keytable_findnextkeynode returns the next available candidate. */
+        result = dns_keytable_findnextkeynode(vctx->secroots, vctx->origin,
+                                                dst_key_alg(key), dst_key_id(key),
+                                                &keynode);
+        /* If an error occurred during the lookup (other than no match/partial match), exit. */
+        if (result != ISC_R_SUCCESS && result != DNS_R_PARTIALMATCH &&
+            result != ISC_R_NOTFOUND) {
+            goto cleanup;
+        }
+    }
+}
+
+/* cleanup label ensures that resources are freed even if an error occurs */
+cleanup:
+dst_key_free(&key);
+return (result);
+</repair>

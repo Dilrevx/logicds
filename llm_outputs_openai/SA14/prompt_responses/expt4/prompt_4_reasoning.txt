@@ -1,0 +1,16 @@
+The repair involves adding an explicit flag setting in the section that processes the Finished message states. Originally, the code simply logged the state, attempted to retrieve the Finished message via ssl3_get_finished(), and then transitioned the handshake stage to SSL_ST_OK. This left an opening for an attacker to prematurely inject a ChangeCipherSpec (CCS) message. 
+
+In the revised code, before calling ssl3_get_finished(), we perform a bitwise OR operation on the state.flags field with state.SSL3_FLAGS_CCS_OK. This operation sets the flag that explicitly marks that a CCS message is now allowed. In effect, this tells the system that the CCS message is expected and should be treated as valid, as it follows a controlled transition in the handshake process. 
+
+By setting this flag just before the Finished message is processed, the code makes it explicit that we are in the final stages of the handshake and that any CCS message that might arrive from this point is not a malicious injection. Later parts of the TLS logic can then check this flag; if the flag is not set when a CCS message comes in, the protocol can safely assume that the message is unexpected, and therefore it can be rejected or handled in a safer way. 
+
+After the flag is set, the code proceeds to call ssl3_get_finished(), which retrieves the Finished message as intended. If this retrieval fails (indicated by a non-positive return value), the function returns early, thereby preventing the handshake from continuing in an invalid state. Only once the Finished message is successfully processed does the handshake stage transition to SSL_ST_OK, which finalizes the gesture that the session has been safely negotiated.
+
+This repair fixes the CCS injection vulnerability by ensuring that the system explicitly requires a valid cue (the setting of the CCS_OK flag) before handling any CCS message. This means that attackers can no longer force the system into accepting a CCS message at an inappropriate time, which previously could lead to the use of a zero-length master key, enabling session hijacking or information leakage. 
+
+In summary, the repair fortifies the handshake process by:
+1. Explicitly marking that the CCS message is valid at the point in the handshake where it is expected.
+2. Preventing processing of any CCS messages that come outside of this alignment.
+3. Ensuring the Finished message is successfully processed before moving to a secure handshake state.
+
+By enforcing this proper sequence and explicit flag setting, the vulnerability is mitigated, ensuring that only expected and valid CCS messages are processed, thereby protecting against potential man-in-the-middle attacks.

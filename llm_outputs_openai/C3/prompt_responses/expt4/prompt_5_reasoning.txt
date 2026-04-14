@@ -1,0 +1,22 @@
+The repair changes the behavior when an ACL file has been configured but effectively contains no valid ACL entries (because it’s empty or contains only comments/blank lines). In the original code, if no ACL entries were set (i.e. both acl_list and acl_patterns are NULL), the function returned MOSQ_ERR_PLUGIN_DEFER. This return value defers the access decision to the plugin mechanism, which by default allowed access. This unintentionally resulted in a “default allow” policy even when an ACL file was present but empty.
+
+In the repaired code, we modify that behavior. The early condition now checks whether both acl_list and acl_patterns are NULL, and if they are, the function returns MOSQ_ERR_ACL_DENIED instead of deferring. This change means that when an ACL file is defined but empty (or its entries are only comments or blank lines), the broker explicitly denies access rather than defaulting to allow.
+
+Step-by-step breakdown:
+1. The code first validates input parameters and determines whether the client is a bridge or has listener-specific security options.
+
+2. The key change is right after retrieving security_opts. The original logic:
+  if(!security_opts->acl_list && !security_opts->acl_patterns){
+    return MOSQ_ERR_PLUGIN_DEFER;
+  }
+   is replaced by:
+  if(!security_opts->acl_list && !security_opts->acl_patterns){
+    return MOSQ_ERR_ACL_DENIED;
+  }
+   This ensures that an empty ACL file (or one that effectively has no ACLs) does not result in plugin deferral (and implicit allow), but instead denies access.
+
+3. The remainder of the function loops through any defined ACL entries (or pattern-based ACLs) and checks for matches based on the topic and required access. This part of the code is left unchanged because it represents the standard ACL checking logic.
+
+4. Other parts of the function continue to enforce additional rules (like denying access to clients with dangerous characters in the username or client ID).
+
+By explicitly returning MOSQ_ERR_ACL_DENIED when no ACL entries are present—rather than deferring to the plugin—the repair fixes the vulnerability. This change prevents an unintended “allow” default policy when an administrator has configured an ACL file that is empty or only formatted with comments.

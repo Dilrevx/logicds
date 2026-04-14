@@ -1,0 +1,41 @@
+The repair implemented addresses a critical vulnerability known as the "CCS Injection" attack, which affects the OpenSSL library's handling of ChangeCipherSpec (CCS) messages during the TLS handshake process. To understand the reasoning behind the repair, it's essential to delve into the specifics of how TLS handshakes work and why the CCS Injection attack poses a significant threat.
+
+### Understanding TLS Handshakes and ChangeCipherSpec Messages
+
+TLS (Transport Layer Security) is a cryptographic protocol designed to provide secure communication over a computer network. At the heart of TLS is the handshake process, which establishes a secure channel between two parties before any actual data is exchanged. During this process, several messages are exchanged to negotiate encryption algorithms, exchange keys, and authenticate each other.
+
+One of these messages is the ChangeCipherSpec (CCS) message. The CCS message is used to signal the transition from one set of cryptographic parameters (such as encryption algorithms and keys) to another. Typically, the CCS message is sent after the Finished message but before any application data is exchanged. It indicates that the sender is ready to use the newly negotiated cryptographic parameters for encrypting and decrypting data.
+
+### The CCS Injection Vulnerability
+
+The CCS Injection vulnerability arises from the improper handling of CCS messages by OpenSSL. Specifically, the vulnerability stems from the fact that OpenSSL does not adequately verify that a CCS message is received at the correct point in the handshake process. An attacker can exploit this by injecting a CCS message prematurely, causing the recipient to transition to a state where it uses a zero-length master key. This zero-length master key can then be exploited to hijack the session or obtain sensitive information.
+
+### The Core Issue in the Buggy Code
+
+In the provided buggy code snippet, the primary issue is the lack of a mechanism to ensure that the CCS message is received at the appropriate time in the handshake process. While the code checks for the correct format of the CCS message and verifies that a new cipher is available, it does not enforce the temporal correctness of the message. This oversight allows an attacker to inject a CCS message out of sequence, leading to the vulnerability described.
+
+### The Repair Strategy
+
+To address the CCS Injection vulnerability, the repair strategy involves introducing a new flag, `SSL3_FLAGS_CCS_OK`, which tracks whether it is appropriate to receive a CCS message at the current stage of the TLS handshake. Here’s a detailed breakdown of the repair:
+
+1. **Introduction of the SSL3_FLAGS_CCS_OK Flag**:
+   - A new flag, `SSL3_FLAGS_CCS_OK`, is introduced to indicate that the TLS handshake is at a point where a CCS message can be safely processed. This flag acts as a safeguard to ensure that the CCS message is only processed when it is expected.
+
+2. **Checking the SSL3_FLAGS_CCS_OK Flag**:
+   - Before processing a CCS message, the code now checks if the `SSL3_FLAGS_CCS_OK` flag is set. If the flag is not set, it means that receiving a CCS message at this point in the handshake is unexpected and potentially malicious. In such cases, the code responds with an error alert (`SSL_AD_UNEXPECTED_MESSAGE`) and terminates the connection with an error code (`SSL_R_CCS_RECEIVED_EARLY`). This prevents the premature processing of the CCS message.
+
+3. **Resetting the SSL3_FLAGS_CCS_OK Flag**:
+   - Once the CCS message is successfully processed, the `SSL3_FLAGS_CCS_OK` flag is cleared. This is done by performing a bitwise AND operation with the bitwise NOT of `SSL3_FLAGS_CCS_OK`. Clearing the flag ensures that subsequent CCS messages are not processed until the flag is appropriately set again during the next valid phase of the handshake. This step is crucial to maintaining the integrity of the handshake process and preventing repeated attacks.
+
+4. **Ensuring Proper Handshake Flow**:
+   - The introduction and management of the `SSL3_FLAGS_CCS_OK` flag are part of a broader effort to enforce the proper sequence of messages in the TLS handshake. By carefully controlling when the CCS message can be processed, OpenSSL can better resist attempts to inject this message out of order, thereby mitigating the risk of using a zero-length master key and other related vulnerabilities.
+
+5. **Maintaining Existing Validation Checks**:
+   - The repair does not alter existing validation checks for the CCS message. These checks ensure that the CCS message is correctly formatted and that there is a new cipher available to switch to. The additional flag-based check complements these existing validations, providing an additional layer of security.
+
+6. **Logging and Error Reporting**:
+   - When the CCS message is rejected due to the `SSL3_FLAGS_CCS_OK` flag not being set, the code logs an error using `SSLerr` and sets an appropriate alert level (`SSL_AD_UNEXPECTED_MESSAGE`). This provides clear feedback about the nature of the error and aids in debugging and monitoring for potential attacks.
+
+### Conclusion
+
+By implementing these changes, the repair effectively addresses the CCS Injection vulnerability by ensuring that the CCS message is only processed when it is expected and valid within the context of the TLS handshake. This enhancement significantly improves the security of OpenSSL and protects against man-in-the-middle attacks that exploit the improper handling of CCS messages. The introduction of the `SSL3_FLAGS_CCS_OK` flag serves as a robust mechanism to enforce the temporal correctness of the TLS handshake, thereby mitigating the risk associated with the CCS Injection vulnerability.

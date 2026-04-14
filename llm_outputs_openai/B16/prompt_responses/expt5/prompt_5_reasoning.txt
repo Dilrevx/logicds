@@ -1,0 +1,16 @@
+The repair extends the original identity/hash matching logic by adding file descriptor (socket) validations to ensure that a DNS reply is accepted only if it comes from the same network channel that was used to send the query. Previously, the code would return a matching query object as long as the query identifier and optional hash were valid. However, this was insecure because it didn’t verify that the reply was received through the expected network socket, allowing attackers to forge replies if they could mimic these characteristics.
+
+Here’s what the repair does:
+
+1. It retains the original condition checking that the query was sent (f->sentto), that the identifier (f->new_id) matches the reply’s id, and that the optional hash (if provided) matches using memcmp.
+
+2. Once these initial conditions are met, the repair then implements three socket validation checks. These checks determine on which channel the query was sent and verify that the reply was received on the corresponding socket:
+   - For IPv4 queries, if the query was sent via an IPv4 random port (indicated by f->ipv4_sent) then the repair ensures that the file descriptor of the incoming reply (reply_fd) exactly matches the IPv4 socket descriptor (f->ipv4_fd).
+   - For IPv6 queries, a similar condition applies: if the query was sent over IPv6 (indicated by f->ipv6_sent), then reply_fd must match f->ipv6_fd.
+   - For queries sent from a socket that is bound to a specific upstream interface (indicated by f->bound), the incoming reply must originate from the bound socket, verified by matching reply_fd with f->bound_fd.
+
+3. If any of these validations fail (i.e., the incoming reply is not arriving from the socket that was expected), the function rejects the reply by returning NULL, effectively preventing forged or mis-routed responses from being processed.
+
+By enforcing this additional layer of verification, the repair aligns the implementation more closely with expectations like those in RFC5452, where multiple attributes (including network channel specifics) are checked before accepting a reply. This makes forging a valid reply significantly harder, as an attacker would now have to match not only the ID and hash but also replicate the correct network socket details—something that is far less feasible.
+
+In summary, the repair mitigates the DNS cache poisoning vulnerability by ensuring that the reply matches on both the query parameters and the network socket details, thereby significantly reducing the risk of processing forged responses.

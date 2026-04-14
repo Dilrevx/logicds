@@ -1,0 +1,15 @@
+The repair introduces an extra check immediately after processing the pre-shared key (PSK) negotiation. Initially, the code behavior remains the same: it looks for a PSK extension in the server hello message and then iterates through available PSK entries until it finds one that is marked as chosen. If no valid PSK is found, it clears any previous key-related data.
+
+The vulnerability existed because even if no proper PSK was negotiated, the TLS session could continue if a key share had not been provided either. Without either a valid PSK or a key share, the client would fall back on a default predictable input key material (IKM) to generate the session master secret. This predictable IKM could allow an attacker to reconstruct or manipulate the session key, thereby compromising the session security.
+
+To address this, the repair adds a new conditional check that evaluates two things:
+1. Whether a valid PSK was negotiated (this is tracked by the flag ssl.options.pskNegotiated).
+2. Whether key share information is available (in this case, checked by verifying that the named group is not zero).
+
+If both conditions indicate the absence of secure key material—that is, if no PSK was negotiated (ssl.options.pskNegotiated is false) and if the named group is zero (implying that the key share is missing)—then the function immediately aborts the handshake by returning an error code (TLS_ERR_MISSING_EXTENSIONS).
+
+By enforcing this additional security measure, the repair ensures that the session master secret is never derived from a fallback, predictable value. If the secure inputs for key derivation are not fully available, the handshake is halted rather than allowing the session to proceed with insecure key material. This effectively stops an attacker from exploiting the vulnerability where the predictable IKM could be used to reconstruct the session key.
+
+After the check passes (i.e., at least one valid key input is present), the code then enables encryption (by setting ssl.keys.encryptionOn to true) and moves the state forward (to SERVER_HELLO_COMPLETE). This order of operations makes it clear that encryption is only enabled when the handshake has securely negotiated either a PSK or a key share, thus avoiding the scenario where weak or predictable key material might be used due to missing cryptographic data.
+
+Overall, the repair tightly couples the condition for enabling encryption with the presence of secure key negotiation data, reinforcing the TLS 1.3 session's integrity and effectively mitigating the risk outlined in the vulnerability description.

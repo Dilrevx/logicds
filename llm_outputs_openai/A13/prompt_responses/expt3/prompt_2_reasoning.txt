@@ -1,0 +1,13 @@
+The repair changes the decision logic that determines when to initiate a DLZ zone transfer permission check. Originally, the code would only call the DLZ-specific function (dns_dlzallowzonexfr) when the normal zone lookup failed. This meant that if a zone was found in the zone table—even if it was actually a DLZ zone requiring special permission handling—the DLZ-specific ACL check would be skipped, leaving a vulnerability in writable DLZ zones.
+
+The repaired code modifies the condition to check for two situations: (1) when the normal zone lookup fails (result != ISC_R_SUCCESS) and (2) when the zone is a DLZ zone even if the normal lookup succeeded. This is achieved via the added condition "|| dns_zone_is_dlz(question_name)". Although the actual function name (dns_zone_is_dlz) is hypothetical here, it represents a function that determines whether the zone in question is defined as a DLZ zone. If either condition is true, it means that the DLZ permission checking logic should run.
+
+Once inside the combined condition, the code verifies that a DLZ database is available to perform this lookup using ISC_LIST_EMPTY on client->view->dlz_searched. If the list is not empty, it proceeds to call dns_dlzallowzonexfr with the current conversation’s data (zone name, peer address, etc.). This function is now reliably invoked for zones that require DLZ-specific handling, whether they were found in the normal zone table or not.
+
+If the function returns ISC_R_NOPERM (indicating that a zone transfer is not permitted), the code formats the zone name and class, logs the error with detailed information, sets the result to DNS_R_REFUSED, and jumps to a cleanup failure path. This ensures that the unauthorized transfer request is not processed further. Conversely, if the result from dns_dlzallowzonexfr is anything other than ISC_R_SUCCESS, it exits with a failure message indicating the zone is non-authoritative.
+
+Only when the DLZ check returns a successful result does the flag is_dlz get set to true, informing subsequent code that the zone is of type DLZ and has passed the necessary zone transfer controls.
+
+Thus, by checking both if the normal lookup failed and if the zone is a DLZ type, the patch makes sure that writable DLZ zones always go through the proper DLZ-specific zone transfer control logic. This ensures that even if the zone is visible in the normal zone table, the permission system enforces the proper access restrictions, addressing the previously exploitable scenario where DLZ zones could bypass the allowzonexfr checks.
+
+Overall, the repair guarantees that every DLZ zone, regardless of its normal lookup status, undergoes explicit DLZ permission verification, thereby fortifying the system against unauthorized transfers.

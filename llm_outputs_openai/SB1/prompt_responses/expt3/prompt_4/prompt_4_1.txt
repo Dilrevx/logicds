@@ -1,0 +1,26 @@
+Below is one example of a repair. In the original code the check allowed a client presenting a DH‐certificate (which does not “sign”) to avoid sending the CertificateVerify message. That means that if the certificate’s key method does not set the EVP_PKT_SIGN flag the code returns success even though there was no proof of possession. The fix is to force the handshake to fail when the client’s certificate is based on Diffie–Hellman (or any algorithm that cannot sign) and no CertificateVerify message is received. One way to do this is to add an extra check that examines the client certificate (if any) to see whether its public key is of the DH type, and if so issue a fatal alert. For example, assume that a helper function isDHPublicKey(peer) is available that returns true if the client's certificate key is Diffie–Hellman. Then the fixed code would look like:
+
+------------------------------------------------
+    if (s.s3.tmp.message_type != Constants.SSL3_MT_CERTIFICATE_VERIFY) {
+        s.s3.tmp.reuse_message = 1;
+        /* If a client certificate was sent but no CertificateVerify message was provided,
+           then it must be an error if:
+           (a) the certificate supports signing (EVP_PKT_SIGN is set)
+               OR
+           (b) the certificate is a DH certificate (which cannot self‐sign).
+         */
+        if (peer != null &&
+                (((type & Constants.EVP_PKT_SIGN) != 0) || isDHPublicKey(peer))) {
+            al = Constants.SSL_AD_UNEXPECTED_MESSAGE;
+            Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+                          Constants.SSL_R_MISSING_VERIFY_MESSAGE);
+            Helper.ssl3_send_alert(s,
+                                   Constants.SSL3_AL_FATAL,
+                                   al);
+            return ret;
+        }
+        return 1;
+    }
+------------------------------------------------
+
+In this repair the condition now checks explicitly whether the client's certificate is DH‐based (or has signing capability) and if so demands that the CertificateVerify message must be received. This prevents an attacker from using a DH certificate to bypass the verification step. (Note that the helper function isDHPublicKey(peer) must be implemented appropriately for the environment.)

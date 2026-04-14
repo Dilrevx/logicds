@@ -1,0 +1,64 @@
+package master;
+import common.*;
+
+public class Security_Default{
+
+
+    public static MosqErr mosquittoAclCheckDefault(
+            MosquittoDb db,
+            MosquittoContext context,
+            String topic,
+            Access access
+    ) {
+        if (db == null || context == null || topic == null) {
+            return MosqErr.MOSQ_ERR_INVAL;
+        }
+        
+        /* 
+         * BUGFIX:
+         * Previously, if the context was flagged as a bridge the function would immediately
+         * return success – bypassing any ACL check. This meant that a bridge connection,
+         * even if mis‐configured or unexpected, could bypass configured ACL rules.
+         * To fix this vulnerability we remove the unconditional success for bridge contexts
+         * and rely on the common ACL check below.
+         */
+        
+        MosquittoSecurityOptions securityOpts;
+        if (db.config.perListenerSettings) {
+            if (context.listener == null) {
+                return MosqErr.MOSQ_ERR_ACL_DENIED;
+            }
+            securityOpts = context.listener.securityOptions;
+        } else {
+            securityOpts = db.config.securityOptions;
+        }
+        
+        // Perform the ACL check for all clients, including bridges.
+        // This extra check ensures topics are allowed for the requested access.
+        if (mosquitto_security_default_acl_check(securityOpts, topic, access)) {
+            return MosqErr.MOSQ_ERR_SUCCESS;
+        } else {
+            return MosqErr.MOSQ_ERR_ACL_DENIED;
+        }
+    }
+
+
+    public static void main(String[] args) {
+        MosquittoDb db = new MosquittoDb();
+        MosquittoContext context = new MosquittoContext();
+
+        db.config.perListenerSettings = false;
+        db.config.securityOptions.aclFile = null;
+        db.config.securityOptions.aclList = null;
+        db.config.securityOptions.aclPatterns = null;
+
+        MosqErr result = mosquittoAclCheckDefault(db, context, "someTopic", Access.MOSQ_ACL_READ);
+        System.out.println("Case1 => " + result);
+
+        db.config.securityOptions.aclFile = "/path/to/acl";
+
+        result = mosquittoAclCheckDefault(db, context, "someTopic", Access.MOSQ_ACL_READ);
+        System.out.println("Case2 => " + result);
+
+    }
+}

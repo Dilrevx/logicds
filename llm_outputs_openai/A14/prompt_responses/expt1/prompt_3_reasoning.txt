@@ -1,0 +1,23 @@
+The repair focuses on hardening the renegotiation process. Specifically, when the server receives a Client Hello in a situation where renegotiation isn’t permitted (for example, when SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION isn’t set), the original code simply cleared the record length (rr->length) and then sent an alert. The vulnerability was that any leftover data in the handshake fragment could later be replayed or misinterpreted, potentially allowing an attacker to bypass renegotiation restrictions.
+
+Here’s what the repair does:
+
+1. Clearing the Handshake Fragment:
+  • The repair explicitly clears the handshake_fragment_len (s->s3->handshake_fragment_len) by setting it to 0 before proceeding.
+  • This is critical because, despite having an accumulated handshake message, we must ensure that no stale handshake data is retained that might be reprocessed later.
+  • By doing so, the repair prevents any replay or duplicate processing of the handshake data that could allow renegotiation or unexpected behavior.
+
+2. Sending the Alert:
+  • After clearing out the fragment, the code sets rr->length to 0, effectively discarding any remaining bytes in the current record.
+  • Then, it sends an alert (ssl3_send_alert) of type SSL_AD_NO_RENEGOTIATION with a warning level.
+  • This not only informs the peer that renegotiation is not allowed but also ensures that the connection’s state is consistent by cleaning up any ambiguous leftover data.
+
+3. Resuming Normal Operation:
+  • After issuing the alert and cleaning the handshake fragment, the code jumps back to the start label to resume normal processing.
+  • This means that any subsequent calls or data reads occur in a clean state with no residual fragments that might trigger unsafe renegotiation behavior.
+
+4. Defensive Error Handling:
+  • The repair also ensures that if an error occurs within any of the alert processing (handled by the f_err block), the function cleanly sends a fatal alert and returns an error.
+  • This standardizes the error path so that improper states do not lead to subtle security bugs.
+
+Overall, by explicitly zeroing out the handshake fragment when renegotiation is not allowed, the repair mitigates a logical vulnerability that previously could have allowed misusing stale handshake messages—sometimes exploited in renegotiation attacks. The fix enforces that no leftover handshake messages can be inadvertently processed, thereby maintaining the integrity and expected flow of the SSL handshake protocol.

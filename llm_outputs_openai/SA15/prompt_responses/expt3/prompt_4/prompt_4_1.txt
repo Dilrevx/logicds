@@ -1,0 +1,32 @@
+Below is one way to repair the vulnerability. In the original code the unconditional acceptance of an EAP‐TLV “Success” message (unless force_failure is set) opens the door for an attacker to send this message and skip Phase 2 authentication. One fix is to reject any “Success” TLV packet unless (a) Phase 2 authentication has been completed (for example, by verifying that the expected inner authentication steps have been performed) and (b) certificate verification hasn’t been disabled (or any other explicit override is not active). In short, do not allow unconditional success messages “early” in the authentication process.
+
+For example, if the code’s surrounding logic keeps a flag named phase2_complete (set to true only when Phase 2 has actually been performed) then you can use something like the following patch:
+
+----------------------------------------------------------------
+        if (tlvStatus == EAP_TLV_RESULT_SUCCESS) {
+            // Only accept a Success if Phase 2 authentication has completed
+            if (force_failure || !phase2_complete) {
+                /* Either a failure was forced or Phase 2 hasn't been completed:
+                   Do not let an early Success bypass Phase 2, so treat it as failure */
+                resp_status = EAP_TLV_RESULT_FAILURE;
+                ret.decision = EapMethodRet.DECISION_FAIL;
+            } else {
+                resp_status = EAP_TLV_RESULT_SUCCESS;
+                // Optionally, use a decision that reflects a conditional success rather than unconditional.
+                ret.decision = EapMethodRet.DECISION_SUCC;
+            }
+        } else if (tlvStatus == EAP_TLV_RESULT_FAILURE) {
+            resp_status = EAP_TLV_RESULT_FAILURE;
+            ret.decision = EapMethodRet.DECISION_FAIL;
+        } else {
+            resp_status = EAP_TLV_RESULT_FAILURE;
+            ret.decision = EapMethodRet.DECISION_FAIL;
+        }
+----------------------------------------------------------------
+
+Key points in this repair:
+1. A new check for phase2_complete is added so that an EAP-TLV Success is only honored if Phase 2 (the inner authentication) is complete.
+2. This prevents an attacker from bypassing the Phase 2 authentication by sending an early Success packet.
+3. Additionally, the force_failure check remains in place.
+
+Adjust the variable names and state-check logic as needed to match your implementation. This repair ensures that a “Success” message cannot be abused to impersonate an Enterprise Wi‑Fi network unless all authentication phases have been properly executed.

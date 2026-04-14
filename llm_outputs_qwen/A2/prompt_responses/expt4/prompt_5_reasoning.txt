@@ -1,0 +1,32 @@
+The provided repair addresses a critical vulnerability related to how certificate policies are validated during the SSL/TLS handshake process. The vulnerability arises from the way the `X509_policy_check` function is handled and the subsequent response to its results, particularly when encountering `X509_PCY_TREE_INVALID` and `X509_PCY_TREE_FAILURE`.
+
+### Original Vulnerability
+
+In the original code, the function `check_policy` processes the certificate chain's policy tree using `X509_policy_check`. Depending on the result (`ret`), different actions are taken:
+
+- **X509_PCY_TREE_INTERNAL**: An internal error occurred, raising an error and returning.
+- **X509_PCY_TREE_INVALID**: The policy tree is invalid due to issues like invalid or inconsistent certificate policies. Here, the code iterates over the certificates in the chain to find those with bad extensions and notifies the callback. However, it returns `1` (success) instead of handling the error appropriately.
+- **X509_PCY_TREE_FAILURE**: The policy check failed due to no explicit policy being found. Similar to `X509_PCY_TREE_INVALID`, it sets the current certificate and error but does not handle the failure condition properly.
+- **Other Errors**: Any other error raises an internal error and returns `0`.
+
+The primary issue is that both `X509_PCY_TREE_INVALID` and `X509_PCY_TREE_FAILURE` are not treated as fatal errors. Instead, the function returns `1` after notifying the callback, which can allow the SSL/TLS handshake to proceed even if the certificate policies are invalid or if there is a failure in policy enforcement. This behavior can be exploited by a malicious Certificate Authority (CA) to issue certificates with invalid policies, bypassing intended security measures.
+
+### Repair Explanation
+
+The repair modifies the handling of `X509_PCY_TREE_INVALID` and `X509_PCY_TREE_FAILURE` to ensure that these conditions are treated as fatal errors, preventing the SSL/TLS handshake from proceeding if the certificate policies are invalid or if there is a failure in policy enforcement.
+
+#### Key Changes:
+
+1. **Unified Error Handling**:
+   - The repair combines the handling of `X509_PCY_TREE_INVALID` and `X509_PCY_TREE_FAILURE` into a single block. This ensures that both conditions are treated uniformly and results in the same outcome: setting the error and invoking the callback with a failure status.
+   
+2. **Callback Invocation**:
+   - The callback (`ctx->verify_cb`) is invoked with `0` (failure) when either `X509_PCY_TREE_INVALID` or `X509_PCY_TREE_FAILURE` is encountered. This change ensures that the callback is aware of the failure and can take appropriate action, such as terminating the handshake.
+
+3. **Return Value**:
+   - After invoking the callback with a failure status, the function returns the result of the callback invocation. If the callback allows the handshake to continue (by returning a non-zero value), this would still be incorrect in the context of invalid or failed policy checks. However, the primary goal of this repair is to ensure that the failure is recognized and communicated correctly.
+
+4. **Consistency**:
+   - The repair maintains consistency in how errors are handled across different parts of the function. For instance, other error conditions like `X509_PCY_TREE_INTERNAL` are already handled correctly by raising an error and returning `-1`.
+
+By implementing these changes, the repair ensures that invalid or failed certificate policy checks are not overlooked, thereby enhancing the security of the SSL/TLS handshake process. This prevents malicious CAs from exploiting the vulnerability to issue certificates with invalid policies, which could otherwise bypass intended security controls.

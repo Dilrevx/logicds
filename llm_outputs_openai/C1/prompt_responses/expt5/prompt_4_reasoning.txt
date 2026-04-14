@@ -1,0 +1,15 @@
+The repair introduces an additional check after calling the internal certificate verification function (X509_verify_cert) to ensure that any negative result is normalized to a non-negative value (specifically zero). Here’s a step-by-step walkthrough:
+
+1. The original code was structured to choose between using an application-defined callback (app_verify_callback) and the internal certificate verification process (X509_verify_cert). If the callback was present, it would be used; otherwise, the internal function was directly called.
+
+2. The issue arises when the internal verification function returns a negative value. Negative return values indicate internal errors (e.g., memory allocation failures) rather than a mere failure in verifying the certificate. The original code passed this negative result up the call stack. However, higher-level functions expect only specific error codes, not these internal errors. This mismatch could lead to misinterpretations—for example, an internal error might inadvertently be treated as a "want retry" situation, causing unpredictable behavior.
+
+3. The repair addresses this by adding a conditional check immediately after the internal verification is executed:
+   - After calling X509_verify_cert(ctx), the code checks if the return value (stored in i) is negative.
+   - If i is less than zero, the code sets i to 0. This normalization ensures that any internal error is treated uniformly as a failed verification rather than propagating an unexpected error code.
+
+4. This change has two primary benefits:
+   - It prevents internal errors from being misinterpreted by higher-level functions. Instead of an internal error state being passed along—potentially triggering an SSL error like SSL_ERROR_WANT_RETRY_VERIFY—the error is now converted into a simple certificate verification failure.
+   - It keeps the behavior predictable. When an application does not provide a custom verification callback, the SSL connection process only receives a clean, manageable result: either the certificate is verified (non-zero, positive value) or it isn't (zero), regardless of the underlying error cause.
+
+Overall, the repair enhances the robustness of the certificate verification process by ensuring that negative internal error codes do not lead to misinterpretation or unintended error handling in the broader SSL processing logic.

@@ -1,0 +1,37 @@
+Certainly! The repair introduced addresses a critical vulnerability in OpenSSL's handling of custom ciphers, particularly when applications incorrectly specify `NID_undef` as the Numerical Identifier (NID) for a custom cipher. This misconfiguration can lead to the use of the NULL cipher, which does not perform any encryption, thereby exposing sensitive data.
+
+### Understanding the Context
+
+In OpenSSL, the context (`ctx`) holds information about the cipher being used, including whether it is a fetched cipher from a provider or a custom method created with `EVP_CIPHER_meth_new()`. The original code checks if there is an engine associated with the context (`ctx->engine != NULL`), or if there are temporary implementations (`tmpimpl != NULL`) or regular implementations (`impl != NULL`). These conditions ensure that if the cipher is managed by an external engine or specific implementation, the legacy path is taken. However, this check alone is insufficient to prevent the use of the NULL cipher when custom ciphers are involved.
+
+### The Vulnerability
+
+The vulnerability arises when a custom cipher is created using `EVP_CIPHER_meth_new()` with an incorrect NID, such as `NID_undef`. In such cases, OpenSSL incorrectly attempts to fetch an equivalent cipher from the available providers based on the NID. Since `NID_undef` does not correspond to any valid cipher, OpenSSL may match the NULL cipher, which performs no encryption. This can lead to data being transmitted in plaintext, completely bypassing the intended encryption mechanism.
+
+### The Repair
+
+The repair enhances the existing logic to include checks for the origin of the cipher, ensuring that custom ciphers are always handled through the legacy path, where they are correctly managed without attempting to fetch an equivalent from providers.
+
+#### Step-by-Step Explanation of the Repair
+
+1. **Contextual Check for Engine or Implementation**:
+   - The original condition checks if there is an engine associated with the context (`ctx->engine != NULL`), or if there are temporary implementations (`tmpimpl != NULL`) or regular implementations (`impl != NULL`). These conditions are retained to ensure that the legacy path is taken if the cipher is managed by an external engine or specific implementation.
+
+2. **Introduction of Cipher Origin Check**:
+   - Two new conditions are added:
+     - `(cipher != NULL && cipher->origin == EVP_ORIG_METH)`
+     - `(cipher == NULL && ctx->cipher != NULL && ctx->cipher->origin == EVP_ORIG_METH)`
+   - These checks determine whether the current cipher in use or the previously used cipher (`ctx->cipher`) was originally created through a custom method (`EVP_ORIG_METH`). This is crucial because custom methods might have been improperly configured, such as with `NID_undef`.
+
+3. **Ensuring Legacy Path for Custom Methods**:
+   - By adding these checks, the code ensures that if a custom cipher method was created, regardless of whether it is currently active or was previously active, the legacy path is taken. This is essential because the legacy path correctly handles custom ciphers without attempting to fetch an equivalent from providers, thus preventing the use of the NULL cipher.
+
+4. **Freeing Fetched Ciphers**:
+   - If the conditions are met, the code proceeds to free the fetched cipher (`EVP_CIPHER_free(ctx->fetched_cipher)`), setting `ctx->fetched_cipher` to `NULL`. This step cleans up any previously fetched cipher that might have been incorrectly used due to the vulnerability.
+
+5. **Redirecting to Legacy Path**:
+   - Finally, the `goto legacy;` statement redirects the execution flow to the legacy path, where the custom cipher method is handled appropriately. This ensures that the encryption or decryption process uses the intended custom cipher rather than falling back to an insecure default like the NULL cipher.
+
+### Conclusion
+
+The repair effectively mitigates the risk of inadvertently using the NULL cipher by ensuring that custom cipher methods are always processed through the legacy path. This change prevents applications from mistakenly using an insecure cipher when they intend to use a custom one, thereby enhancing the security of encryption operations in OpenSSL. By introducing checks for the origin of the cipher and redirecting to the legacy path when necessary, the repair ensures that custom ciphers are handled correctly, maintaining the integrity and confidentiality of encrypted data.

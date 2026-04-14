@@ -1,0 +1,20 @@
+The repair begins by preserving existing behavior for the padding flag. If the cipher context was already set to “no padding,” the code calls EVP_CIPHER_CTX_set_padding(ctx, 0) to maintain that state. This step ensures that any changes introduced later won’t inadvertently alter the padding configuration.
+
+Next, the repair employs a conditional compilation block—only active when the FIPS module is not defined. This restriction is essential because FIPS builds follow a different internal procedure that already avoids the problematic timing for setting key and IV lengths.
+
+Inside this non-FIPS block, the code proactively addresses the vulnerability by pre-processing the parameters that specify the lengths for the key and the IV. Instead of allowing these parameters to be processed later (after the key and IV have been established), the repair uses EVP_CIPHER_CTX_set_params() early in the initialization routine. The vulnerability stemmed from processing these parameters too late in the setup, which could result in truncations or overruns if the provided lengths did not match the actual buffer sizes. By moving this processing before the cipher-specific initialization occurs, the repair fixes any potential mismatches right at the start.
+
+To do this, the code checks if a parameters array (params) is available. If so, it creates a temporary array (tmp_params) with room for up to three parameters plus an end marker. It then attempts to locate each of the relevant parameters:
+ • The key length parameter, identified by OSSL_CIPHER_PARAM_KEYLEN.
+ • The IV length parameter, identified by OSSL_CIPHER_PARAM_IVLEN.
+ • Additionally, it checks for an AEAD IV length parameter, using OSSL_CIPHER_PARAM_AEAD_IVLEN, ensuring that variations in naming are covered.
+
+If any of these parameters are found, they’re added to the temporary array, which is then terminated with an OSSL_PARAM_END marker. With this temporary parameters array constructed, EVP_CIPHER_CTX_set_params() is immediately called to update the cipher context with the specified key and IV lengths. 
+
+If setting these parameters fails, an error is raised (EVP_R_INVALID_LENGTH) and the function returns 0, preventing the cipher from continuing with an inconsistent or insecure configuration.
+
+Following this pre-configuration, the code proceeds to the part that handles encryption initialization. The cipher’s specific encryption initialization function (einit) is checked for validity. If the einit function pointer is not NULL, it’s then invoked with the (now pre-adjusted) key and IV settings along with the original parameters array.
+
+This sequence of steps ensures that the lengths of the key and IV are correctly set before the actual cipher initialization takes place. In doing so, it prevents the possibility of a later parameter-based adjustment that might lead to premature truncation or memory overruns for the IV, thus preserving the uniqueness of the IV and maintaining its confidentiality properties.
+
+Overall, the repair methodically extracts and applies these critical parameters upfront, eliminating the risk of vulnerability by ensuring proper configuration and early error detection before any encryption or decryption operations begin.

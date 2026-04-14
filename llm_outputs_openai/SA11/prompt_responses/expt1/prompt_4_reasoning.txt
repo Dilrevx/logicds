@@ -1,0 +1,30 @@
+The original implementation checked if a certificate’s serial number matched an entry in the CRL and then verified if the revocation date had passed before it would mark the certificate as revoked:
+
+  if (crt.serial.len == cur.serial.len  
+    && MemUtil.memcmp(crt.serial.p, cur.serial.p, crt.serial.len) == 0) {  
+     if (Helper.mbedtls_x509_time_is_past(cur.revocationDate))  
+      return 1;  
+    }  
+
+This extra condition – verifying that revocationDate is in the past – creates a logical vulnerability. If the revocation date check fails (for example, if the current time is before the actual revocation date), then even though the serial numbers match (and the certificate should be considered revoked), the function continues checking other entries instead of immediately returning that the certificate is revoked. In some security-sensitive contexts, deferring revocation status due to the time check may allow a revoked certificate to be mistakenly trusted.
+
+To fix this, the repair removes the dependency on the revocation date and returns immediately once a matching serial number is found. Here’s what was changed:
+
+1. When encountering a CRL entry whose serial number exactly matches the certificate’s serial number, the function will immediately return 1 (indicating the certificate is revoked) without any further checks.
+  
+2. This removal of the revocation date check ensures that as soon as a CRL entry with a matching serial is found, the certificate is considered revoked, eliminating a window where a revoked certificate might temporarily be seen as valid based solely on the timing condition.
+
+The repair guarantees that the certificate cannot bypass revocation simply because the revocation date is interpreted as “not past” yet, thus fixing the logical vulnerability.
+
+Below is the repaired code snippet for the remainder of the function:
+
+<repair>
+            if (crt.serial.len == cur.serial.len
+                    && MemUtil.memcmp(crt.serial.p, cur.serial.p, crt.serial.len) == 0) {
+                // Immediately consider the certificate revoked once a matching serial is found.
+                return 1;
+            }
+            cur = cur.next;
+        }
+        return 0;
+</repair>

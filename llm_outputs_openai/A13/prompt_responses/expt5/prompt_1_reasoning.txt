@@ -1,0 +1,13 @@
+The repair addresses a vulnerability related to leaking information about zone existence that could be abused for zone enumeration attacks. In the original code, when either a DLZ database lookup fails or the zone isn’t found in the normal zone table, the program responds with DNS_R_NOTAUTH. This difference in responses can allow an attacker to infer which zones exist or not.
+
+The changes made in the repair have two main points:
+
+1. Consistent Use of DNS_R_REFUSED:  
+   Instead of returning DNS_R_NOTAUTH when the DLZ lookup fails or when there is no DLZ zone, the code now returns DNS_R_REFUSED. By doing this, both error conditions produce the same response. This consistency makes it harder for an attacker to distinguish between a legitimate zone where the client simply isn’t authorized and a zone that doesn’t exist or isn’t configured. The use of DNS_R_REFUSED in both cases "refuses" the zone transfer in a consistent manner, which is a well-known defensive programming practice to mitigate enumeration.
+
+2. Logging and Denial Behavior:  
+   When a permission check in the DLZ lookup fails (result == ISC_R_NOPERM), the code logs an error message including formatted details of the request but then sets the result to DNS_R_REFUSED before jumping to the failure handling. Similarly, if the result from the DLZ database isn’t ISC_R_SUCCESS (and not ISC_R_NOPERM), the macro FAILQ is called with DNS_R_REFUSED. This ensures that regardless of how the check fails, the external message to the client is always DNS_R_REFUSED.  
+   
+   Additionally, in the branch where the client’s view does not have any DLZ zones to search (i.e., ISC_LIST_EMPTY(client->view->dlz_searched) is true), the code directly calls FAILQ with DNS_R_REFUSED instead of DNS_R_NOTAUTH. This further ensures that unauthorized attempts to access non-configured zones are uniformly denied, minimizing the exposure of internal state.
+
+In essence, the repair refines the error handling to avoid differing responses that might otherwise reveal the presence or absence of certain zones. By consistently using DNS_R_REFUSED, the repair reduces information leakage, thereby mitigating a potential vulnerability where attackers could infer the existence of zones based on how the server responds to zone transfer requests.

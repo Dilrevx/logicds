@@ -1,0 +1,41 @@
+The provided repair addresses a critical vulnerability in the TLS v1.3 certificate verification process by ensuring that the signature algorithm used in the `CertificateVerify` message matches the public key type present in the `Certificate` message. This is essential for maintaining the integrity and authenticity of the communication channel established between a TLS client and server.
+
+### Original Vulnerability
+
+In the original code snippet, there were several issues that could lead to a bypass of the certificate check:
+
+1. **Mismatch Between Signature Algorithm and Public Key Type**: The code checks if the signature algorithm (`sigAlgo`) corresponds to the public key type present in the peer's certificate. However, there was an inconsistency in how Falcon signature algorithms were handled. Specifically, the code did not correctly verify whether a Falcon signature algorithm was paired with a Falcon public key. Instead, it checked for the presence of a generic Falcon key without distinguishing between Falcon Level 1 and Falcon Level 5, which are distinct algorithms.
+
+2. **Incorrect Error Handling for RSA Algorithms**: For RSA signature algorithms (`rsa_sa_algo` and `rsa_pss_sa_algo`), the code returned different error codes (`INVALID_PARAMETER` for `rsa_sa_algo` and `SIG_VERIFY_E` for `rsa_pss_sa_algo`). This inconsistency could lead to confusion and incorrect handling of errors, potentially allowing an attacker to exploit the discrepancy.
+
+### Repair Explanation
+
+The repair focuses on addressing these issues by ensuring that the signature algorithm is correctly matched with the appropriate public key type:
+
+1. **Consolidated Falcon Signature Checks**: The repair consolidates the checks for Falcon signature algorithms (`falcon_level1_sa_algo` and `falcon_level5_sa_algo`) into a single condition. This ensures that both Falcon Level 1 and Falcon Level 5 signatures are verified against the presence of a Falcon public key (`peerFalconKeyPresent`). By doing so, the code now accurately reflects the requirement that a Falcon signature must be accompanied by a Falcon public key, regardless of the specific Falcon variant.
+
+   ```java
+   if ((args.sigAlgo == CommonsConstants.falcon_level1_sa_algo || args.sigAlgo == CommonsConstants.falcon_level5_sa_algo) && !ssl.peerFalconKeyPresent) {
+       Wslib.WOLFSSL_MSG("Peer sent Falcon sig but not Falcon cert");
+       return CommonsConstants.SIG_VERIFY_E;
+   }
+   ```
+
+2. **Uniform Error Handling for RSA Algorithms**: The repair ensures that both RSA signature algorithms (`rsa_sa_algo` and `rsa_pss_sa_algo`) are checked for the presence of an RSA public key (`peerRsaKeyPresent`). Additionally, it standardizes the error code returned when an RSA signature is not paired with an RSA public key to `SIG_VERIFY_E`. This uniformity simplifies error handling and ensures that any mismatch between the signature algorithm and public key type results in a consistent error response.
+
+   ```java
+   if (args.sigAlgo == CommonsConstants.rsa_sa_algo && (ssl.peerRsaKey == null || !ssl.peerRsaKeyPresent)) {
+       Wslib.WOLFSSL_MSG("Peer sent RSA sig but not RSA cert");
+       return CommonsConstants.SIG_VERIFY_E;
+   }
+   if (args.sigAlgo == CommonsConstants.rsa_pss_sa_algo && (ssl.peerRsaKey == null || !ssl.peerRsaKeyPresent)) {
+       Wslib.WOLFSSL_MSG("Peer sent RSA PSS sig but not RSA cert");
+       return CommonsConstants.SIG_VERIFY_E;
+   }
+   ```
+
+### Security Implications
+
+By implementing these changes, the code now correctly enforces the requirement that the signature algorithm used in the `CertificateVerify` message must match the public key type present in the `Certificate` message. This prevents an attacker from exploiting mismatches between the signature algorithm and public key type to bypass certificate validation, thereby enhancing the security of the TLS handshake process.
+
+In summary, the repair ensures that the TLS v1.3 implementation adheres strictly to cryptographic standards, preventing potential vulnerabilities that could be exploited to compromise the security of the communication channel.

@@ -1,0 +1,22 @@
+The repair changes the way the code validates TSIG information. In the original code, two error conditions were checked separately:
+
+1. It first checked if the TSIG verification status in the message (msg->tsigstatus) was not equal to dns_rcode_noerror.
+2. Then, if that passed, it checked whether the tsig.error also was not equal to dns_rcode_noerror.
+
+This separation can allow an attacker with control over the TSIG key name and access to the authoritative DNS server to craft a request in which one of these conditions might be bypassed. Essentially, if an attacker managed to have one of the error indicators be “okay” while the other was problematic, they might subvert the intended protection by exploiting the ordering of these conditions.
+
+The repaired code combines the error checks into a single if statement:
+
+  if (msg->tsigstatus != dns_rcode_noerror || tsig.error != dns_rcode_noerror)
+
+By using the logical OR operator (||), the condition ensures that if either the message's TSIG status or the TSIG record’s error field indicates an error (i.e., not dns_rcode_noerror), the overall TSIG verification fails and the function returns DNS_R_TSIGVERIFYFAILURE. This integrated approach guarantees that even if one of the two checks passes, the existence of any error on the other side flags the authentication as failed.
+
+This change remedies the vulnerability by preventing a scenario where a carefully constructed request could bypass one of the TSIG validations. That is, an attacker cannot now send a request with one valid error code while attempting to manipulate or trick the function by leaving the other error check in a permissive state. Instead, both conditions must be simultaneously error-free to succeed.
+
+In summary:
+
+1. We parse the TSIG rdata into a proper structure and insist that parsing is successful.
+2. We check TSIG verification by ensuring both the tsigstatus in the message and the tsig.error are exactly as expected (dns_rcode_noerror). Any deviation in either parameter leads to immediate failure.
+3. This unified error checking prevents potential exploitation where an attacker sends an AXFR or NOTIFY request under the illusion of valid TSIG status by isolating parts of the validation process.
+
+Thus, combining the conditions into one if-statement ensures that no matter which part of the TSIG information is compromised or manipulated, the overall TSIG authentication is strictly enforced and the vulnerability is mitigated.

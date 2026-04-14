@@ -1,0 +1,22 @@
+We need to require that any client which sends a certificate during the handshake also provides a CertificateVerify message—even if the certificate’s key (as in the Diffie‑Hellman case) does not normally support signing. In the buggy code the check:
+
+  if ((peer != NULL) && (type & EVP_PKT_SIGN))
+
+only complains of a missing CertificateVerify message if the certificate’s associated EVP_PKT_SIGN flag is set. This makes it possible for an attacker to use a DH certificate (for which EVP_PKT_SIGN is not set) to authenticate without proving possession of the private key.
+
+The repair is to remove that check on the key type and simply require that if a certificate was provided (i.e. peer isn’t NULL) the CertificateVerify message is mandatory. For example, you can change the conditional to:
+
+--------------------------------------------------
+  if (s->s3->tmp.message_type != SSL3_MT_CERTIFICATE_VERIFY) {
+   s->s3->tmp.reuse_message = 1;
+   if (peer != NULL) {  // require CertificateVerify for any client certificate
+    al = SSL_AD_UNEXPECTED_MESSAGE;
+    SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_MISSING_VERIFY_MESSAGE);
+    goto f_err;
+   }
+   ret = 1;
+   goto end;
+  }
+--------------------------------------------------
+
+Now, whenever a client certificate is in use (peer != NULL), the absence of a CertificateVerify message triggers an error—regardless of whether the certificate supports signing. This change fixes the vulnerability by ensuring that the client must always demonstrate possession of the certificate’s corresponding private key via the CertificateVerify message.

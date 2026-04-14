@@ -1,0 +1,59 @@
+<repair>
+int mosquitto_acl_check_default(struct mosquitto_db *db, struct mosquitto *context, const char *topic, int access)
+{
+	char *local_acl;
+	struct mosquitto__acl *acl_root;
+	bool result;
+	int i;
+	int len, tlen, clen, ulen;
+	char *s;
+	struct mosquitto__security_options *security_opts = NULL;
+
+	if(!db ||!context ||!topic) return MOSQ_ERR_INVAL;
+	if(context->bridge) return MOSQ_ERR_SUCCESS;
+
+	if(db->config->per_listener_settings){
+		if(!context->listener) return MOSQ_ERR_ACL_DENIED;
+		security_opts = &context->listener->security_options;
+	}else{
+		security_opts = &db->config->security_options;
+	}
+
+	if(security_opts == NULL) return MOSQ_ERR_ACL_DENIED;
+
+	if(security_opts->acl_localhost == NULL){
+		local_acl = NULL;
+	}else{
+		local_acl = strdup(security_opts->acl_localhost);
+		if(local_acl == NULL) return MOSQ_ERR_NOMEM;
+	}
+
+	acl_root = NULL;
+	result = false;
+
+	if(local_acl!= NULL){
+		acl_root = mosquitto_acl_parse(local_acl, &len);
+		free(local_acl);
+		if(acl_root == NULL) return MOSQ_ERR_ACL_PARSE;
+	}
+
+	if(acl_root == NULL){
+		acl_root = mosquitto_acl_parse(db->config->acl_file, &len);
+		if(acl_root == NULL) return MOSQ_ERR_ACL_PARSE;
+	}
+
+	s = mosquitto_topic_tokenise(topic, &tlen, &clen, &ulen);
+	if(s == NULL) return MOSQ_ERR_NOMEM;
+
+	for(i=0; i<clen; i++){
+		result = mosquitto_acl_check(acl_root, access, &s[i], tlen);
+		if(result) break;
+	}
+
+	mosquitto_topic_tokens_free(&s, clen, tlen);
+
+	mosquitto_acl_cleanup(&acl_root);
+
+	return result? MOSQ_ERR_SUCCESS : MOSQ_ERR_ACL_DENIED;
+}
+</repair>

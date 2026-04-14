@@ -1,0 +1,37 @@
+<repair>
+    {
+        const EVP_CIPHER *old_cipher = ctx->cipher;
+        ctx->cipher = cipher;
+        /*
+         * If we are switching to a new cipher type, any old algorithm context
+         * (algctx) is no longer valid. Free it now to avoid reusing stale state.
+         */
+        if (old_cipher != NULL && old_cipher->nid != cipher->nid) {
+            if (ctx->algctx != NULL && old_cipher->freectx != NULL)
+                old_cipher->freectx(ctx->algctx);
+            ctx->algctx = NULL;
+        }
+    }
+    if (cipher != ctx->fetched_cipher) {
+        if (!EVP_CIPHER_up_ref((EVP_CIPHER *)cipher)) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+        EVP_CIPHER_free(ctx->fetched_cipher);
+        /* Coverity false positive, the reference counting is confusing it */
+        /* coverity[use_after_free] */
+        ctx->fetched_cipher = (EVP_CIPHER *)cipher;
+    }
+    /* Ensure that we have a fresh provider algorithm context.  Even if ctx->algctx
+       was previously allocated, it may be stale if the cipher type changed (above). */
+    if (ctx->algctx == NULL) {
+        ctx->algctx = ctx->cipher->newctx(ossl_provider_ctx(cipher->prov));
+        if (ctx->algctx == NULL) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+    }
+    
+    /* Continue with any remaining initialization steps (if any) */
+    return 1;
+</repair>

@@ -1,0 +1,43 @@
+<repair>
+	/* Convert the TSIG rdata into a structure.  Return immediately on conversion failure. */
+	result = dns_rdata_tostruct(&rdata, &tsig, NULL);
+	if (result != ISC_R_SUCCESS)
+		return (result);
+
+	/*
+	 * SECURITY PATCH:
+	 *
+	 * To prevent an attacker from bypassing TSIG authentication for
+	 * AXFR (zone transfer) or NOTIFY requests, an additional ACL check
+	 * is now performed.  Relying solely on TSIG keys for these types of
+	 * requests is insufficient, because an attacker with the TSIG key
+	 * name (even if not the actual key) could craft a packet that
+	 * appears TSIG‐signed.
+	 *
+	 * The following check calls a hypothetical function "authorized_by_acl()"
+	 * which must verify that the source (for example, by its IP address)
+	 * of this request is allowed to perform the requested operation.
+	 * If the request is an AXFR or a NOTIFY, and the ACL check fails,
+	 * the request is rejected.
+	 */
+	if ((msg->opcode == dns_opcode_notify) ||
+	    (msg->querytype == dns_rdatatype_axfr)) {
+		if (!authorized_by_acl(msg)) {
+			result = DNS_R_REFUSED;
+			goto cleanup;
+		}
+	}
+
+	/* Check internal TSIG status. */
+	if (msg->tsigstatus != dns_rcode_noerror)
+		result = DNS_R_TSIGVERIFYFAILURE;
+	else if (tsig.error != dns_rcode_noerror)
+		result = DNS_R_TSIGERRORSET;
+	else
+		result = ISC_R_SUCCESS;
+
+ cleanup:
+	/* Clean up the TSIG structure to avoid any resource leak. */
+	dns_rdata_resetstruct(&tsig);
+	return (result);
+</repair>

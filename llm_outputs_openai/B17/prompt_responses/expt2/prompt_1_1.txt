@@ -1,0 +1,86 @@
+Below is one acceptable “fix” that retrieves CRLs using both the certificate’s subject and (crucially) its issuer. In our fix we obtain two stacks (one by looking for the subject‐name and one for the issuer name) and then merge them together (making sure to avoid duplicates).
+
+Below is the repaired code between <repair> and </repair> tags:
+
+<repair>
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(HAVE_LIBRESSL)
+{
+    STACK_OF(X509_CRL) *crls_subject = NULL, *crls_issuer = NULL;
+    int i, j;
+
+    crls_subject = X509_STORE_CTX_get1_crls(store_ctx, subject);
+    crls_issuer  = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+
+    if (!crls_subject && !crls_issuer) {
+        crls = NULL;
+    } else if (!crls_subject) {
+        crls = crls_issuer;
+    } else if (!crls_issuer) {
+        crls = crls_subject;
+    } else {
+        /* Merge the two stacks into one (avoid duplicates) */
+        crls = sk_X509_CRL_dup(crls_subject);
+        for (i = 0; i < sk_X509_CRL_num(crls_issuer); i++) {
+            X509_CRL *entry = sk_X509_CRL_value(crls_issuer, i);
+            int already_present = 0;
+            for (j = 0; j < sk_X509_CRL_num(crls); j++) {
+                if (sk_X509_CRL_value(crls, j) == entry) {
+                    already_present = 1;
+                    break;
+                }
+            }
+            if (!already_present) {
+                sk_X509_CRL_push(crls, entry);
+            }
+        }
+        sk_X509_CRL_pop_free(crls_subject, X509_CRL_free);
+        sk_X509_CRL_pop_free(crls_issuer, X509_CRL_free);
+    }
+}
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && !defined(HAVE_LIBRESSL)
+{
+    STACK_OF(X509_CRL) *crls_subject = NULL, *crls_issuer = NULL;
+    int i, j;
+
+    crls_subject = X509_STORE_get1_crls(store_ctx, subject);
+    crls_issuer  = X509_STORE_get1_crls(store_ctx, issuer);
+
+    if (!crls_subject && !crls_issuer) {
+        crls = NULL;
+    } else if (!crls_subject) {
+        crls = crls_issuer;
+    } else if (!crls_issuer) {
+        crls = crls_subject;
+    } else {
+        /* Merge the CRLs from both lookups */
+        crls = sk_X509_CRL_dup(crls_subject);
+        for (i = 0; i < sk_X509_CRL_num(crls_issuer); i++) {
+            X509_CRL *entry = sk_X509_CRL_value(crls_issuer, i);
+            int already_present = 0;
+            for (j = 0; j < sk_X509_CRL_num(crls); j++) {
+                if (sk_X509_CRL_value(crls, j) == entry) {
+                    already_present = 1;
+                    break;
+                }
+            }
+            if (!already_present) {
+                sk_X509_CRL_push(crls, entry);
+            }
+        }
+        sk_X509_CRL_pop_free(crls_subject, X509_CRL_free);
+        sk_X509_CRL_pop_free(crls_issuer, X509_CRL_free);
+    }
+}
+#else
+    /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+    crls = NULL;
+#endif
+</repair>
+
+Explanation:
+
+• In the patched code we use both functions (X509_STORE_CTX_get1_crls and X509_STORE_get1_crls) to retrieve CRL stacks – one using the certificate’s subject name and one using its issuer name (assumed to be available as the variable “issuer”). 
+• We then merge the two stacks together (taking care not to duplicate entries) so that valid CRLs aren’t inadvertently skipped.
+• In older versions of OpenSSL (before 1.0.0) we leave crls as NULL.
+
+Any fix that ensures the CRL check uses both names (instead of erroneously using the subject twice) is acceptable.

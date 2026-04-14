@@ -1,0 +1,41 @@
+### Reasoning Behind the Repair
+
+The repair introduced to address the vulnerability in the wolfSSL library's TLS 1.3 handshake process is designed to ensure that a secure session cannot be established if neither a Pre-Shared Key (PSK) extension nor a Key Share Extension (KSE) is received from the server. This is crucial because, without these extensions, the library defaults to using a predictable buffer as the Input Keying Material (IKM) for generating the session master secret. An attacker could exploit this predictability to reconstruct the session keys, leading to potential eavesdropping and tampering with the session contents.
+
+#### Contextual Understanding
+
+In TLS 1.3, the key establishment process relies heavily on the Key Share Extension (KSE). The KSE is used by the client and server to agree on a shared secret through a Diffie-Hellman (DH) key exchange, which is then used as part of the IKM for deriving the session keys. The Pre-Shared Key (PSK) extension, on the other hand, allows clients to reuse previously established keys, enhancing performance and security if both parties agree on a shared secret.
+
+The original code snippet checks for the presence of a PSK extension and processes it if found. However, it does not perform a similar check for the KSE. This oversight can lead to a situation where the library defaults to using a predictable IKM if neither a PSK nor a KSE is present, thus compromising the security of the session.
+
+#### Introduction of Sanity Check
+
+To mitigate this risk, the repair introduces a new conditional block after processing the PSK extension. This block performs a sanity check to ensure that either a PSK has been successfully negotiated (`ssl->options.pskNegotiated == 1`) or a valid named group (indicating a KSE was processed) is set (`ssl->session->namedGroup != 0`). The named group is a critical piece of information provided in the KSE, specifying the elliptic curve or finite field group used for the key exchange.
+
+#### Named Group Verification
+
+In TLS 1.3, the KSE is essential for key establishment. It includes one or more key shares, each associated with a specific elliptic curve or finite field group. The presence of a non-zero `namedGroup` indicates that at least one valid key share has been received and processed, which is necessary for deriving the IKM securely. By checking the `namedGroup`, the repair ensures that the key exchange mechanism is properly established before proceeding with the session setup.
+
+#### Handling Missing Extensions
+
+If neither a PSK nor a valid KSE is present (i.e., `ssl->options.pskNegotiated == 0` and `ssl->session->namedGroup == 0`), the repair code returns `EXT_MISSING`. This action effectively halts the handshake process, preventing the use of a default, predictable IKM. Instead, it signals an error, indicating that required extensions are missing, thus maintaining the security integrity of the session. Returning an error here ensures that the library does not proceed with an insecure configuration, which could lead to compromised session keys.
+
+#### Ensuring Secure Key Derivation
+
+By enforcing the presence of either a PSK or a KSE, the repair ensures that the IKM is derived using cryptographic material provided by the server, rather than relying on a default, predictable value. This change significantly reduces the risk of an attacker reconstructing the session keys, thereby safeguarding the confidentiality and integrity of the TLS session.
+
+#### Maintaining Compatibility
+
+The repair is designed to be compatible with existing configurations and use cases. It leverages preprocessor directives to conditionally compile the sanity check based on whether PSK support is enabled (`HAVE_SESSION_TICKET` or `NO_PSK`). This ensures that the solution does not introduce unnecessary overhead or conflicts in environments where PSKs are not utilized. The conditional compilation also allows the repair to be applied selectively, depending on the library's configuration.
+
+#### Error Handling and Logging
+
+Although not explicitly shown in the provided repair code snippet, returning `EXT_MISSING` would typically trigger appropriate error handling and logging mechanisms within the wolfSSL library. This allows administrators and developers to diagnose and address issues related to missing extensions promptly. Proper error handling ensures that users are informed about the problem, enabling them to take corrective actions, such as configuring the server to include the necessary extensions.
+
+#### Testing and Validation
+
+Post-repair, comprehensive testing is essential to verify that the changes do not inadvertently break existing functionality. This includes testing scenarios where PSKs are used, KSEs are present, and both are absent, ensuring that the library behaves correctly across all expected conditions. Testing should cover various configurations and edge cases to ensure robustness and reliability.
+
+### Conclusion
+
+The repair enhances the robustness of the TLS 1.3 handshake process in wolfSSL by ensuring that a secure session cannot be established without the necessary key exchange mechanisms. By enforcing the presence of either a PSK or a KSE, the repair mitigates the risk of session compromise due to the absence of critical extensions, thereby maintaining the security integrity of the TLS session. This approach aligns with best practices in secure software development, emphasizing the importance of thorough validation and error handling in cryptographic protocols.

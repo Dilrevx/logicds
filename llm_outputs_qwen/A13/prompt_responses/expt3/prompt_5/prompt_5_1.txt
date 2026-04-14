@@ -1,0 +1,69 @@
+Certainly! To address the vulnerability described, we need to ensure that the `dns_dlzallowzonexfr` function is called for all DLZ zones, including writable ones. The current code snippet does not explicitly check for DLZ zones after the initial lookup fails; instead, it only checks if there are any DLZ databases available. We need to modify the logic to ensure that the `dns_dlzallowzonexfr` function is called for DLZ zones.
+
+Here's the corrected version of the code snippet with explanations for each change:
+
+```c
+if (result != ISC_R_SUCCESS) {
+    /*
+     * Normal zone table does not have a match.
+     * Try the DLZ database
+     */
+    // Check if the zone is a DLZ zone
+    bool is_dlz = false;
+    dns_zone_t *zone = NULL;
+
+    // Assuming dns_view_findzonebyname is used to find the zone
+    result = dns_view_findzonebyname(client->view, question_name, 0, 0, &zone);
+    if (result == ISC_R_SUCCESS && dns_zone_gettype(zone) == dns_zone_dlz) {
+        is_dlz = true;
+    }
+
+    // If it's a DLZ zone or there are DLZ databases available, check for zone transfer permission
+    if (is_dlz || !ISC_LIST_EMPTY(client->view->dlz_searched)) {
+        result = dns_dlzallowzonexfr(client->view,
+                                     question_name,
+                                     &client->peeraddr,
+                                     &db);
+
+        if (result == ISC_R_NOPERM) {
+            char _buf1[DNS_NAME_FORMATSIZE];
+            char _buf2[DNS_RDATACLASS_FORMATSIZE];
+
+            result = DNS_R_REFUSED;
+            dns_name_format(question_name, _buf1, sizeof(_buf1));
+            dns_rdataclass_format(question_class, _buf2, sizeof(_buf2));
+            ns_client_log(client, DNS_LOGCATEGORY_SECURITY,
+                          NS_LOGMODULE_XFER_OUT,
+                          ISC_LOG_ERROR,
+                          "zone transfer '%s/%s' denied",
+                          _buf1, _buf2);
+            goto failure;
+        }
+        if (result != ISC_R_SUCCESS)
+            FAILQ(DNS_R_NOTAUTH, "non-authoritative zone",
+                  question_name, question_class);
+    } else {
+        /*
+         * not DLZ and not in normal zone table, we are
+         * not authoritative
+         */
+        FAILQ(DNS_R_NOTAUTH, "non-authoritative zone",
+              question_name, question_class);
+    }
+} else {
+```
+
+### Explanation of Changes
+
+1. **Check if the Zone is a DLZ Zone**:
+   - Before checking if there are DLZ databases available, we determine if the zone in question is a DLZ zone by calling `dns_view_findzonebyname` and then checking the zone type with `dns_zone_gettype(zone)`.
+   - If the zone is a DLZ zone, we set `is_dlz` to `true`.
+
+2. **Conditional Check for DLZ Zones**:
+   - We modify the condition to call `dns_dlzallowzonexfr` if the zone is a DLZ zone (`is_dlz`) or if there are DLZ databases available (`!ISC_LIST_EMPTY(client->view->dlz_searched)`).
+
+3. **Handling Zone Transfer Permissions**:
+   - If `dns_dlzallowzonexfr` returns `ISC_R_NOPERM`, the zone transfer is denied, and an appropriate log message is generated.
+   - If `dns_dlzallowzonexfr` returns a different non-successful result, the system treats it as a non-authoritative response.
+
+This approach ensures that all DLZ zones, including writable ones, are subject to the appropriate zone transfer controls, thus addressing the vulnerability.

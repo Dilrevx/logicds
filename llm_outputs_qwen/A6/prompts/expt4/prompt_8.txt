@@ -1,0 +1,171 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags. Do not provide any extra text explanation.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+ChaCha20-Poly1305 is an AEAD cipher, and requires a unique nonce input for every encryption operation. RFC 7539 specifies that the nonce value (IV) should be 96 bits (12 bytes). OpenSSL allows a variable nonce length and front pads the nonce with 0 bytes if it is less than 12 bytes. However it also incorrectly allows a nonce to be set of up to 16 bytes. In this case only the last 12 bytes are significant and any additional leading bytes are ignored. It is a requirement of using this cipher that nonce values are unique. Messages encrypted using a reused nonce value are susceptible to serious confidentiality and integrity attacks. If an application changes the default nonce length to be longer than 12 bytes and then makes a change to the leading bytes of the nonce expecting the new value to be a new unique nonce then such an application could inadvertently encrypt messages with a reused nonce. 
+</vulnerability_description>
+Source code:
+Context code:
+<context_code>
+### crypto/evp/e_chacha20_poly1305.c ###
+
+const EVP_CIPHER *EVP_chacha20(void)
+{
+    return (&chacha20);
+}
+
+# ifndef OPENSSL_NO_POLY1305
+#  include "internal/poly1305.h"
+
+............
+typedef struct {
+    union {
+        double align;   /* this ensures even sizeof(EVP_CHACHA_KEY)%8==0 */
+        unsigned int d[CHACHA_KEY_SIZE / 4];
+    } key;
+    unsigned int  counter[CHACHA_CTR_SIZE / 4];
+    unsigned char buf[CHACHA_BLK_SIZE];
+    unsigned int  partial_len;
+} EVP_CHACHA_KEY;
+
+#define data(ctx)   ((EVP_CHACHA_KEY *)(ctx)->cipher_data)
+
+............
+
+</context_code>
+Buggy source code:
+
+<buggy_code>
+static int chacha20_poly1305_ctrl(EVP_CIPHER_CTX *ctx, int type, int arg,
+                                  void *ptr)
+{
+    EVP_CHACHA_AEAD_CTX *actx = aead_data(ctx);
+
+    switch(type) {
+    case EVP_CTRL_INIT:
+        if (actx == NULL)
+            actx = ctx->cipher_data
+                 = OPENSSL_zalloc(sizeof(*actx) + Poly1305_ctx_size());
+        if (actx == NULL) {
+            EVPerr(EVP_F_CHACHA20_POLY1305_CTRL, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+        actx->len.aad = 0;
+        actx->len.text = 0;
+        actx->aad = 0;
+        actx->mac_inited = 0;
+        actx->tag_len = 0;
+        actx->nonce_len = 12;
+        actx->tls_payload_length = NO_TLS_PAYLOAD_LENGTH;
+        return 1;
+
+    case EVP_CTRL_COPY:
+        if (actx) {
+            EVP_CIPHER_CTX *dst = (EVP_CIPHER_CTX *)ptr;
+
+            dst->cipher_data =
+                   OPENSSL_memdup(actx, sizeof(*actx) + Poly1305_ctx_size());
+            if (dst->cipher_data == NULL) {
+                EVPerr(EVP_F_CHACHA20_POLY1305_CTRL, EVP_R_COPY_ERROR);
+                return 0;
+            }
+        }
+        return 1;
+
+    case EVP_CTRL_AEAD_SET_IVLEN:
+        if (arg <= 0 || arg > CHACHA_CTR_SIZE)
+            return 0;
+        actx->nonce_len = arg;
+        return 1;
+
+    case EVP_CTRL_AEAD_SET_IV_FIXED:
+        if (arg != 12)
+            return 0;
+        actx->nonce[0] = actx->key.counter[1]
+                       = CHACHA_U8TOU32((unsigned char *)ptr);
+        actx->nonce[1] = actx->key.counter[2]
+                       = CHACHA_U8TOU32((unsigned char *)ptr+4);
+        actx->nonce[2] = actx->key.counter[3]
+                       = CHACHA_U8TOU32((unsigned char *)ptr+8);
+        return 1;
+
+    case EVP_CTRL_AEAD_SET_TAG:
+        if (arg <= 0 || arg > POLY1305_BLOCK_SIZE)
+            return 0;
+        if (ptr != NULL) {
+            memcpy(actx->tag, ptr, arg);
+            actx->tag_len = arg;
+        }
+        return 1;
+
+    case EVP_CTRL_AEAD_GET_TAG:
+        if (arg <= 0 || arg > POLY1305_BLOCK_SIZE || !ctx->encrypt)
+            return 0;
+        memcpy(ptr, actx->tag, arg);
+        return 1;
+
+    case EVP_CTRL_AEAD_TLS1_AAD:
+        if (arg != EVP_AEAD_TLS1_AAD_LEN)
+            return 0;
+        {
+            unsigned int len;
+            unsigned char *aad = ptr, temp[POLY1305_BLOCK_SIZE];
+
+            len = aad[EVP_AEAD_TLS1_AAD_LEN - 2] << 8 |
+                  aad[EVP_AEAD_TLS1_AAD_LEN - 1];
+            if (!ctx->encrypt) {
+                if (len < POLY1305_BLOCK_SIZE)
+                    return 0;
+                len -= POLY1305_BLOCK_SIZE;     /* discount attached tag */
+                memcpy(temp, aad, EVP_AEAD_TLS1_AAD_LEN - 2);
+                aad = temp;
+                temp[EVP_AEAD_TLS1_AAD_LEN - 2] = (unsigned char)(len >> 8);
+                temp[EVP_AEAD_TLS1_AAD_LEN - 1] = (unsigned char)len;
+            }
+            actx->tls_payload_length = len;
+
+            /*
+             * merge record sequence number as per RFC7905
+             */
+            actx->key.counter[1] = actx->nonce[0];
+            actx->key.counter[2] = actx->nonce[1] ^ CHACHA_U8TOU32(aad);
+            actx->key.counter[3] = actx->nonce[2] ^ CHACHA_U8TOU32(aad+4);
+            actx->mac_inited = 0;
+            chacha20_poly1305_cipher(ctx, NULL, aad, EVP_AEAD_TLS1_AAD_LEN);
+            return POLY1305_BLOCK_SIZE;         /* tag length */
+        }
+
+    case EVP_CTRL_AEAD_SET_MAC_KEY:
+        /* no-op */
+        return 1;
+
+    default:
+        return -1;
+    }
+}
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+To address the vulnerability described, the repair process involves modifying the handling of nonce lengths in the ChaCha20-Poly1305 algorithm implementation within OpenSSL. The core issue stems from OpenSSL's permissive approach to nonce lengths, allowing non-standard lengths up to 16 bytes while only considering the last 12 bytes as significant. This can lead to unintended reuse of nonces if developers mistakenly assume longer nonces create unique encryption contexts.
+
+The repair focuses on enforcing a stricter limit on nonce lengths, aligning with the specification outlined in RFC 7539, which mandates a nonce length of exactly 96 bits (12 bytes). Here are the detailed steps taken to achieve this:
+
+1. **Identify the Vulnerable Code Segment**: The initial step involves pinpointing the section of code responsible for setting the nonce length. In the provided buggy source code, this is done through the `EVP_CTRL_AEAD_SET_IVLEN` case statement. This segment of code currently permits nonce lengths ranging from 1 to `CHACHA_CTR_SIZE`, which appears to be defined elsewhere in the codebase and likely exceeds the recommended 12-byte limit.
+
+2. **Understand the Implications of Current Behavior**: Before making any changes, it's crucial to understand how the current implementation behaves. The existing code does not restrict the nonce length to the recommended 12 bytes, instead allowing up to `CHACHA_CTR_SIZE` bytes. This flexibility can lead to security vulnerabilities if developers mistakenly believe longer nonces ensure uniqueness.
+
+3. **Define the Correct Nonce Length Limit**: According to RFC 7539, the nonce for ChaCha20-Poly1305 must be exactly 96 bits (12 bytes). Therefore, the repair involves setting a new maximum nonce length that adheres to this standard. This ensures that all encryption operations comply with the security requirements specified by the algorithm.
+
+4. **Modify the Condition for Setting Nonce Length**: The key change in the repair involves updating the condition that checks the validity of the nonce length. Instead of using `CHACHA_CTR_SIZE` as the upper limit, the code now uses `CHACHA20_POLY1305_MAX_IVLEN`, which is presumably defined elsewhere in the codebase to be equal to 12 bytes. This modification effectively enforces the correct nonce length, preventing any deviations from the standard.
+
+5. **Ensure Consistency Across the Codebase**: After updating the nonce length check, it's essential to verify that other parts of the codebase consistently handle nonce lengths according to the new standard. This may involve reviewing functions that generate or manipulate nonces to ensure they adhere to the 12-byte limit.
+
+6. **Test the Modified Code**: Rigorous testing is necessary to confirm that the modified code correctly enforces the 12-byte nonce length without introducing new issues. This includes unit tests to verify the behavior of the nonce length setting function, as well as integration tests to ensure that the entire encryption process functions as expected when using valid nonce lengths.
+
+7. **Document the Changes**: Finally, it's important to document the changes made to the codebase. This documentation should explain why the nonce length limit was changed, how it impacts the security of the encryption process, and any potential implications for developers using the library. Clear documentation helps maintain the integrity of the code and aids future maintenance efforts.
+
+By following these steps, the repair ensures that the ChaCha20-Poly1305 implementation in OpenSSL strictly adheres to the security standards set forth in RFC 7539, thereby mitigating the risk of nonce reuse and associated vulnerabilities.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

@@ -1,0 +1,166 @@
+<repair>
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: zone not found", mnemonic);
+		goto failure;
+	}
+
+	result = dns_zone_getraw(zone, &raw);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: unable to get raw zone", mnemonic);
+		goto failure;
+	}
+
+	result = dns_zone_getdb(raw, &db);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: unable to get database", mnemonic);
+		goto failure;
+	}
+
+	result = dns_db_newversion(db, &ver);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: unable to create database version", mnemonic);
+		goto failure;
+	}
+
+	if (reqtype == dns_rdatatype_ixfr) {
+		is_ixfr = true;
+		result = dns_message_findname(request, DNS_SECTION_QUESTION,
+					      question_name, question_class,
+					      dns_rdatatype_soa, &soa_name);
+		if (result == ISC_R_SUCCESS) {
+			soa_rdataset = ISC_LIST_HEAD(soa_name->list);
+			result = dns_rdataset_first(soa_rdataset);
+			if (result == ISC_R_SUCCESS) {
+				dns_rdataset_current(soa_rdataset, &soa_rdata);
+				dns_rdata_toregion(&soa_rdata, &region);
+				result = dns_rdata_fromregion(dns_rdataclass_in,
+							      dns_rdatatype_soa,
+							      dns_rdata_soa_fromtext,
+							      mctx, &region, &soa_rdata);
+				if (result == ISC_R_SUCCESS) {
+					have_soa = true;
+					current_soa_tuple = dns_difftuple_make(mctx, soa_name,
+										    question_class,
+										    dns_rdatatype_soa,
+										    0, &soa_rdata);
+					if (current_soa_tuple == NULL) {
+						result = ISC_R_NOMEMORY;
+						goto failure;
+					}
+					dns_rdata_free(&soa_rdata, mctx);
+				}
+			}
+		}
+		if (!have_soa) {
+			isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+				      "%s request denied: SOA record not found in IXFR request", mnemonic);
+			goto failure;
+		}
+	}
+
+	result = dns_peer_fromsockaddr(client->sockaddr, &peer);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: unable to get peer from socket address", mnemonic);
+		goto failure;
+	}
+
+	result = dns_peer_getname(peer, keyname, sizeof(keyname));
+	if (result != ISC_R_SUCCESS) {
+		strlcpy(keyname, "unknown", sizeof(keyname));
+	}
+
+	result = dns_peer_getquota(peer, &quota);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: unable to get quota for peer", mnemonic);
+		goto failure;
+	}
+
+	result = isc_quota_reserve(quota, 1);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: quota exceeded for peer %s", mnemonic, keyname);
+		goto failure;
+	}
+
+	is_poll = (client->attributes & NS_CLIENTATTR_TCP_POLL) != 0;
+
+	result = dns_zone_isdlz(zone, &is_dlz);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: unable to determine if zone is DLZ", mnemonic);
+		goto failure;
+	}
+
+	if (is_dlz && !is_poll) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: DLZ zones require TCP polling", mnemonic);
+		goto failure;
+	}
+
+	result = dns_peer_getaddress(peer, &na);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: unable to get address for peer", mnemonic);
+		goto failure;
+	}
+
+	result = xfrout_ctx_create(mctx, client, zone, raw, db, ver, question_name,
+				    question_class, is_ixfr, current_soa_tuple, &xfr);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: unable to create xfrout context", mnemonic);
+		goto failure;
+	}
+
+	result = xfrout_prepare(xfr, format, &soa_stream, &data_stream, &begin_serial);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(XFROUT_COMMON_LOGARGS, ISC_LOG_WARNING,
+			      "%s request denied: unable to prepare xfrout", mnemonic);
+		goto failure;
+	}
+
+	stream = soa_stream;
+	client->writecb = ns_xfr_write;
+	client->writeclosure = xfr;
+	client->tcpmsg = true;
+	client->sendcb = ns_xfr_senddone;
+	client->sendclosure = xfr;
+	client->message->flags |= DNS_MESSAGEFLAG_AA;
+
+	journalfile = dns_zone_getjournal(zone);
+	if (journalfile != NULL) {
+		snprintf(msg, sizeof(msg), "zone transfer '%s' (%s) to %pIA; journal %s",
+			 dns_zone_getorigin(zone)->ndata, mnemonic, &na, journalfile);
+	} else {
+		snprintf(msg, sizeof(msg), "zone transfer '%s' (%s) to %pIA",
+			 dns_zone_getorigin(zone)->ndata, mnemonic, &na);
+	}
+
+	ns_client_log(client, DNS_LOGCATEGORY_XFER_OUT, NS_LOGMODULE_XFER_OUT,
+		      ISC_LOG_INFO, "%s", msg);
+
+	(void)dns_peer_detach(&peer);
+	return;
+
+failure:
+	if (peer != NULL)
+		(void)dns_peer_detach(&peer);
+	if (quota != NULL)
+		(void)isc_quota_detach(&quota);
+	if (current_soa_tuple != NULL)
+		dns_difftuple_free(&current_soa_tuple);
+	if (ver != NULL)
+		dns_db_closeversion(db, &ver, false);
+	if (db != NULL)
+		dns_db_detach(&db);
+	if (raw != NULL)
+		dns_zone_detach(&raw);
+	if (zone != NULL)
+		dns_zone_detach(&zone);
+</repair>

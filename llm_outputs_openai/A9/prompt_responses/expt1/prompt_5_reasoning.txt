@@ -1,0 +1,17 @@
+The original vulnerability occurred because DTLS client connections were not receiving proper randomness when no Hello Verify Request was present. Under that logic, the code would bypass random data generation (or potentially generate an insecure default using 32 '\0' bytes) leading to very weak cryptographic randomness. Without sufficient randomness, session security is compromised, since random values (like nonces) protect against replay attacks and key prediction.
+
+In the repair, the critical change is the condition used to decide whether to generate the client random value securely. Originally, it only attempted security generation when not handling a Hello Retry Request (HRR) for TLS, but inadvertently omitted a similar check for DTLS. The key changed condition now is:
+
+  if (IS_DTLS(session) || !(session->internals.hsk_flags & HSK_HRR_RECEIVED)) { … }
+
+This condition does two things:
+
+1. For DTLS sessions (IS_DTLS(session) returns true), it always calls _gnutls_gen_client_random(session) to generate proper randomness. This ensures that even if no Hello Verify Request (HVR) has been received, the DTLS client still uses cryptographically secure values rather than the insecure default.
+
+2. For TLS sessions, it preserves the original semantics by only generating random data if no HRR was received (i.e. when !(session->internals.hsk_flags & HSK_HRR_RECEIVED) is true). This means that the client uses proper random generation when it is initiating a new handshake rather than responding to an HRR.
+
+By including IS_DTLS(session) in the conditional, the repair guarantees that for DTLS, regardless of the handshake state, the function _gnutls_gen_client_random(session) is called. This function is assumed to generate random data using a secure cryptographic random source. As a result, the DTLS client now contributes the expected level of entropy to the handshake process, preserving the protocol’s security guarantees.
+
+Moreover, the remaining logic in the function continues to construct the rest of the ClientHello message. It appends the version data, sets the record layer version appropriately, timestamps the session for freshness, and eventually sends the handshake message. The fix thus ensures that proper randomness is incorporated at the correct place in the handshake process before any further cryptographic operations take place.
+
+In summary, the repair fixes the vulnerability by ensuring that secure random data is always generated for DTLS clients—even when no Hello Verify Request has been received—by modifying the condition under which random generation is triggered. This prevents the use of weak (or default, fixed) random data that could have allowed attackers to predict cryptographic values and compromise the DTLS session.

@@ -1,0 +1,15 @@
+The repair restructures the certificate validation logic by first introducing a single variable (named valid) that tracks whether the provided signature algorithm matches a certificate present on the peer’s side. Instead of immediately exiting when a single check fails, each supported algorithm’s conditional sets this variable based on whether the corresponding certificate key material is actually available.
+
+For example, for the ED25519 algorithm, the code now checks if the signature algorithm equals ED25519. If it does, it assigns valid to the value of ssl->peerEd25519KeyPresent. If that key isn’t present, a message is logged. This same pattern is applied to other algorithms (ED448, ECC, and the Falcon algorithms), ensuring that for each potential signature type the availability of the corresponding certificate is verified by updating the valid flag. 
+
+The RSA cases are handled with special care. In TLS 1.3, the PKCS#1.5 signature algorithm is explicitly disallowed, so the code immediately logs an error and exits if that algorithm is encountered. For RSA-PSS, rather than exiting immediately, the code sets valid based on whether the RSA key pointer is non-null and the corresponding key-present flag is true. This confirms that if RSA-PSS is used, the certificate must have the correct RSA key material. 
+
+After all the conditional checks have been executed, there is one final verification step that checks the global valid flag. If valid is falsy (meaning that the provided signature algorithm does not correspond to the certificate present), then an error code is assigned and the process aborts. This final check ensures a uniform enforcement mechanism: regardless of which algorithm is used, the system guarantees that there is no bypass of the certificate authentication by merely having the expected signature algorithm appear without the matching certificate material.
+
+In summary, the repair fixes the vulnerability by:
+ • Introducing a central valid flag to capture the outcome of the certificate matching check across all supported algorithms.
+ • Ensuring that for each algorithm, the corresponding certificate information is explicitly validated.
+ • Enforcing a final, uniform check of this flag before proceeding, so that if any mismatch is detected, the handshake is aborted.
+ • Preventing attackers from exploiting the signature algorithm field to bypass certificate validation—thereby closing the gap where a mismatch between the presented signature algorithm and the certificate could be used to bypass the check.
+
+This restructuring prevents divergent behavior depending on which code branch is taken, ensuring that every supported algorithm follows the same robust check. As a result, the TLS v1.3 client no longer accepts a valid signature simply because it comes from an allowed branch, without the associated certificate confirmation.

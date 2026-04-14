@@ -1,0 +1,19 @@
+The fix introduces extra checks to ensure that, before adding a certificate as a potential issuer, the certificate is allowed to act as a Certification Authority (CA). In other words, it verifies that the Basic Constraints cA flag is properly set. Here’s a walk-through of the changes made:
+
+1. Within the loop that attempts to extend the chain by retrieving the issuer, we now check:
+  if (!Helper.is_ca(x))
+    break;
+Before calling ctx.get_issuer(x), the code confirms that the current certificate (x) is permitted to issue others as a CA. This check helps prevent a leaf certificate (or any certificate lacking the proper cA flag) from being mistakenly used to create an alternative chain.
+
+2. In the alternative chain processing block (the inner while loop iterating over j), when ctx.get_issuer(xtmp2) is called and retrieves a candidate issuer, a similar check is performed:
+  if (!Helper.is_ca(Helper.lastIssuer)) {
+    Helper.free(Helper.lastIssuer);
+    continue;
+  }
+Before committing to switching the chain to the new candidate issuer, we verify that Helper.lastIssuer (the newly retrieved certificate) has the correct CA settings. If it doesn’t, the certificate is freed, and the loop continues checking alternative links. This prevents an attacker from introducing a rogue leaf certificate – one that does not have valid CA authorization – into the chain.
+
+3. Both changes ensure that any certificate added to the chain passes the necessary CA constraints. This is crucial because the vulnerability allowed an attacker to splice in a certificate without proper CA credentials, potentially triggering unwanted certificate verification behavior.
+
+4. The rest of the flow remains unchanged. If a certificate fails these CA checks, the loop breaks out, which in the overall logic leads to the rejection of the certificate chain. This makes the verification process more robust by ensuring that only certificates correctly configured as CAs can extend or alter the chain.
+
+In summary, these repairs directly address the vulnerability by enforcing that, during both the main chain-building loop and the alternative chain exploration loop, only certificates with properly set Basic Constraints (cA) flags are considered acceptable issuers. This prevents improper usage of certificates that could be exploited to spoof a CA, thereby mitigating the potential for remote attackers to trigger unintended certificate verifications.

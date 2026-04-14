@@ -1,0 +1,31 @@
+The provided repair addresses a specific vulnerability related to how OpenSSL handles errors during the certificate verification process. The vulnerability stems from the fact that `X509_verify_cert()`, a function used internally by OpenSSL to verify certificates, can return a negative value to indicate an internal error (e.g., out of memory). However, the code does not properly handle these negative return values, which can lead to unexpected behavior in applications using OpenSSL.
+
+### Original Code Analysis
+
+In the original code snippet, the function `ssl_verify_cert_chain()` is responsible for verifying a chain of X509 certificates. It initializes a `X509_STORE_CTX` structure and configures it with various parameters necessary for the verification process. After setting up the context, it either uses an application-provided callback (`app_verify_callback`) or calls `X509_verify_cert()` to perform the actual verification.
+
+The return value of `X509_verify_cert()` is stored in the variable `i`. If `app_verify_callback` is used, its return value is assigned to `i`; otherwise, `i` holds the result of `X509_verify_cert()`. The function then checks if the verification was successful by examining `i`. If `i` is zero or positive, it proceeds to set `s->verify_result` and potentially update `s->verified_chain`. If `i` is zero, it indicates a failure in the certificate verification process.
+
+However, the critical issue arises when `X509_verify_cert()` returns a negative value, indicating an internal error. In the original code, this condition is not explicitly handled, leading to potential issues because the calling code might not expect such a return value and could interpret it incorrectly.
+
+### Vulnerability Description
+
+The vulnerability described involves the unexpected return value `SSL_ERROR_WANT_RETRY_VERIFY` from `SSL_get_error()`. This error code is intended to be used only when the application has set a custom certificate verification callback using `SSL_CTX_set_cert_verify_callback()`. Applications typically do not set this callback, so encountering `SSL_ERROR_WANT_RETRY_VERIFY` is unusual and can lead to incorrect behavior or security vulnerabilities.
+
+In the context of the `ssl_verify_cert_chain()` function, if `X509_verify_cert()` returns a negative value, the function does not handle this case specifically. Instead, it treats all non-positive return values as verification failures. This can mask internal errors as simple verification failures, potentially allowing malicious certificates to pass unnoticed if they trigger an internal error during verification.
+
+### Repair Explanation
+
+To address this vulnerability, the repair introduces a specific check for negative return values from `X509_verify_cert()`. This ensures that internal errors are properly identified and handled separately from regular verification failures. Here’s how the repair works:
+
+1. **Check for Negative Return Values**: After calling `X509_verify_cert()`, the code checks if `i` (the return value) is less than zero. If it is, this indicates an internal error.
+
+2. **Raise an Internal Error**: When a negative return value is detected, the code raises an internal error using `ERR_raise(ERR_LIB_SSL, ERR_R_INTERNAL_ERROR)`. This provides a clear indication that an internal error occurred, which can be logged or handled appropriately by the application.
+
+3. **Set Verification Result to Failure**: The variable `i` is set to zero, indicating a failure in the verification process. This ensures that the function returns a consistent failure status, even when an internal error occurs.
+
+4. **Continue with Cleanup**: The rest of the function, including cleanup operations like freeing resources and moving peer names, continues as before. This ensures that the function behaves correctly regardless of whether a verification failure or an internal error occurred.
+
+By implementing this change, the function now properly distinguishes between verification failures and internal errors. This prevents applications from treating internal errors as simple verification failures, reducing the risk of security vulnerabilities. Additionally, raising an internal error provides a mechanism for applications to detect and handle such issues appropriately, improving overall robustness and security.
+
+In summary, the repair ensures that internal errors during certificate verification are correctly identified and handled, preventing them from being misinterpreted as regular verification failures. This addresses the vulnerability by providing a clear distinction between different types of errors and improving the reliability of the certificate verification process.

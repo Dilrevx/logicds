@@ -1,0 +1,31 @@
+The repair introduces an additional check at the beginning of the CCS handling block to ensure that a ChangeCipherSpec (CCS) message is processed only once. Here’s how the repair addresses the vulnerability:
+
+1. Preventing Multiple CCS Processing:
+ • The vulnerability (CCS Injection) arises when an attacker injects multiple CCS messages into the handshake. Without proper checks, a later CCS could potentially force OpenSSL to use an unintended or zero-length master key.
+ • The repair adds a check:
+  if (s->s3->change_cipher_spec)
+  {
+   al = SSL_AD_UNEXPECTED_MESSAGE;
+   SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_AFTER_CHANGE_CIPHER_SPEC);
+   goto f_err;
+  }
+ • This check ensures that if a CCS has already been processed (s->s3->change_cipher_spec is already set), any subsequent CCS messages result in an error. This stops an attacker from injecting or replaying additional CCS messages.
+
+2. Validating the CCS Message:
+ • The repair maintains the original strict validation for the payload:
+  - Ensures the message is exactly one byte.
+  - Confirms the CCS message byte is the expected value (SSL3_MT_CCS).
+ • These validations ensure that even a single CCS message must strictly adhere to the protocol, and any message failing the check is rejected.
+
+3. Consistency with Cipher State:
+ • The code also continues to check if a new cipher is available using:
+  if (s->s3->tmp.new_cipher == NULL)
+ • This step prevents scenarios where the CCS might be processed before a valid new cipher is set, which could otherwise compromise the session security.
+
+4. Clean Record Handling and Callback:
+ • After validation, the record's length is reset, and the optional message callback is invoked. These steps remain untouched, ensuring that the normal processing flow for a valid CCS message continues seamlessly for a handshake that has not been tampered with.
+
+5. Changing the Cipher:
+ • Finally, after setting s->s3->change_cipher_spec to true, the function ssl3_do_change_cipher_spec(s) is called to effect the cipher change. The early check introduced at the start prevents any reentrance into this critical step, eliminating the risk of multiple state changes.
+
+Overall, by ensuring a CCS message can only be processed once and strictly validating the incoming message, the repair mitigates the CCS Injection vulnerability. This prevents an attacker from forcing the state machine to inadvertently use an insecure or zero-length master key, protecting the integrity and confidentiality of the communication session.

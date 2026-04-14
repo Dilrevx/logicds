@@ -1,0 +1,29 @@
+The provided repair addresses a critical vulnerability in the wolfSSL library's handling of TLS 1.3 Certificate Verify messages, which could potentially allow a man-in-the-middle (MITM) attacker to impersonate a server and bypass authentication. The core issue in the original code lies in how it handles missing or mismatched keys during the signature verification process. Specifically, the original code logs a warning message and continues the handshake when certain conditions are met, without properly terminating the connection with an appropriate error alert.
+
+### Vulnerability Analysis
+
+The vulnerability stems from the fact that the code does not adequately enforce the requirement that the receiver of a `CertificateVerify` message **must** verify the signature field and terminate the handshake with a `decrypt_error` alert if the verification fails. This is crucial for preventing MITM attacks where an attacker could intercept the communication, modify the `CertificateVerify` message, and continue the handshake as if the signature was valid.
+
+### Original Code Issues
+
+1. **Lack of Proper Error Handling**: The original code uses `WOLFSSL_MSG` to log warnings when it detects inconsistencies, such as missing keys for certain signature algorithms. However, it does not use `ERROR_OUT` to terminate the handshake with a `decrypt_error` alert. This allows the handshake to proceed even when the signature verification process should fail.
+
+2. **Insufficient Verification**: For example, in the case of RSA signatures, the code checks if the RSA key is present but does not actually perform the signature verification. If the key is missing, it logs a warning and sets an error code (`INVALID_PARAMETER`) but does not terminate the handshake. Similarly, for other signature algorithms like Ed25519, Ed448, and ECC DSA, the code only checks for the presence of the key and logs a warning if it is missing.
+
+3. **Potential for MITM Attacks**: An attacker could exploit these issues to intercept the `CertificateVerify` message, remove or replace the signature, and continue the handshake without being detected. This would allow the attacker to impersonate the server and establish a secure connection with the client, effectively bypassing authentication.
+
+### Repair Implementation
+
+The repair addresses these issues by ensuring that the handshake is terminated with a `decrypt_error` alert whenever a mismatch or missing key is detected. This aligns with the TLS 1.3 specification, which mandates that the receiver of a `CertificateVerify` message must verify the signature and terminate the handshake with a `decrypt_error` alert if the verification fails.
+
+#### Key Changes
+
+1. **Use of `ERROR_OUT` with `DECRYPT_ERROR`**: The repair replaces `ERROR_OUT(INVALID_PARAMETER, exit_dcv);` with `ERROR_OUT(DECRYPT_ERROR, exit_dcv);` for all cases where a mismatch or missing key is detected. This ensures that the handshake is properly terminated with the correct error alert, signaling to the peer that the signature verification has failed.
+
+2. **Consistent Error Handling**: By using `ERROR_OUT` with `DECRYPT_ERROR`, the repair ensures that the handshake is terminated consistently across all cases where a mismatch or missing key is detected. This prevents the handshake from proceeding even if the signature verification process should fail.
+
+3. **Logging and Debugging**: The repair retains the `WOLFSSL_MSG` logging statements to provide debugging information about why the handshake is being terminated. This is useful for diagnosing issues during development and troubleshooting.
+
+### Conclusion
+
+The repair enhances the security of the wolfSSL library by ensuring that the TLS 1.3 `CertificateVerify` message is properly verified. By terminating the handshake with a `decrypt_error` alert whenever a mismatch or missing key is detected, the repair prevents MITM attacks and ensures that the integrity and authenticity of the TLS handshake are maintained. This aligns with the TLS 1.3 specification and strengthens the overall security posture of applications that rely on wolfSSL for secure communication.

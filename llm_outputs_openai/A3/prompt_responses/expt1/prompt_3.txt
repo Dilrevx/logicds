@@ -1,0 +1,54 @@
+<repair>
+#if !defined(OPENSSL_NO_ENGINE) && !defined(FIPS_MODULE)
+    /*
+     * Whether it's nice or not, "Inits" can be used on "Final"'d contexts so
+     * this context may already have an ENGINE associated. In order to avoid
+     * releasing the previous handle and re-querying for an ENGINE unnecessarily,
+     * legacy handling allowed re-use of the ENGINE if the cipher parameters “matched”.
+     *
+     * However, the old check was too lax: when cipher is NULL or the same as the
+     * current ctx->cipher, it unconditionally jumped to skip the ENGINE reinitialization.
+     * This created a logical vulnerability: if the caller intends to change the key or IV,
+     * those changes could be silently ignored. To fix this, we now insist that if a key or IV
+     * is provided in a reinitialization then they must not be silently dropped.
+     */
+    if (ctx->engine && ctx->cipher) {
+        if (cipher == NULL || cipher->nid == ctx->cipher->nid) {
+            /* If the caller is trying to supply a new key or IV along with a reused cipher,
+             * that is not allowed. We must force a full reinitialization.
+             */
+            if (key != NULL || iv != NULL) {
+                ERR_raise(ERR_LIB_EVP, EVP_R_REINITIALIZATION_WITH_NEW_KEY_OR_IV);
+                return 0;
+            }
+            goto skip_to_init;
+        } else {
+            /* A different cipher was supplied: release the legacy ENGINE and start afresh */
+            ENGINE_finish(ctx->engine);
+            ctx->engine = NULL;
+        }
+    }
+
+    if (cipher != NULL && impl == NULL) {
+         /* Ask if an ENGINE is reserved for this job */
+         tmpimpl = ENGINE_get_cipher_engine(cipher->nid);
+    }
+#endif
+
+    /* Continue with the rest of the initialization code.
+     * For example, use tmpimpl if assigned, set up the cipher-specific parameters,
+     * and finally call the cipher's init function.
+     */
+
+#if !defined(OPENSSL_NO_ENGINE) && !defined(FIPS_MODULE)
+skip_to_init:
+#endif
+    /* ... legacy code continues here ... */
+
+    /* Assume the following steps complete the initialization.
+     * (The actual implementation would continue with further processing.)
+     */
+    n = 1; /* Dummy success value in this snippet */
+    return n;
+}
+</repair>

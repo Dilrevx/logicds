@@ -1,0 +1,58 @@
+The repair addresses the "CCS Injection" vulnerability, which arises from improper handling of ChangeCipherSpec (CCS) messages in the OpenSSL library. This vulnerability can allow a man-in-the-middle (MITM) attacker to hijack SSL/TLS sessions or obtain sensitive information by injecting a CCS message at an inappropriate time during the TLS handshake process.
+
+### Vulnerability Context
+
+In a typical TLS handshake, the ChangeCipherSpec message is used to signal that the sender is about to switch to the newly negotiated encryption parameters. The CCS message must be sent immediately after the Finished message and before any application data is exchanged. If an attacker can inject a CCS message prematurely, they can force the server to use a zero-length master key, leading to session hijacking or data exposure.
+
+### Analysis of the Buggy Code
+
+The provided code snippet is part of the state machine that manages the TLS handshake process on the server side. The states `SSL3_ST_SR_CERT_VRFY_B`, `SSL3_ST_SR_FINISHED_A/B`, `SSL3_ST_SW_CHANGE_A/B`, and `SSL3_ST_SW_FINISHED_A/B` are involved in the handshake process. Specifically, the vulnerability lies in the timing and sequence of sending and receiving CCS messages.
+
+### Key Issues Identified
+
+1. **Premature ChangeCipherSpec Transmission**: The original code sends the ChangeCipherSpec message (`SSL3_ST_SW_CHANGE_A/B`) before ensuring that the Finished message has been sent. This can allow an attacker to inject a CCS message before the legitimate one, leading to the use of a zero-length master key.
+
+2. **Lack of Client CCS Handling**: The server does not explicitly handle the reception of the client's ChangeCipherSpec message (`SSL3_ST_SR_CHANGE_A/B`). This means that the server does not verify that the client has also transitioned to the new encryption parameters before proceeding with its own transition.
+
+### Repair Strategy
+
+To mitigate the CCS Injection vulnerability, the repair strategy involves two main changes:
+
+1. **Ensure Correct Sequence of Messages**: Modify the state transitions to ensure that the ChangeCipherSpec message is sent only after the Finished message has been sent. This prevents the server from sending its CCS message prematurely, which could be exploited by an attacker.
+
+2. **Explicitly Handle Client CCS Message**: Add states to handle the reception of the client's ChangeCipherSpec message. This ensures that the server waits for the client to transition to the new encryption parameters before proceeding with its own transition.
+
+### Detailed Explanation of the Repair
+
+#### Preventing Premature ChangeCipherSpec Transmission
+
+In the original code, the `SSL3_ST_SW_CHANGE_A/B` states are responsible for sending the ChangeCipherSpec message. The repair modifies these states to ensure that the ChangeCipherSpec message is sent only after the Finished message has been sent. This is achieved by adding a conditional check:
+
+```c
+if (s->state == SSL3_ST_SW_CHANGE_A) {
+    s->state=SSL3_ST_SW_FINISHED_A;
+    break;
+}
+```
+
+This change ensures that the server first sends the Finished message (`SSL3_ST_SW_FINISHED_A`) before attempting to send the ChangeCipherSpec message. This prevents the server from sending its CCS message prematurely, which could be exploited by an attacker.
+
+#### Explicitly Handling Client CCS Message
+
+The repair adds new states (`SSL3_ST_SR_CHANGE_A/B`) to handle the reception of the client's ChangeCipherSpec message. This ensures that the server waits for the client to transition to the new encryption parameters before proceeding with its own transition. The new states are added as follows:
+
+```c
+case SSL3_ST_SR_CHANGE_A:
+case SSL3_ST_SR_CHANGE_B:
+    ret=ssl3_get_change_cipher_spec(s);
+    if (ret <= 0) goto end;
+    s->state=SSL3_ST_SR_FINISHED_A;
+    s->init_num=0;
+    break;
+```
+
+These states handle the reception of the client's ChangeCipherSpec message and then transition to the next expected state (`SSL3_ST_SR_FINISHED_A`). This ensures that the server correctly handles the sequence of messages and prevents an attacker from injecting a CCS message out of order.
+
+### Conclusion
+
+By ensuring that the ChangeCipherSpec message is sent only after the Finished message and by explicitly handling the reception of the client's ChangeCipherSpec message, the repair effectively mitigates the CCS Injection vulnerability. This ensures that the TLS handshake process adheres to the correct sequence of messages, preventing an attacker from exploiting the vulnerability to hijack sessions or obtain sensitive information.

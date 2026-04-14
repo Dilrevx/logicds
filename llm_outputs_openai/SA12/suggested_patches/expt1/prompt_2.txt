@@ -1,0 +1,52 @@
+package main;
+
+import commons.*;
+
+public class Tls13FinishedHandler {
+
+        Tls13Helper.WOLFSSL_START(Constants.WC_FUNC_FINISHED_DO);
+        
+        /* Ensure there are enough bytes in the input buffer for a Finished message.
+           The Finished verify_data is expected to be the same length as our MAC (32 bytes). */
+        if ((size - inOutIdx[0]) < mac.length) {
+            Tls13Helper.WOLFSSL_ERROR("DoTls13Finished: Input too short for finished data");
+            return ErrorCodes.FINISHED_LENGTH;  // Use an appropriate error code.
+        }
+        
+        /* Retrieve the finished secret from the SSL object.
+           This helper is assumed to correctly obtain the secret needed to compute the finished MAC. */
+        secret = ssl.getFinishedSecret();
+        if (secret == null) {
+            Tls13Helper.WOLFSSL_ERROR("DoTls13Finished: No finished secret available");
+            return ErrorCodes.FINISHED_SECRET;
+        }
+        
+        /* Compute the Finished message MAC based on the transcript hash and the secret.
+           The helper function TLS13FinishedHash is assumed to fill in 'mac' based on the protocol.
+           If this computation fails, it returns a non-zero error code. */
+        ret = Tls13Helper.TLS13FinishedHash(secret, ssl.getTranscriptHash(), mac);
+        if (ret != 0) {
+            Tls13Helper.WOLFSSL_ERROR("DoTls13Finished: Error computing finished hash");
+            return ret;
+        }
+        
+        /* Compare the computed MAC to the 'finished' data provided in the input buffer.
+           This fixes the logical vulnerability where an incorrect finished message could be accepted.
+           The comparison is done in a constant time manner. */
+        if (!Tls13Helper.constantTimeEquals(mac, input, inOutIdx[0], mac.length)) {
+            Tls13Helper.WOLFSSL_ERROR("DoTls13Finished: Finished hash mismatch");
+            return ErrorCodes.FINISHED_HASH_MISMATCH;
+        }
+        
+        finishedSz = mac.length;
+        
+        /* Advance the input index only when not in "sniff" mode.
+           In sniff mode, we leave the index unchanged so that the finished data can be re-read if needed. */
+        if (sniff == 0) {
+            inOutIdx[0] += finishedSz;
+        }
+        
+        Tls13Helper.WOLFSSL_END(Constants.WC_FUNC_FINISHED_DO);
+        return finishedSz;
+
+}

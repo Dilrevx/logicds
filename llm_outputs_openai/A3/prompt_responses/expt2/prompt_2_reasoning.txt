@@ -1,0 +1,17 @@
+The repair adds two new conditions that detect when the cipher being used originated from the legacy creation process. In the buggy version, the decision to branch to legacy handling was based only on whether certain pointers (e.g., engine, tmpimpl, or impl) were non-null. This was insufficient because it didn’t check if the cipher itself was a legacy custom cipher—potentially one created with an undefined identifier (NID_undef). Such legacy ciphers could erroneously lead to fetching an equivalent cipher (the NULL cipher) from the providers, which would incorrectly process plaintext as ciphertext.
+
+Here’s how the repair addresses that:
+
+1. Existing checks remain intact: The code still verifies if the engine pointer (or tmpimpl or impl, if applicable) is non-null. These conditions are used to determine whether there’s a non-default or alternative implementation of the cipher, indicating that the legacy path should be taken.
+
+2. First new condition – direct legacy origin: The added condition
+  (ctx->cipher != NULL && ctx->cipher->origin == EVP_CIPHER_ORIGIN_LEGACY)
+checks if the current cipher is non-null and verifies that its origin field indicates it was created via legacy methods. This is important because if the cipher came through legacy routines (even if the engine or other pointers are not involved), it should follow the legacy branch to prevent further processing as if it were a standard cipher.
+
+3. Second new condition – indirect legacy scenario: The next check
+  (ctx->cipher == NULL && ctx->fetched_cipher != NULL && ctx->fetched_cipher->origin == EVP_CIPHER_ORIGIN_LEGACY)
+handles cases where the primary cipher pointer is null but the fetched_cipher is non-null and originates from the legacy method. This ensures that even if the main cipher pointer wasn’t set, the context does not inadvertently use a fetched legacy cipher and risk substituting with an incorrect provider cipher.
+
+4. Cleanup before branching: Once either of these conditions is met (or if the original checks are true), the repair code cleans up by setting ctx->cipher to NULL (if it happens to equal ctx->fetched_cipher) and freeing ctx->fetched_cipher. This ensures that any established state that might lead to an incorrect provider lookup is removed before redirecting to the legacy processing branch (via goto legacy).
+
+By adding these checks based on the cipher’s origin, the repair makes sure that any cipher created by legacy methods, including those with an undefined identifier, is handled appropriately. This prevents the vulnerable behavior where OpenSSL might fetch the NULL cipher from the providers and inadvertently emit plaintext as “encrypted” output. In effect, the additional conditions are a safeguard ensuring that legacy custom ciphers are not mistakenly converted into provider ciphers, thereby protecting against the described vulnerability.

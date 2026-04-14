@@ -1,0 +1,17 @@
+The original code had a logical vulnerability where, for DTLS, it would fallback to a fixed value (32 zero bytes) rather than using a proper random client random, thereby failing to introduce sufficient randomness into the handshake process. This compromises the security guarantees that DTLS is supposed to provide.
+
+In the repair, the first thing we do is check that the handshake is in the right stage ((session.getInternals().getHskFlags() & Constants.HSK_HRR_RECEIVED) == 0). If true, we then immediately detect whether the session is for DTLS using session.isDTLS(). Instead of letting a default non-random behavior occur, the new code directly allocates a 32-byte array for the client random value. We then create an instance of java.security.SecureRandom, which is a cryptographically secure pseudo-random number generator (CSPRNG). The secureRandom.nextBytes(clientRandom) call fills the clientRandom array with unpredictable random bytes.
+
+After generating the random bytes, we set the generated random value in the session’s security parameters by calling session.getSecurityParameters().setClientRandom(clientRandom). This ensures that the client’s random value is unpredictable and unique for each DTLS handshake, strengthening the cryptographic properties of the protocol.
+
+For non-DTLS sessions, the repair still uses the legacy call generateClientRandom(session) because the original behavior was not considered vulnerable in that context. If generateClientRandom fails (returns a negative error code), the code clears the extdata buffer and returns the error value.
+
+By replacing the fallback of using constant (zero) bytes with a call to a secure random number generator, the repair eliminates the security risk of predictable client random values. This properly upholds the security properties required by the DTLS protocol by ensuring that each handshake includes genuine randomness, which is vital for preventing various types of attacks (e.g., replay attacks or cryptographic key derivation attacks).
+
+In summary, the repair:
+1. Checks the handshake state and session type.
+2. Uses java.security.SecureRandom to generate a cryptographically secure random value for DTLS client random.
+3. Sets this random value into the session instead of using a constant value.
+4. Retains the original flow for non-DTLS sessions ensuring the patch is applied specifically to DTLS.
+
+This targeted fix addresses the vulnerability by strengthening the randomness in DTLS handshakes, thereby maintaining the integrity of the security protocol.

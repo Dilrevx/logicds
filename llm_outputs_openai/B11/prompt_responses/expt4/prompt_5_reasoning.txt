@@ -1,0 +1,13 @@
+The repair adds an extra verification step when processing the OCSP response that contains the NoCheck extension. Here’s how it works:
+
+1. In the original code, if the certificate had the NoCheck extension (indicated by cert->ocspNoCheckSet) and the OCSP verification was happening (VERIFY_OCSP), the code simply disabled further verification by setting verify to NO_VERIFY. This “shortcut” could allow a response for an unrelated certificate—which shouldn’t have been trusted—to be accepted.
+
+2. In the repaired code, when processing extensions under HAVE_OCSP, the code now checks not only whether cert->ocspNoCheckSet is set but also whether the certificate is truly part of the chain. The repair inspects the issuer hash from the certificate and compares it with the subject name hash of the supposed CA (via XMEMCMP(cert->issuerHash, cert->ca->subjectNameHash, KEYID_SIZE)). 
+
+3. If the CA is not already established (i.e. cert->ca is NULL) or the hash comparison fails, it means the certificate in question is not tied to the expected chain. In that case, the repair logs a message and returns an error (ASN_OCSP_NOCHAIN_E) rather than disabling verification. This prevents an attacker from leveraging the NoCheck extension on a rogue certificate to bypass critical OCSP checks.
+
+4. Only when the certificate is confirmed as related to the chain (i.e. the correct CA is already associated and the issuer hashes match) does the code disable further verification by setting verify to NO_VERIFY.
+
+5. The rest of the parsing and verification logic remains intact, ensuring that if the certificate does belong to the chain, subsequent steps like signature confirmation and name constraint checks execute as planned.
+
+In summary, the repair ensures that the NoCheck extension does not indiscriminately disable OCSP verification for any certificate. It verifies that the certificate is actually linked to the chain before allowing the bypass. This added check effectively fixes the vulnerability by not allowing a certificate with no relation to the expected chain to bypass OCSP validations simply because it presents a NoCheck extension.

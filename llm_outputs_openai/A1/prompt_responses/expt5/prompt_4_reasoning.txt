@@ -1,0 +1,15 @@
+The repair begins by preserving the original behavior regarding padding. If the context was previously configured to disable padding, the code reasserts that by calling EVP_CIPHER_CTX_set_padding(ctx, 0). This ensures a consistent behavior when no padding is requested.
+
+The main change is wrapped within a preprocessor conditional that excludes FIPS mode (i.e., #ifndef FIPS_MODULE). This segmentation is crucial because FIPS-approved code often relies on a particular handling of parameters; therefore, the additional parameter processing is only applied in non-FIPS builds.
+
+Within the non-FIPS section, the repair proactively processes the key and IV length parameters before the cipher initialization. The code checks if encryption is enabled (enc is true) and if the params pointer is not NULL. It then sets up a temporary array (local_params) with space for up to two parameters. 
+
+The repair searches for a parameter specifying the key length using OSSL_PARAM_locate_const with the identifier OSSL_CIPHER_PARAM_KEYLEN. If this parameter is found, it’s stored in the temporary local_params array. Next, it looks for the IV length parameter using OSSL_CIPHER_PARAM_IVLEN. If that parameter is not found, the code also checks for an alternative identifier (OSSL_CIPHER_PARAM_AEAD_IVLEN) used in some AEAD cipher modes. If either IV length parameter is found, it is similarly copied to the temporary array.
+
+After gathering these parameters, the repair calls EVP_CIPHER_CTX_set_params(ctx, local_params) to update the cipher context with the correct key and IV lengths immediately. By doing this before calling the encryption initialization routine, it ensures that the cipher context has the appropriate settings for key and IV lengths from the very start. 
+
+If setting the parameters fails (for example, if the lengths are invalid), the code reports an error with ERR_raise and returns 0, halting the initialization to prevent any further use of an improperly configured cipher context.
+
+Finally, with the lengths correctly applied early in the process, the code proceeds to check if the cipher-specific encryption initialization function (ctx->cipher->einit) is present and then calls it, passing along the key, IV, and the full params structure as originally provided. This guarantees that any later operations rely on a securely and correctly configured context, eliminating the risk of truncation or overrun vulnerabilities that might have compromised the uniqueness (and hence confidentiality) of the IV.
+
+In summary, the repair preemptively sets the key and IV lengths, ensuring that they’re correct before the cipher’s core initialization happens. This change directly mitigates the vulnerability by avoiding any late parameter adjustments that could otherwise lead to security issues.

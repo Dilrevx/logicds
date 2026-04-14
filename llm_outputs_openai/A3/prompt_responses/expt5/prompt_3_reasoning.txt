@@ -1,0 +1,13 @@
+The repair adds a check to ensure that if the custom cipher was created with an undefined NID (NID_undef), the code does not let it fall back to the provider-supplied NULL cipher. Here’s the breakdown:
+
+1. In the original code, the context was switching to a “legacy” mode if any of the engine, temporary implementation (tmpimpl), or implementation (impl) pointers were non-NULL. This process could inadvertently allow a custom cipher initialized with NID_undef—which is supposed to be invalid—to map to the NULL cipher provided by OpenSSL. Since the NULL cipher doesn’t perform any encryption, this vulnerability would expose plaintext output as ciphertext.
+
+2. The repair introduces a new if-condition right inside the block where legacy code execution is triggered. This condition checks if ctx->cipher is not NULL and whether its NID (Numerical Identifier) is NID_undef. OpenSSL provides a function (EVP_CIPHER_nid) to retrieve the NID from a cipher. If the cipher is indeed created with NID_undef, this indicates that an invalid custom cipher is being used.
+
+3. Upon detecting a cipher with NID_undef, the repair code calls ERR_raise with an appropriate error code (here using EVP_R_INVALID_CIPHER for illustration) to report this condition. Then, it jumps to the error-handling section using goto err. This prevents the subsequent code from freeing the fetched cipher and going to the legacy section.
+
+4. If the cipher is valid (i.e., not created with NID_undef), the code continues with the original behavior: it cleans up by setting the cipher pointer appropriately, freeing the fetched cipher, and then going to the legacy section.
+
+By inserting this check, the repair ensures that an invalid custom cipher does not unintentionally cause the initialization routines to use a fallback NULL cipher from the default provider. In turn, this eliminates the vulnerability where plaintext could be output as ciphertext, as it no longer permits a misconfiguration or legacy mismatch to be exploited.
+
+In summary, the repair stops the misuse of the fallback mechanism by verifying the integrity of the custom cipher identifier. If it’s found to be undefined (an indication of an improperly created cipher), the procedure terminates the initialization with an error, thereby preserving the expected security properties.

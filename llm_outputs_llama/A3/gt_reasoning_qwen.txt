@@ -1,0 +1,13 @@
+The vulnerability described arises from OpenSSL's handling of custom ciphers created through the `EVP_CIPHER_meth_new()` function. In specific versions (3.0.0 to 3.0.5), OpenSSL incorrectly attempts to find an equivalent cipher from available providers when initializing encryption or decryption with a custom cipher. If an incorrect NID (Numerical Identifier), specifically `NID_undef`, is provided, OpenSSL mistakenly matches and uses the NULL cipher, which essentially does no encryption or decryption, thereby exposing plaintext.
+
+To address this issue, the repair introduces additional checks to ensure that custom ciphers, particularly those created via `EVP_CIPHER_meth_new()`, are handled correctly. The core of the repair involves modifying the condition under which the code proceeds to the 'legacy' method of handling ciphers. 
+
+In the original buggy code, the decision to go to the 'legacy' method is based on whether the context (`ctx`) is associated with an engine, a temporary implementation (`tmpimpl`), or a standard implementation (`impl`). These conditions help determine if the cipher should be fetched from a provider or handled using the legacy method.
+
+The repair enhances this logic by adding two new conditions:
+1. **Check if the `cipher` is not null and its origin is `EVP_ORIG_METH`:** This ensures that if a cipher is explicitly provided and it originates from a method created by `EVP_CIPHER_meth_new()`, the legacy path is taken. This is crucial because such ciphers need special handling to avoid being mistakenly matched with the NULL cipher.
+2. **Check if the `cipher` is null but the current cipher in the context (`ctx->cipher`) is not null and its origin is `EVP_ORIG_METH`:** This condition caters to scenarios where the `cipher` parameter might be null, but the context still holds a reference to a custom cipher created via `EVP_CIPHER_meth_new()`. This ensures that even if the `cipher` parameter is not directly provided, the context's cipher is still treated as a custom cipher requiring legacy handling.
+
+By incorporating these additional checks, the repair ensures that custom ciphers, regardless of how they are passed into the initialization functions, are correctly identified and processed using the legacy method. This prevents the incorrect fetching and usage of the NULL cipher, thus mitigating the vulnerability and ensuring proper encryption and decryption operations.
+
+In essence, the repair strengthens the condition under which OpenSSL opts for the legacy method of handling ciphers, specifically targeting custom ciphers created through the legacy API, thereby safeguarding against the misuse of the NULL cipher due to improper NID handling.

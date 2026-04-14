@@ -1,0 +1,38 @@
+To address the described vulnerability, we need to ensure that when `X509_verify_cert()` returns a negative value indicating an internal error, it is handled appropriately. The issue arises because the current code does not differentiate between a verification failure and an internal error. Instead, both scenarios might lead to the same handling, which can confuse the calling functions like `SSL_connect()` or `SSL_do_handshake()`.
+
+The solution involves checking the return value of `X509_verify_cert()` and handling internal errors separately. If an internal error occurs, the application should handle it gracefully, possibly by logging the error and terminating the connection securely rather than returning a misleading `SSL_ERROR_WANT_RETRY_VERIFY`.
+
+Here's a revised version of the code snippet:
+
+```c
+if (s.ctx.app_verify_callback != NULL) {
+    i = s.ctx.app_verify_callback(ctxStore, s.ctx.app_verify_arg);
+} else {
+    i = X509_STORE_CTX_verify_cert(ctxStore);
+}
+
+// Check for internal error in X509_verify_cert()
+if (i < 0) {
+    // Log the error for debugging purposes
+    ERR_print_errors_fp(stderr); // Or use a more sophisticated logging mechanism
+
+    // Handle the internal error appropriately
+    // For example, you might want to terminate the connection securely
+    // Here, we'll assume there's a function to handle this
+    handle_internal_error(s);
+
+    // Return a specific error code or handle the error as needed
+    // For demonstration, let's assume we're setting an error state in the SSL object
+    SSL_set_error(&s, SSL_ERROR_SSL); // Or another appropriate error code
+    i = -1; // Ensure the caller knows something went wrong
+}
+```
+
+### Explanation:
+1. **Callback Check**: The code first checks if an application-specific verification callback is set. If so, it uses that callback to verify the certificate.
+2. **Internal Error Handling**: After the verification attempt, the code checks if `i` is less than 0, which indicates an internal error in `X509_verify_cert()`.
+3. **Error Logging**: It logs the error using OpenSSL's error printing function (`ERR_print_errors_fp`). In a production environment, you would replace this with a more robust logging mechanism.
+4. **Error Handling**: The code then calls a hypothetical `handle_internal_error()` function to handle the internal error. This could involve closing the connection or other cleanup actions.
+5. **Return Value**: Finally, the code sets an appropriate error state in the SSL object and ensures that the caller understands an error occurred by setting `i` to -1.
+
+This approach ensures that internal errors are handled separately from verification failures, preventing the application from entering an undefined state due to an unexpected `SSL_ERROR_WANT_RETRY_VERIFY` error.

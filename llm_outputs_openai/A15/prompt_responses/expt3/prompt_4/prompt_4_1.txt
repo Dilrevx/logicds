@@ -1,0 +1,38 @@
+Below is an example fix. In our patched version we now require that a proper (and explicitly‐completed) Phase 2 run is present before accepting a success result. In other words, if the “success” was received without a completed Phase 2 exchange (or without certificate validation if TLS verification is enabled), then the authentication attempt is rejected.
+
+For example, suppose that the EAP/PEAP state machine uses a flag (here called phase2_success) that is set only when Phase 2 authentication has completed successfully. The original code accepted any EAP_TLV_RESULT_SUCCESS result—even one sent by an attacker to skip Phase 2. The repair adds a check that ignores a “success” result unless Phase 2 was really completed. (In a full implementation this flag could, for example, be set only after the cryptographic validation of Phase 2 data.)
+
+Below is the patched snippet:
+
+--------------------------------------------------
+  if (status == EAP_TLV_RESULT_SUCCESS) {
+    /* Check that Phase 2 was properly executed. If not,
+     * then ignore the “success” result, because accepting
+     * it would allow an attacker to bypass Phase 2.
+     */
+    if (!phase2_success) {
+      wpa_printf(MSG_ERROR,
+       "EAP-TLV: Received Success TLV but Phase 2 has not completed");
+      resp_status = EAP_TLV_RESULT_FAILURE;
+      ret->decision = DECISION_FAIL;
+    } else {
+      wpa_printf(MSG_INFO,
+       "EAP-TLV: TLV Result - Success - EAP-TLV/Phase2 Completed");
+      if (force_failure) {
+        wpa_printf(MSG_INFO,
+         "EAP-TLV: Earlier failure - force failed Phase 2");
+        resp_status = EAP_TLV_RESULT_FAILURE;
+        ret->decision = DECISION_FAIL;
+      } else {
+        resp_status = EAP_TLV_RESULT_SUCCESS;
+        ret->decision = DECISION_UNCOND_SUCC;
+      }
+    }
+  } else if (status == EAP_TLV_RESULT_FAILURE) {
+    …
+  }
+--------------------------------------------------
+
+In this example the new condition “if (!phase2_success)” ensures that the EAP_TLV_RESULT_SUCCESS packet is only accepted if a complete and validated Phase 2 exchange has been performed. In a real-world fix you would also enforce proper TLS certificate validation (or at least warn the user when it is disabled) so that an attacker cannot abuse the “no certificate verification” configuration option.
+
+This repair prevents attackers from skipping Phase 2 by sending a “Success” packet during Phase 1.

@@ -1,0 +1,57 @@
+The repair provided targets a specific vulnerability in the `ssl3_get_cert_verify` function within the OpenSSL library, which handles the verification of the `CertificateVerify` message during a TLS handshake. This function is crucial for ensuring the integrity and authenticity of the client's certificate, especially when client authentication is required.
+
+### Vulnerability Overview
+
+The original code contained a flaw where it did not enforce the presence of a `CertificateVerify` message when the client's certificate was issued by a Certification Authority (CA) that supports Diffie-Hellman (DH). In a secure TLS handshake, when a server requests client authentication, the client must send a `CertificateVerify` message to prove possession of the private key corresponding to its public key in the certificate. Failing to require this message can allow an attacker to bypass authentication, gaining unauthorized access without knowledge of the client's private key.
+
+### Analysis of the Code
+
+The problematic section of the code is where the function checks if the received message type is `SSL3_MT_CERTIFICATE_VERIFY`. If the message type does not match, the function proceeds under certain conditions:
+
+```c
+if (s->s3->tmp.message_type != SSL3_MT_CERTIFICATE_VERIFY)
+{
+    s->s3->tmp.reuse_message=1;
+    if ((peer != NULL) && (type & EVP_PKT_SIGN))
+    {
+        al=SSL_AD_UNEXPECTED_MESSAGE;
+        SSLerr(SSL_F_SSL3_GET_CERT_VERIFY,SSL_R_MISSING_VERIFY_MESSAGE);
+        goto f_err;
+    }
+    ret=1;
+    goto end;
+}
+```
+
+This logic is flawed because it allows the handshake to continue even if the `CertificateVerify` message is missing, as long as the peer certificate (`peer`) is present and capable of signing (`EVP_PKT_SIGN`). This means that if a client sends a certificate but omits the `CertificateVerify` message, the server may still accept the handshake, leading to a security vulnerability.
+
+### Repair Explanation
+
+To address this vulnerability, the repair modifies the condition to strictly enforce the presence of the `CertificateVerify` message whenever the client's certificate is a signing certificate. The key change is in the following lines:
+
+```c
+if (s->s3->tmp.message_type != SSL3_MT_CERTIFICATE_VERIFY)
+{
+    if ((peer != NULL) && (type & EVP_PKT_SIGN))
+    {
+        // Enforce CertificateVerify message requirement for signing certificates
+        SSLerr(SSL_F_SSL3_GET_CERT_VERIFY,SSL_R_MISSING_VERIFY_MESSAGE);
+        al=SSL_AD_UNEXPECTED_MESSAGE;
+        goto f_err;
+    }
+    ret=1;
+    goto end;
+}
+```
+
+#### Key Changes
+
+1. **Enforcement of `CertificateVerify`:** The condition `(peer != NULL) && (type & EVP_PKT_SIGN)` checks if the client has sent a certificate (`peer != NULL`) that can sign (`EVP_PKT_SIGN`). If both conditions are true, the server should expect a `CertificateVerify` message. If this message is not received, the server should terminate the handshake with an error (`SSL_R_MISSING_VERIFY_MESSAGE`).
+
+2. **Error Handling:** The `SSLerr` function is used to log the error, and `goto f_err` ensures that the function will send a fatal alert to the client and terminate the handshake.
+
+3. **Maintaining Original Logic:** For non-signing certificates or when no certificate is present, the function continues as before, allowing the handshake to proceed without requiring a `CertificateVerify` message.
+
+### Conclusion
+
+By enforcing the presence of the `CertificateVerify` message for signing certificates, the repair ensures that the server properly verifies the client's identity during the TLS handshake. This change aligns with the security requirements of TLS protocols, preventing potential attacks where an attacker could bypass client authentication by omitting the necessary verification step. The modification is backward-compatible with existing code and maintains the integrity of the TLS handshake process.

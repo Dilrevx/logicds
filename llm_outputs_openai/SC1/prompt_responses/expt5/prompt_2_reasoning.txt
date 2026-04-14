@@ -1,0 +1,14 @@
+The repair works by checking if the verification function for certificates (X509_STORE_CTX.verify_cert) returns a negative value. A negative result indicates an internal error during certificate verification, such as out of memory. In the original code, a negative value was directly assigned to the variable i and later interpreted by the SSL_get_error() function. This caused the unexpected SSL_ERROR_WANT_RETRY_VERIFY return value, misleading applications that did not expect it because they hadn’t set up a custom verification callback.
+
+In the repair, after calling X509_STORE_CTX.verify_cert, the code adds a check:
+
+  if (i < 0) { i = 0; }
+
+This check converts any negative value (i.e., any internal error) to 0, which represents “verification failed” rather than an internal error. Now the internal error is uniformly treated as a verification failure, avoiding the erroneous propagation of the special SSL_ERROR_WANT_RETRY_VERIFY value.
+
+Here’s how it fixes the vulnerability:
+1. It prevents an internal error (a negative return value) from being misinterpreted later in the SSL/TLS handshake. Applications using SSL/TLS expect only the SSL_ERROR_WANT_RETRY_VERIFY error if they provided a custom certificate verification callback. With this repair, most applications, which rely on the default behavior, will see a simple failure for a certificate that encounters an internal error.
+2. By standardizing the error as a failed verification (i = 0), it avoids an unexpected control flow in SSL_connect() or SSL_do_handshake() and subsequent error handling via SSL_get_error(). Unhandled negative values could have led to improper error recovery.
+3. The repair ensures that subsequent operations treat the internal error as a certificate verification failure rather than an indeterminate state. This makes the SSL/TLS error-handling logic more robust and predictable.
+
+In summary, the fix prevents a scenario where negative error codes from X509_verify_cert() propagate into higher-level functions, which could cause bugs in applications that aren’t expecting these negative values. It standardizes error handling by converting any negative result to a non-negative failure value, thereby maintaining the correct contract for SSL functions and ensuring that errors are handled consistently.

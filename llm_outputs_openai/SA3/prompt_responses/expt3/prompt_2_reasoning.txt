@@ -1,0 +1,17 @@
+The repair adds an additional condition to ensure that the legacy handling is invoked only when the cipher comes from a legacy method. Originally, if any of the engine or implementation specific conditions were met, the code would unconditionally clear certain fields and invoke the legacy handling. This could lead to a situation where, if a custom cipher with an undefined identifier (NID_undef) was used, the caller might inadvertently end up with the provider’s NULL cipher—effectively leaving the plaintext unchanged.
+
+Here’s how the repair works step-by-step:
+
+1. The condition now combines two types of checks using the logical AND (&&):  
+   - The first part remains the same as before—that is, it verifies if an engine is in use or any engine-specific implementation details are non-null.
+   - The second part is new. It explicitly checks if the cipher being processed is a “legacy” cipher. This is done in one of two ways:
+     • If the cipher passed into the function is non-null and has its legacy flag set (using a method like isLegacy()), it must be a legacy cipher.
+     • Alternatively, if the passed cipher is null, but there is an existing cipher in the context (ctx.getCipher()) that is marked as legacy, it still qualifies as a legacy cipher.
+
+2. These additional checks ensure that the code only takes the branch for legacy handling when it is absolutely clear that the cipher was intended to be a legacy cipher. This prevents custom ciphers that might be misconfigured (for example, with NID_undef which would cause them to be inadvertently replaced with the NULL cipher) from being mistakenly re-mapped by the provider fetching function.
+
+3. By enforcing the extra condition, the repair guarantees that any cipher which isn’t explicitly determined as a legacy cipher will not trigger the legacy handling branch. This avoids the fallback to the provider’s version (and the possibility of ending up with a NULL cipher) in scenarios where the application hasn’t clearly indicated that a legacy cipher is in use.
+
+4. Finally, once the branch is entered, the code clears the current cipher from the context (if it matches a fetched cipher), frees the fetched cipher, and resets state variables before continuing. This cleanup step ensures no insecure cipher state lingers.
+
+In summary, the modification ensures that legacy handling is exclusively used when the cipher’s origin is definitively legacy. This prevents situations where a cipher with an undefined unique identifier might be misinterpreted and replaced by the provider’s insecure NULL cipher. Thus, the repair closes the vulnerability by enforcing clear separation between legacy ciphers and those that can safely be substituted with provider ciphers.

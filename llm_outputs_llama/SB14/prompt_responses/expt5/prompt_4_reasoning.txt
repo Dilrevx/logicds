@@ -1,0 +1,39 @@
+The provided repair addresses a vulnerability in the given code snippet, which allowed specifically crafted TCP streams to cause connections to BIND to remain in CLOSE_WAIT status for an indefinite period, even after the client had terminated the connection. This issue was caused by the fact that the `handle_detach_cb` function was not being called in all scenarios, leading to the connection remaining in CLOSE_WAIT status.
+
+To understand the reasoning behind the repair, let's break down the original code and the changes made.
+
+Original Code:
+```c
+if (sock.tid == NodeManager.nmTid()) {
+    NodeManager.nmhandle_detach_cb(handle);
+} else {
+    NetiEventDetach event =
+            NodeManager.getNetiEventDetach(sock.mgr, sock);
+    event.handle = handle;
+    EventPasser.passEvent(event);
+    NodeManager.enqueueEvent(
+            sock.mgr.workers[sock.tid], event);
+}
+```
+In the original code, the `handle_detach_cb` function is only called when the `sock.tid` matches the `NodeManager's` `nmTid`. However, this condition does not account for cases where the `sock` has a close handle callback. As a result, the connection may remain in CLOSE_WAIT status indefinitely if the `sock.tid` does not match the `NodeManager's` `nmTid`, even if the client has terminated the connection.
+
+Repair:
+```c
+if (sock.tid == NodeManager.nmTid() || NodeManager.hasCloseHandleCallback(sock)) {
+    NodeManager.nmhandle_detach_cb(handle);
+} else {
+    NetiEventDetach event =
+            NodeManager.getNetiEventDetach(sock.mgr, sock);
+    event.handle = handle;
+    EventPasser.passEvent(event);
+    NodeManager.enqueueEvent(
+            sock.mgr.workers[sock.tid], event);
+}
+```
+The repair adds a new condition to the `if` statement: `NodeManager.hasCloseHandleCallback(sock)`. This condition checks if the `NodeManager` has a close handle callback for the `sock`. If this condition is true, the `handle_detach_cb` function is called, ensuring that the connection is properly closed.
+
+By adding this new condition, the repair ensures that the `handle_detach_cb` function is called in all scenarios where it is necessary, including cases where the `sock` has a close handle callback. This prevents the connection from remaining in CLOSE_WAIT status indefinitely.
+
+The rest of the code remains the same, as it was not contributing to the vulnerability. The `NetiEventDetach` event is still created and passed to the `EventPasser`, and the event is still enqueued to the `NodeManager's` worker. These actions are necessary for proper event handling and are not related to the vulnerability.
+
+In summary, the repair addresses the vulnerability by adding a new condition to the `if` statement, ensuring that the `handle_detach_cb` function is called in all scenarios where it is necessary. This prevents the connection from remaining in CLOSE_WAIT status indefinitely, fixing the vulnerability.

@@ -1,0 +1,27 @@
+Below is one way to correct the vulnerability. The issue is that the code compares the OCSP response’s serial number against the certificate’s serial number using the allocated buffer size (cserial.size) rather than the actual length returned by gnutls_x509_crt_get_serial. If trailing bytes are present (left over from gnutls_malloc), an attacker might succeed in forging a match. To fix this, capture the real certificate serial number length (stored in variable “t” by the API) and use that value both to check the OCSP serial’s length and for the memcmp. For example:
+
+------------------------
+/* Get the certificate's serial number; 't' receives its true length */
+ret = gnutls_x509_crt_get_serial(crt, cserial.data, &t);
+if (ret < 0) {
+	gnutls_assert();
+	goto cleanup;
+}
+
+/* Verify that the OCSP response's serial number has exactly the same length
+   as the certificate serial and that it matches exactly */
+if (rserial.size != t ||
+    memcmp(cserial.data, rserial.data, t) != 0) {
+	ret = GNUTLS_E_OCSP_RESPONSE_ERROR;
+	gnutls_assert();
+	goto cleanup;
+}
+------------------------
+
+Explanation:
+
+1. gnutls_x509_crt_get_serial() writes the certificate’s serial into cserial.data and returns its exact length in “t”.  
+2. The code then compares rserial.size (the length of the OCSP response’s serial) against t, ensuring that there are no extra trailing bytes.  
+3. Finally, memcmp() is performed using t bytes.
+
+This change ensures that any spurious trailing bytes (from a previous malloc, for example) in the OCSP response serial will be detected, closing the vulnerability.

@@ -1,0 +1,27 @@
+The repair adds an extra check that validates whether the client’s ClientHello contained either a valid pre-shared key (PSK) or a key share extension. Here’s how the changes address the vulnerability:
+
+1. Checking for the Key Share Extension:
+   The vulnerability arose because when neither a PSK nor a key share extension is provided, a default predictable IKM (Input Key Material) may be used. In the revised code, we explicitly search for both the PSK extension (already present in the original) and the key share extension (newly added). The key share extension is obtained via:
+
+  TLSX* extKeyShare = TLSX_Find(ssl->extensions, TLSX_KEY_SHARE);
+
+2. Validating Extension Presence:
+   After attempting to retrieve the PSK and key share extensions, the code checks if both are absent. If psk is NULL (i.e., there is no valid pre-shared key) and extKeyShare is also NULL (i.e., the key share extension is missing), the repair aborts the handshake:
+
+  if (psk == NULL && extKeyShare == NULL) {
+    return SSL_FATAL_ERROR_MISSING_EXTENSION;
+  }
+
+   This enforcement aligns with the specification requirements for TLS 1.3 ClientHello messages. By requiring that at least one of these critical parameters must be provided, the repair ensures that a default or predictable IKM is never used.
+
+3. Handling the PSK Option:
+   If a PSK is present, the code proceeds to use SetupPskKey (if SetupPskKey returns 0, the process continues normally). This ensures that when a valid PSK is negotiated, the proper cryptographic setup is used for generating the master secret.
+
+4. Preventing Insecure Session Establishment:
+   When neither a PSK nor a key share is provided, the repair forces the connection to be aborted (by returning a missing extension error). This prevents insecure sessions that could otherwise use a predictable IKM value. By doing so, it mitigates the risk that an attacker might combine a malicious server with a client missing these mandatory extensions to gain access to future session keys.
+
+Overall, the modifications make sure that:
+• If the client neglects to include a mandatory key share in addition to a PSK, the connection does not fall back to using an insecure default value.
+• The handshake is aborted immediately when both mechanisms aren’t available, ensuring that only fully conforming and secure ClientHello messages are processed.
+
+In summary, the repair leverages explicit checking of both the pre-shared key and key share extensions, aborting the handshake if neither is provided. This aligns with the TLS 1.3 specification requirements and closes the vulnerability by ensuring that the session master secret is derived only from properly negotiated, non-predictable values.

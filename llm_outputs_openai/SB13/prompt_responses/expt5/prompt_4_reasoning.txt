@@ -1,0 +1,19 @@
+The repair introduces an explicit check for the message’s signature verification before any other TSIG error examinations. This is done by verifying a newly introduced (or assumed) flag—msg.signature_verified—which indicates that the DNS message underwent a proper cryptographic signature check. Here’s a detailed breakdown of the changes:
+
+1. Signature Verification Check:
+   The code now starts with:
+  if (!msg.signature_verified) {
+   result = Commons.DNS_R_TSIGVERIFYFAILURE;
+  }
+   This step ensures that unless the message’s cryptographic signature has been validated, the result immediately flags the message as a verification failure. This is crucial because an attacker might try to manipulate error codes or other parts of the packet during transmission. Only a message that has been explicitly verified as having a valid signature can be trusted further.
+
+2. TSIG Status Check:
+   The next condition checks if the message’s TSIG status (msg.tsigstatus) is not equal to the expected “no error” code. This check is done after ensuring that the signature was indeed verified. It provides an extra layer of safeguarding: even if the signature verification flag is set, any residual TSIG status errors lead to a failure, thereby preventing processing of messages with underlying authentication issues.
+
+3. TSIG Error Field Check:
+   Following the TSIG status check, the code verifies the TSIG error field (tsig.error) ensuring its value is “no error.” By separating this check from the TSIG status verification, the repair code distinguishes between a failure in confirming that the signature is present and valid (which triggers the generic verification failure result) and a case where only certain TSIG-related errors occur. This granular error reporting helps in more accurately pinpointing the nature of the failure.
+
+4. Success Path:
+   Only when all three conditions—the signature flag, TSIG status, and TSIG error field—pass without error (i.e., indicating no error in any of these validations) does the code return a success value. This layered decision-making guarantees that every aspect of the TSIG authentication has been adequately validated, leaving no room for bypassing via crafty or manipulated packets.
+
+By restructuring the logic in this way, the repair prevents the scenario where an attacker could leverage a valid TSIG key name to bypass authentication. Without ensuring the actual signature verification took place, an attacker might have exploited the original error-checking sequence. Now, with the explicit check for msg.signature_verified, the DNS server only proceeds when concrete evidence of cryptographic signature validation is present. This combined with the subsequent checks for message integrity and TSIG-specific errors forms a robust defense against potential malicious packet manipulations, especially in the context of sensitive operations like AXFR requests or handling NOTIFY packets.

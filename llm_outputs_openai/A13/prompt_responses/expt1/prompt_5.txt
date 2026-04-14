@@ -1,0 +1,64 @@
+<repair>
+	result = dns_zt_find(client->view->zonetable, question_name, 0, NULL, &zone);
+	if (result != ISC_R_SUCCESS) {
+		/*
+		 * Normal zone table did not have a match.
+		 * Try the DLZ database.
+		 * Temporary: only searching the first DLZ database.
+		 */
+		if (! ISC_LIST_EMPTY(client->view->dlz_searched)) {
+			result = dns_dlzallowzonexfr(client->view, question_name,
+						     &client->peeraddr, &db);
+			if (result == ISC_R_NOPERM) {
+				char _buf1[DNS_NAME_FORMATSIZE];
+				char _buf2[DNS_RDATACLASS_FORMATSIZE];
+
+				result = DNS_R_REFUSED;
+				dns_name_format(question_name, _buf1, sizeof(_buf1));
+				dns_rdataclass_format(question_class, _buf2, sizeof(_buf2));
+				ns_client_log(client, DNS_LOGCATEGORY_SECURITY,
+					      NS_LOGMODULE_XFER_OUT, ISC_LOG_ERROR,
+					      "zone transfer '%s/%s' denied", _buf1, _buf2);
+				goto failure;
+			}
+			if (result != ISC_R_SUCCESS)
+				FAILQ(DNS_R_NOTAUTH, "non-authoritative zone",
+				      question_name, question_class);
+			is_dlz = true;
+		} else {
+			/*
+			 * Not in normal zone table and not a DLZ zone,
+			 * so we are not authoritative.
+			 */
+			FAILQ(DNS_R_NOTAUTH, "non-authoritative zone",
+			      question_name, question_class);
+		}
+	} else {
+		/* Zone table has a match.  Now check if it is implemented via DLZ.
+		 * Writable DLZ zones need an additional permission check via allowzonexfr.
+		 */
+		if (zone->type == dns_zone_dlz) {
+			result = dns_dlzallowzonexfr(client->view, question_name,
+						     &client->peeraddr, &db);
+			if (result == ISC_R_NOPERM) {
+				char _buf1[DNS_NAME_FORMATSIZE];
+				char _buf2[DNS_RDATACLASS_FORMATSIZE];
+
+				result = DNS_R_REFUSED;
+				dns_name_format(question_name, _buf1, sizeof(_buf1));
+				dns_rdataclass_format(question_class, _buf2, sizeof(_buf2));
+				ns_client_log(client, DNS_LOGCATEGORY_SECURITY,
+					      NS_LOGMODULE_XFER_OUT, ISC_LOG_ERROR,
+					      "zone transfer '%s/%s' denied", _buf1, _buf2);
+				goto failure;
+			}
+			if (result != ISC_R_SUCCESS)
+				FAILQ(DNS_R_NOTAUTH, "non-authoritative zone",
+				      question_name, question_class);
+			is_dlz = true;
+		}
+	}
+
+	/* --- Continue with the rest of the function --- */
+	/* ... (remaining code handling the transfer logic, streams, etc.) ... */
+</repair>

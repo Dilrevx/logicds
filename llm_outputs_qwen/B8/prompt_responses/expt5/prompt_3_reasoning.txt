@@ -1,0 +1,30 @@
+The provided repair addresses a critical vulnerability in the TLS 1.3 handshake process within the wolfSSL library. The original code snippet handles the processing of the `server_hello` message and checks for the presence of a `pre_shared_key` extension. However, it fails to enforce the requirement that a `key_share` extension must be present if a `pre_shared_key` is not negotiated, which can lead to the use of a predictable IKM (Input Key Material) value. This predictable IKM can compromise the security of the session, as it allows an attacker to potentially reconstruct the session master secret, leading to eavesdropping or tampering with the session's contents.
+
+### Vulnerability Analysis
+
+The vulnerability stems from the fact that the code does not verify the presence of the `key_share` extension when a `pre_shared_key` is not available. According to the TLS 1.3 specification, a `key_share` extension is mandatory for DHE (Diffie-Hellman Ephemeral) or ECDHE (Elliptic Curve Diffie-Hellman Ephemeral) key exchanges, which are common in TLS 1.3 handshakes. If a server does not receive a `key_share` extension, it should terminate the handshake with a `missing_extension` alert to prevent the use of a default, predictable IKM value.
+
+### Repair Explanation
+
+The repair involves adding a check for the presence of the `key_share` extension immediately after determining that no `pre_shared_key` was negotiated. Here’s how the repair works:
+
+1. **Check for `pre_shared_key` Extension:**
+   - The existing code already checks if a `pre_shared_key` extension is present and sets `ssl->options.pskNegotiated` accordingly.
+   - If no `pre_shared_key` is found (`ssl->options.pskNegotiated` remains `0`), the code proceeds to the next step.
+
+2. **Enforce Presence of `key_share` Extension:**
+   - After checking for the `pre_shared_key`, the repair introduces a new condition to verify the presence of a `key_share` extension.
+   - It uses `TLSX_Find` to search for the `key_share` extension in the list of extensions received from the server.
+   - If the `key_share` extension is not found (`keyShareExt == NULL`), the code sends a `missing_extension` alert to the server using `SendAlert(ssl, alert_fatal, missing_extension)` and returns `SSL_FATAL_ERROR` to terminate the handshake.
+
+3. **Termination of Handshake:**
+   - By sending a `missing_extension` alert and terminating the handshake, the client ensures that no further communication occurs without the necessary cryptographic material to establish a secure session.
+   - This prevents the use of a default, predictable IKM value, which would otherwise compromise the security of the session.
+
+### Benefits of the Repair
+
+- **Security Enhancement:** The repair enforces strict adherence to the TLS 1.3 specification, ensuring that all necessary cryptographic extensions are present before proceeding with the handshake.
+- **Protection Against Attacks:** By preventing the use of a predictable IKM, the repair mitigates the risk of session key reconstruction by attackers, safeguarding the confidentiality and integrity of the session.
+- **Compliance with Standards:** The repair aligns the implementation with the TLS 1.3 standards, improving overall compliance and reducing the risk of vulnerabilities due to non-compliant behavior.
+
+In summary, the repair addresses a significant security flaw by enforcing the presence of the `key_share` extension when a `pre_shared_key` is not negotiated. This ensures that the TLS 1.3 handshake remains secure and adheres to the established cryptographic standards, thereby protecting against potential attacks that could exploit the use of a predictable IKM value.

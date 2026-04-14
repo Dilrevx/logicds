@@ -1,0 +1,17 @@
+The original code only sent an error when both a non-null peer existed and a specific signature flag was set. This conditional check meant that if the signature flag wasn’t set – which could be the case for DH certificates – the function allowed the handshake to proceed even when the CertificateVerify message was absent. Attackers could exploit this loophole by using a DH certificate and omitting the CertificateVerify message, thus bypassing authentication.
+
+In the repaired code, the check has been simplified. Now, if the message type is not CertificateVerify and the peer is non-null, the error path is taken regardless of any signature flags. Here’s the breakdown of the repair:
+
+1. Checking Message Type:  
+   The function verifies if the received message type is not CertificateVerify. If it isn’t, the code marks the incoming message to be reused (via setting reuse_message), since it wasn’t what was expected.
+
+2. Unconditional Error on Missing CertificateVerify:  
+   Instead of checking for a flag (EVP_PKT_SIGN) along with peer’s existence, the repair only checks if the peer is non-null. This means that regardless of any signature flags or conditions, if there is an active peer connection, the absence of a CertificateVerify message is considered a violation of the protocol. 
+
+3. Handling the Error:  
+   Once the condition is met, the function logs an error (SSL_R_MISSING_VERIFY_MESSAGE) using the error logging mechanism and then sends a fatal alert with an unexpected message error code (SSL_AD_UNEXPECTED_MESSAGE) to the client. Finally, the handshake process is terminated.
+
+Why it fixes the vulnerability:  
+By removing the dependency on the signature flag, the repair prevents attackers from exploiting cases where a DH certificate might not have an EVP_PKT_SIGN flag set. With the new logic, any client that does not provide the required CertificateVerify message will be immediately rejected, regardless of certificate type or flags. This forces strict compliance with the protocol and ensures that every authenticated client has indeed sent a CertificateVerify message, which is vital for proving possession of the corresponding private key. In other words, the repair eradicates the loophole that allowed bypassing the CertificateVerify requirement when using DH certificates.
+
+In summary, the repair enforces the protocol requirement by unconditionally treating the absence of the CertificateVerify message as an error when a peer is present. This structural change in the condition check eliminates the potential for an attacker to exploit the security weakness, thereby enhancing the overall security of the handshake process.

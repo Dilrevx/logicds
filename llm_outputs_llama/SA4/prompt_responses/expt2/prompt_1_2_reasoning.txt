@@ -1,0 +1,48 @@
+The repair provided addresses the vulnerability in the OpenSSL 3.0 implementation of the RC4-MD5 ciphersuite. The vulnerability arises from the incorrect use of the AAD (Additional Authenticated Data) as the MAC (Message Authentication Code) key, making the MAC key predictable and allowing an attacker to perform a man-in-the-middle attack.
+
+The original buggy code snippet is:
+```c
+p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM.AEAD_TLS1_AAD);
+```
+This line of code locates the AAD parameter in the `params` structure and assigns it to the `p` pointer. However, this is where the vulnerability lies, as the AAD data is being used directly as the MAC key.
+
+The repair provided fixes this vulnerability by first locating the AAD parameter and then using it to derive a MAC key using the HMAC (Keyed-Hash Message Authentication Code) algorithm with MD5 as the underlying hash function. Here's a breakdown of the repair:
+
+1. `p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_TLS1_AAD);`
+
+   This line locates the AAD parameter in the `params` structure, similar to the original code. However, the constant `OSSL_CIPHER_PARAM_TLS1_AAD` is used instead of `OSSL_CIPHER_PARAM.AEAD_TLS1_AAD` to ensure that the correct AAD parameter is located.
+
+2. `if (p!= NULL && p->data_type == OSSL_PARAM_OCTET_STRING)`
+
+   This conditional statement checks if the located parameter `p` is not NULL and if its data type is an octet string. This is necessary to ensure that the AAD data can be processed correctly.
+
+3. `unsigned char *aad = p->data; size_t aad_len = p->data_size;`
+
+   These lines extract the AAD data and its length from the `p` parameter.
+
+4. `if (aad_len > 13) { aad_len = 13; }`
+
+   This line truncates the AAD data to a maximum length of 13 bytes, as required by the TLS protocol.
+
+5. `if (aad_len > 0) {... }`
+
+   This conditional statement checks if the AAD data length is greater than 0. If it is, the code inside the block is executed.
+
+6. Inside the block:
+   - `HMAC_CTX *hmac_ctx = HMAC_CTX_new();` creates a new HMAC context.
+   - `unsigned char md[EVP_MD_size(EVP_md5())];` declares a buffer to store the HMAC output.
+   - `HMAC_Init_ex(hmac_ctx, aad, aad_len, EVP_md5(), NULL);` initializes the HMAC context with the AAD data, MD5 as the hash function, and no key.
+   - `HMAC_Update(hmac_ctx, (const unsigned char *)"TLS", 3);` updates the HMAC context with the string "TLS".
+   - `HMAC_Final(hmac_ctx, md, NULL);` finalizes the HMAC computation and stores the result in the `md` buffer.
+   - `HMAC_CTX_free(hmac_ctx);` frees the HMAC context.
+   - The resulting HMAC output in the `md` buffer is then used as the MAC key.
+
+7. `p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_MAC_KEY);`
+
+   This line locates the MAC key parameter in the `params` structure.
+
+8. `if (p!= NULL) { p->data = md; p->data_size = EVP_MD_size(EVP_md5()); }`
+
+   If the MAC key parameter is found, its data is set to the HMAC output in the `md` buffer, and its size is set to the size of the MD5 hash output.
+
+By using the HMAC algorithm to derive a MAC key from the AAD data, the repair ensures that the MAC key is no longer predictable and the vulnerability is fixed.

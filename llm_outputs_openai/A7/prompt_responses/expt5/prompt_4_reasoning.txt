@@ -1,0 +1,19 @@
+The repair tackles the vulnerability by ensuring that the bookkeeping for untrusted certificates stays synchronized with the actual contents of the certificate chain. Here’s a step-by-step explanation:
+
+1. The original code removed certificates from the chain when an alternate valid chain was detected. However, it simultaneously decremented a counter (ctx->last_untrusted) for each certificate removal. This manual adjustment risked the counter falling out of sync with the actual number of certificates left in the chain, potentially allowing a leaf certificate to be erroneously treated as having the trust attributes of a certificate authority (CA).
+
+2. In the updated code, the logic inside the "if (ok > 0)" block first frees the certificate (xtmp) that will be re-added later. It then enters a while loop to remove the certificates above a certain point in the chain. The key change here is that the loop no longer decrements the untrusted counter (ctx->last_untrusted) with each certificate removal. It simply pops the certificates off the chain and releases them.
+
+3. Once all unnecessary (excess) certificates are removed, the repair resets the untrusted certificate counter in one go by computing the current number of certificates on the certificate chain. This is done by calling sk_X509_num(ctx->chain) which returns the actual count of certificates still in the chain.
+
+4. By doing this, the counter is accurately updated to reflect the true state of the chain. This is crucial because subsequent verification logic may rely on this counter to determine whether a chain of trust is valid. An accurate counter ensures that no certificate is wrongly categorized with heightened privileges (e.g., spoofing a CA role).
+
+5. Finally, after resetting the counter, the flag (retry) is set to indicate that an alternate chain was found, and the loop breaks out of the current processing.
+
+In summary, the repair fixes the vulnerability by:
+
+• Eliminating the manual per-certificate decrement, which risked creating inconsistencies.
+• Resetting the untrusted certificate counter based on the actual chain length, ensuring the chain’s state accurately reflects the untrusted certificates it contains.
+• Preventing the potential scenario where a valid leaf certificate might falsely trigger an unintended trust validation, by ensuring that the certificate chain’s integrity is maintained.
+
+This approach directly addresses the security issue by making sure only the correct chain length—and therefore the right number of untrusted certificates—is used in certificate verifications, closing the door to the exploit where a certification authority role might be spoofed.

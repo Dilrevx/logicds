@@ -1,0 +1,21 @@
+The repair reorders the operations in the error-handling branch. In the original (buggy) code, when a packet fails SRTP unprotection due to replay-related errors (SRTP_ERR_REPLAY_OLD or SRTP_ERR_REPLAY_FAIL) and there is an outstanding probation (probation_cnt > 0), the code commented out would have stopped the SRTP session and restarted it before trying to reprocess the packet. However, the order of operations made it possible that the SRTP state was not valid when reattempting unprotection, thus exposing a vulnerability where replayed or malicious packets might not be properly rejected or processed at the incorrect transport state.
+
+The fixed code does the following:
+
+1. It first checks if probation is in effect and if the error indicates a replay issue. Only then does it attempt to recover the session by:
+  a. Gathering the current SRTP policies for transmit and receive.
+  b. Calling pjmedia_transport_srtp_stop(srtp) to correctly terminate the current session state. This ensures that any potentially compromised state is cleared.
+  c. Restarting the SRTP transport using pjmedia_transport_srtp_start(srtp, tx, rx). This reinitializes the SRTP context with a fresh state to prevent mishandling of packets based on previous session state.
+  d. If the restart is successful and the srtp bypass flag is not set, it reattempts the srtp_unprotect call. This brings the packet through the newly reinitialized security context.
+
+2. After these steps, the code continues to check whether the unprotected packet has been validated successfully (err set to PJ_SUCCESS). If so, and if there is a valid RTP callback (srtp.rtp_cb), the callback is invoked to further process the packet.
+
+The key improvements in the repair are as follows:
+
+• The order of stopping and starting the transport ensures that the SRTP session is safely reestablished before any packet is retried. This eliminates risks from processing packets with an inconsistent or corrupted state.
+ 
+• By rechecking the error after the restart, the code ensures that only properly processed packets are passed forward. This prevents attackers from exploiting replay attacks by reusing old session contexts.
+
+• The conditional check for a valid callback ensures that only when all criteria are met is the packet processed further, which avoids further mishandling of potentially malicious data.
+
+In summary, the repair ensures the secure reinitialization of the SRTP transport when a replay or related error is detected during a probation state. This prevents vulnerabilities associated with stale or inconsistent session states, ultimately providing a more robust defense against replay-based attacks.

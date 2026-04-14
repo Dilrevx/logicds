@@ -1,0 +1,15 @@
+The repair introduces a new local variable (verify_ret) that holds the actual result of X509_verify_cert() separately from the variable (ret) that is eventually returned by the function. In the original buggy code, when certificate verification failed, the return value was overwritten with an error code and subsequently used for both error reporting and signaling failure. This mixing could lead to confusion about the true status of the operation.
+
+Here’s how the fixed version improves the function:
+
+1. The function first calls X509_verify_cert() and stores its result in verify_ret. This call performs a series of checks on the certificate chain. If verify_ret is less than or equal to zero, it indicates a verification failure.
+
+2. Instead of transferring the error code directly into ret, the repair creates a new variable, err_code, which retrieves the specific error using X509_STORE_CTX_get_error(ctx). This extraction isolates the specific failure information from the overall result variable. The error string is then generated based on err_code via X509_verify_cert_error_string(err_code).
+
+3. The error message is raised by ERR_raise_data() using err_code, ensuring that the error logging is accurate and informative. This separation means the core result isn’t clobbered by error details; ret is set to 0 to indicate a verification failure without confusing it with a non-zero error code.
+
+4. By returning 0 on failure rather than an error code, the function now aligns more closely with expected behaviors where a return value of 0 signifies failure in the context of certificate verification. This avoids the contradictory situation where the command-line ocsp application might report a positive result while also logging error messages.
+
+5. Lastly, if the verification succeeds, ret is assigned the successful return value, and the certificate chain is copied (if requested) from the underlying store context. This avoids any unintended side-effects from overwriting or misinterpreting the variables.
+
+Overall, the repair maintains semantic consistency: verify_ret holds the core verification result, err_code holds the specific error detail, and ret is used solely to indicate overall success or failure. This improves clarity and reduces the risk of inadvertently misinterpreting error details as a successful operation, addressing the reported vulnerability where a failed verification with OCSP_NOCHECKS could be misrepresented as positive.

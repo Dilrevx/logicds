@@ -1,0 +1,72 @@
+To implement the repair as described, we need to make changes to the existing code, particularly focusing on the verification logic within the `mbedtls_x509_crt_verify` function or a similar function responsible for certificate verification. Below is a sample implementation of the proposed changes in C, assuming the use of the mbed TLS library:
+
+```c
+#include "mbedtls/x509.h"
+#include "mbedtls/oid.h"
+
+// Define the OID for Common Name
+#define MBEDTLS_OID_AT_CN MBEDTLS_OID_AT_CN
+
+// Helper function to check SAN entries
+static int x509_crt_check_san(const mbedtls_x509_crt *crt, const char *cn) {
+    const mbedtls_x509_sequence *cur = &crt->subject_alt_name;
+
+    while (cur != NULL) {
+        // Check if the type is DNS name (type 2)
+        if (cur->buf.tag == MBEDTLS_ASN1_UTF8_STRING && cur->buf.len > 0) {
+            // Compare the SAN entry with the expected CN
+            if (mbedtls_platform_memequal(cur->buf.p, cn, cur->buf.len) == 0 &&
+                strlen(cn) == cur->buf.len) {
+                return 0; // Match found
+            }
+        }
+        cur = cur->next;
+    }
+    return -1; // No match found
+}
+
+// Modified function to verify the certificate
+int mbedtls_x509_crt_verify_with_repair(
+    const mbedtls_x509_crt *crt,
+    const mbedtls_x509_crt *trust_ca,
+    const mbedtls_x509_crl *ca_crl,
+    const mbedtls_x509_crt_profile *profile,
+    const char *hostname,
+    uint32_t *flags,
+    int (*f_vrfy)(void *, mbedtls_x509_crt *, int, uint32_t *),
+    void *p_vrfy) {
+
+    // Existing code for other verifications...
+
+    // Check SAN extension if present
+    if (crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME) {
+        if (x509_crt_check_san(crt, hostname) == 0) {
+            return 0; // SAN match found, verification successful
+        }
+    }
+
+    // If SAN is not present or no match, fall back to CN check
+    const mbedtls_asn1_named_data *name = &crt->subject;
+    while (name != NULL) {
+        if (mbedtls_oid_cmp(MBEDTLS_OID_AT_CN, &name->oid) == 0) {
+            if (mbedtls_platform_memequal(name->val.p, hostname, name->val.len) == 0 &&
+                strlen(hostname) == name->val.len) {
+                return 0; // CN match found, verification successful
+            }
+        }
+        name = name->next;
+    }
+
+    // If no match found, set mismatch flag
+    *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+    return MBEDTLS_ERR_X509_CERT_VERIFY_FAILED;
+}
+```
+
+### Key Points in the Implementation:
+- **Helper Function `x509_crt_check_san`:** This function iterates through the SAN list and checks only the entries that are of type UTF8String (DNS names), ignoring other types like IP addresses.
+- **Conditional Checks:** The function first checks the SAN extension if present. If a match is found, it returns immediately, skipping further checks.
+- **Fallback to CN Check:** If the SAN extension is either not present or does not contain a matching DNS name, the function falls back to checking the CN in the Subject field.
+- **Setting Mismatch Flags:** If neither the SAN nor the CN matches the expected hostname, the function sets the `MBEDTLS_X509_BADCERT_CN_MISMATCH` flag and returns an error.
+
+This implementation ensures that the certificate verification process is secure and prevents the misuse of IP addresses in the SAN extension to impersonate domain names.

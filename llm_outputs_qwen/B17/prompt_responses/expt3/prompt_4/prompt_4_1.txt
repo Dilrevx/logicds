@@ -1,0 +1,73 @@
+To address the described vulnerability in the `tls_verify_crl` function, we need to ensure that the CRL entries are checked against both the subject and the issuer, not just the subject twice. The provided code snippet does not directly address this logic but rather focuses on retrieving CRLs based on the subject.
+
+However, to fix the vulnerability, we need to modify the logic where the CRL entries are actually verified against the certificate's subject and issuer. Below is an example of how you might adjust such a verification loop to ensure it checks both the subject and the issuer:
+
+```c
+#include <openssl/x509_vfy.h>
+
+int verify_crl_entry(X509_CRL *crl, X509 *cert) {
+    // Get the issuer name from the certificate
+    X509_NAME *issuer_name = X509_get_issuer_name(cert);
+    if (!issuer_name) return 0; // Error handling
+
+    // Get the subject name from the certificate
+    X509_NAME *subject_name = X509_get_subject_name(cert);
+    if (!subject_name) return 0; // Error handling
+
+    // Check if the CRL is for the correct issuer
+    X509_NAME *crl_issuer_name = X509_CRL_get_issuer(crl);
+    if (!crl_issuer_name || !X509_NAME_cmp(crl_issuer_name, issuer_name)) {
+        // Check if the certificate's subject is in the CRL
+        int i;
+        for (i = 0; i < sk_X509_REVOKED_num(X509_CRL_get_REVOKED(crl)); i++) {
+            X509_REVOKED *revoked = sk_X509_REVOKED_value(X509_CRL_get_REVOKED(crl), i);
+            X509_NAME *revoked_subject_name = X509_REVOKED_get0_revokedCert(revoked)->subject;
+            if (!X509_NAME_cmp(revoked_subject_name, subject_name)) {
+                // Certificate is revoked
+                return 0;
+            }
+        }
+    }
+
+    // Certificate is not found in the CRL or CRL is not for the same issuer
+    return 1;
+}
+
+int tls_verify_crl(X509_STORE_CTX *store_ctx, X509 *cert) {
+    STACK_OF(X509_CRL) *crls;
+    X509_NAME *subject = X509_get_subject_name(cert);
+
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, subject);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+
+    if (!crls) return 1; // No CRLs to check, consider as valid
+
+    int i;
+    for (i = 0; i < sk_X509_CRL_num(crls); i++) {
+        X509_CRL *crl = sk_X509_CRL_value(crls, i);
+        if (!verify_crl_entry(crl, cert)) {
+            // Certificate is revoked according to this CRL
+            sk_X509_CRL_free(crls);
+            return 0;
+        }
+    }
+
+    sk_X509_CRL_free(crls);
+    return 1; // Certificate is not revoked
+}
+```
+
+In this code:
+- We first retrieve the issuer and subject names from the certificate.
+- We then check if the CRL is issued by the same entity as the certificate's issuer.
+- Finally, we check if the certificate's subject is listed in the CRL's revoked entries.
+
+This ensures that the CRL verification process correctly checks both the subject and issuer, addressing the vulnerability.

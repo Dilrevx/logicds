@@ -1,0 +1,29 @@
+The repair mandates that if a CertificateVerify message isn’t received (i.e., the message type isn’t SSL3_MT_CERTIFICATE_VERIFY), the function immediately treats the handshake as an error. In the buggy code, the legacy behavior would accept certain certificates (even those that need proper authentication via signing, such as those used with Diffie-Hellman) by bypassing the error check. This omission could allow a client to bypass proper authentication by exploiting the fact that no signature was verified.
+
+Below is a walkthrough of the repair:
+
+1. Conditional Check for CertificateVerify:
+   • The first statement explicitly checks whether the received message type equals SSL3_MT_CERTIFICATE_VERIFY.
+   • In the original (buggy) logic, if the message did not match, the code conditionally allowed a state where it might permit a reuse of an earlier message (s->s3->tmp.reuse_message = 1).
+   • In our repair, regardless of the certificate type (even if it was a signing certificate), the absence of a CertificateVerify message immediately results in a failure by setting an unexpected message alert (SSL_AD_UNEXPECTED_MESSAGE) and logging the error SSL_R_MISSING_VERIFY_MESSAGE.
+
+2. Security Rationale:
+   • For client authentication, particularly with certificates that support signing, it is critical that the client prove its possession of the private key associated with its certificate. This is generally done via a digital signature in the CertificateVerify message.
+   • The bug allowed certificates with Diffie-Hellman (or any certificate with signature capabilities) to authenticate without a proper signature check, possibly granting unauthorized access.
+   • By strictly requiring the CertificateVerify message irrespective of the certificate’s signing capability, this vulnerability is mitigated.
+
+3. Error Handling:
+   • The variable "al" is set to SSL_AD_UNEXPECTED_MESSAGE, which indicates a handshake error.
+   • The function logs an error via SSLerr and jumps to the "f_err" label which eventually results in the function returning an error.
+   • This prevents continuing the TLS handshake under insecure conditions.
+
+4. Processing When CertificateVerify is Present:
+   • The repair includes a comment block explaining that if the message type is correct, the function should proceed to appropriately verify the signature.
+   • Although signature verification isn’t fully implemented in the snippet, the placeholder ensures that proper usage of signature validation would be expected here.
+   • It then sets ret = 1 to indicate a successful processing once the signature verification (assumed to succeed here) is complete.
+
+5. Cleanup:
+   • The function cleans up by freeing the public key (EVP_PKEY_free) and cleaning up the digest context (EVP_MD_CTX_cleanup) regardless of whether the operation was successful or failed.
+   • This is a good practice to ensure that resources are properly released to avoid memory leaks.
+
+Overall, this repair fixes the vulnerability by enforcing a mandatory signature verification step through the CertificateVerify message, thereby closing the loophole that previously allowed authentication bypass.

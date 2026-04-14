@@ -1,0 +1,49 @@
+The vulnerability described indicates that there might be an issue with how the code validates DNS keys against trust anchors. Specifically, the code might not properly handle certain cases where the key is not found or partially matches, potentially leading to acceptance of invalid keys.
+
+To address this, we need to ensure that only fully matched keys are considered valid trust anchors. This means that `DNS_R_PARTIALMATCH` should not lead to the assumption that the key is valid or secure. Instead, it should be treated similarly to `ISC_R_NOTFOUND`.
+
+Here is the corrected code snippet:
+
+```c
+	result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+					  dst_key_alg(key), dst_key_id(key),
+					  &keynode);
+	switch (result) {
+	case ISC_R_SUCCESS:
+		/*
+		 * The supplied key is a trust anchor.
+		 */
+		dns_keytable_detachkeynode(vctx->secroots, &keynode);
+		dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+		dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+		*goodkey = true;
+		break;
+	case DNS_R_PARTIALMATCH:
+	case ISC_R_NOTFOUND:
+		/*
+		 * The supplied key is not present in the trust anchor table,
+		 * treat this as an error since we require a full match.
+		 */
+		result = DNS_R_NOTFOUND; // Treat partial match as not found
+		break;
+	default:
+		/*
+		 * An error occurred while searching the trust anchor table,
+		 * return it to the caller.
+		 */
+		break;
+	}
+
+	/*
+	 * Clean up.
+	 */
+	dst_key_free(&key);
+
+	return (result);
+```
+
+### Explanation:
+- **DNS_R_PARTIALMATCH Handling**: Changed the handling of `DNS_R_PARTIALMATCH` to treat it as `DNS_R_NOTFOUND`. This ensures that only exact matches in the trust anchor table are considered valid, preventing the use of partially matching keys which could be exploited by an attacker.
+- **Consistency**: Ensures that the logic remains consistent with security expectations, only fully verified keys are trusted.
+
+This change helps mitigate the risk of an attacker inserting forged keys into the DNS resolution process by ensuring that only keys that exactly match those in the trust anchor table are accepted as secure.

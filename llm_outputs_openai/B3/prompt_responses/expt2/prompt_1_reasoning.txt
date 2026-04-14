@@ -1,0 +1,11 @@
+The repair adds an explicit check to ensure that before the client accepts an authentication success message, a valid authentication method was negotiated. Here’s how it works step-by-step:
+
+1. When a "msg_userauth_success" message is received, the original buggy code immediately sets the authentication state to done and marks the client session as successfully authenticated. However, it did not verify whether the authentication procedure leading up to this point was legitimate. This gap allowed a malicious server to send a success message even if no valid method (e.g., FIDO2 tokens, SSH-Askpass) was negotiated. Essentially, the absence of a check on the variable cli_ses.lastauthtype (which tracks the last used authentication method) resulted in non-RFC-compliant behavior, enabling the server to bypass additional security measures.
+
+2. In the repaired code, before accepting the success message, we check whether cli_ses.lastauthtype is still set to AUTH_TYPE_NONE (the default value indicating that no valid authentication strategy was selected). If the value is AUTH_TYPE_NONE, it means that the authentication process did not undergo the proper negotiation, and the success message should not be trusted. Instead, the code calls a fatal error to immediately stop the process.
+
+3. If the check passes (i.e., cli_ses.lastauthtype holds a valid authentication method), the code continues to mark the session as authenticated by setting ses.authstate.authdone and updating cli_ses.state, thereby allowing the authentication to complete.
+
+4. By not clearing cli_ses.lastauthtype, subsequent parts of the code (or future audits) can still verify which authentication method was used. This extra transparency helps to maintain the integrity of the login process and ensures that non-standard or rogue methods are caught early.
+
+In summary, this repair ensures that the client only accepts a success message if a recognized and valid authentication method has been negotiated. This eliminates the vulnerability where a server could otherwise manipulate the authentication flow (bypassing additional protections such as FIDO2 tokens or SSH-Askpass) by sending a premature or bogus "success" message.

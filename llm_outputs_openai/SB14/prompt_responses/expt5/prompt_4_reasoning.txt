@@ -1,0 +1,18 @@
+In the repair, an additional check was added to ensure that the immediate detachment is only performed when no other close-handle callback is already pending for the socket.
+
+Initially, the code checked whether the current thread (sock.tid) is the designated one (NodeManager.nmTid()). If so, it immediately called the detach callback (NodeManager.nmhandle_detach_cb(handle)); otherwise, it created an event to handle the detachment asynchronously. However, this design did not account for the possibility that a close handle callback might already be in progress. This could potentially lead to overlapping detach operations, leaving the connection in an indefinite CLOSE_WAIT state if malicious TCP streams triggered multiple detach attempts.
+
+The repair solves this problem with the following changes:
+
+1. Additional Condition:
+   The condition in the if statement now uses a new method, !sock.isCloseHandleCallbackPending(). This method checks if a close-handle callback is already registered for the given socket. Only when both conditions (proper thread and no pending callback) are met, does the code immediately execute the detach callback.
+
+2. Setting the Pending Flag:
+   Once the code decides to perform an immediate detach, it marks the socket by calling sock.setCloseHandleCallbackPending(true). This action safeguards against any reentrant or concurrent attempts to detach the handle by ensuring that subsequent detach operations will recognize that a callback is already pending.
+
+3. Consistent Asynchronous Handling:
+   If the extra condition fails—either because the current thread isn’t the designated one or because a close-handle callback is already in progress—the code falls back to the original asynchronous handling. It creates a detach event, passes it to the event handler, and enqueues it in the worker’s event queue. This ensures that the cleanup operation is still performed, but in a controlled, serialized manner rather than immediately, thereby preventing potential conflicts.
+
+By incorporating these changes, the repair ensures that each socket's cleanup operation happens only once and in the proper sequence. This prevents multiple detach callbacks from being executed simultaneously, eliminating race conditions and avoiding the scenario where a socket might get stuck in a CLOSE_WAIT state indefinitely.
+
+The overall impact is a more robust and secure detachment process. The repair mitigates the vulnerability by ensuring that any attempt to detach a socket is handled exactly once, either immediately if safe or asynchronously when necessary. Hence, even under attack conditions with crafted TCP streams, the risk of leaving connections in an undefined state (CLOSE_WAIT) is significantly reduced, thereby enhancing both security and system stability.

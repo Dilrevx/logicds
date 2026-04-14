@@ -1,0 +1,19 @@
+The fix introduces a clear separation between how the server and the client handle the first_kex_packet_follows flag. Previously, the same code was applied for both sides, meaning that if the flag was set (or if session->send_first_kex_follows was true), both sides would compute the guess based on comparing the algorithms, potentially allowing an attacker to undermine integrity checks by influencing the guess result. Here’s what the repair does:
+
+1. It wraps the logic inside an if-statement that checks whether the first_kex_packet_follows flag is set or if the session requested sending it. Then it distinguishes between the server side (when server_kex is true) and the client side.
+
+2. For the server side:  
+   Instead of comparing the algorithms as done previously, the code now always treats the flag as an unsafe condition. This is done by unconditionally setting session->first_kex_follows_guess_wrong to 1. This ensures that if a first kex packet follows with an attack attempt, the server will ignore the subsequent key exchange initiation message, thereby preventing a downgrade attack in which some packets might be omitted leading to the violation of integrity checks.
+
+3. For the client side:  
+   The code retains the behavior that compares the initially guessed key exchange and host key algorithms with those proposed by the peer. It uses the functions cmp_first_kex_algo on both SSH_KEX and SSH_HOSTKEYS values. If the peer’s proposals do not match the initial guess (i.e., any of the comparisons returns true), session->first_kex_follows_guess_wrong is set to a non-zero value, signaling that the client must re-initiate the key exchange with the correct parameters. This preserves the intended functionality for the client side while still protecting against a potential downgrade attack.
+
+4. Logging messages have been added to both branches (server and client) to clearly indicate when each side is taking action regarding the flag. This helps in debugging and makes it easier to audit the security-critical decision points in the code.
+
+By separating the logic and ensuring the server side is more conservative (always marking the guess as wrong), the patch ensures that a maliciously crafted first_kex_packet_follows flag cannot be used to bypass the integrity protections for subsequent packets. This avoids the vulnerability detailed in the context, namely that some handshake packets could be omitted, leading to a degraded set of security features.
+
+Overall, the repair ensures that:
+• On the server side, any instance where the first_kex_packet_follows flag is set results in a safe, conservative decision by ignoring the next key exchange step.
+• On the client side, the guess is only trusted if the negotiated algorithms fully match; otherwise, the exchange is restarted.
+
+This careful handling prevents attackers from exploiting the SSH binary packet protocol's quirks to downgrade security, thereby mitigating what is known as a Terrapin attack.

@@ -1,0 +1,17 @@
+The repair adds two extra conditions to the existing if statement that determines if the legacy handling branch should be executed. Here's how it works:
+
+1. Existing Conditions:  
+   Originally, the code checked if certain implementation pointers (like the engine, tmpimpl, or impl) were non-null. If any of these were present, it meant that an alternative implementation was provided, and therefore, it entered the legacy branch. However, this did not account for cases where a legacy custom cipher was used, especially when a cipher with NID_undef might be mistakenly mapped to the NULL cipher.
+
+2. Added Conditions for Legacy-Origin:  
+   The repair introduces two additional checks based on a new field in the cipher structure, named legacy_flag. This flag is set when a cipher is created using the legacy OpenSSL functions.  
+   - The first condition checks whether the primary cipher (ctx->cipher) is non-null and has its legacy_flag set. This means that the cipher was explicitly created via the legacy method and should be handled in the legacy branch.  
+   - The second condition handles a scenario where the primary cipher pointer (ctx->cipher) might be null but a fetched cipher (ctx->fetched_cipher) exists and has the legacy_flag set. This covers cases where the context still holds a legacy cipher even though the primary pointer isn’t populated.
+
+3. Cleaning Up and Redirecting:  
+   When any of these conditions are met, the branch clears out the fetched_cipher by freeing it and setting corresponding pointers to null. Then, the code jumps to a label named legacy which presumably handles the decryption/encryption with proper legacy handling. This prevents the system from going into the default code path that might otherwise fetch a provider cipher. If the provider cipher is the NULL cipher (because it matched on an undefined identifier), then any plaintext processed will incorrectly be emitted as ciphertext.
+
+4. Preventing the Vulnerability:  
+   By explicitly checking for legacy_origin through the legacy_flag, the repair ensures that any cipher created using the legacy method (even when created with NID_undef) is caught and managed appropriately. This prevents mistakenly fetching the NULL cipher from a provider. In effect, it forces the processing to remain within the legacy handling branch, where the vulnerability—exposing plaintext—is mitigated.
+
+In summary, the repair improves security by clearly distinguishing legacy ciphers from other cipher types using dedicated checks (via the legacy_flag). This specialized handling stops the application from mistakenly matching a legacy custom cipher with an equivalent NULL cipher from a provider, thereby preventing the potential leakage of plaintext as ciphertext.

@@ -1,0 +1,176 @@
+package main;
+
+import commons.*;
+
+public class TlsCrlVerifier {
+    public static int tls_verify_crl(int ok, X509StoreCtx ctx) {
+        int i = 0, n = 0, res = 0;
+        X509Name subject = null;
+        X509Name issuer = null;
+        X509Certificate xs = null;
+        CrlList crls = null;
+        X509StoreCtx storeCtx = null;
+        if (Commons.tls_crl_store == null) {
+            return ok;
+        }
+        Commons.tls_log("CRL store present, checking client certificate against configured CRLs");
+        xs = ctx.getCurrentCert();
+        subject = xs.getSubjectName();
+        Commons.pr_trace_msg("verifying cert: subject = '%s'", subject.toString());
+        issuer = xs.getIssuerName();
+        Commons.pr_trace_msg("verifying cert: issuer = '%s'", issuer.toString());
+        storeCtx = X509StoreCtx.newInstance();
+        if (storeCtx.init(Commons.tls_crl_store, null, null) <= 0) {
+            Commons.tls_log("error initializing CRL store context");
+            storeCtx.free();
+            return ok;
+        }
+        if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 && !Commons.HAVE_LIBRESSL) {
+            crls = storeCtx.get1_crls(subject);
+        }
+        else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 && !Commons.HAVE_LIBRESSL) {
+            crls = Commons.get1_crls(storeCtx, subject);
+        }
+        else {
+            crls = null;
+        }
+        if (crls != null) {
+            for (i = 0; i < crls.size(); i++) {
+                Crl crl = crls.get(i);
+                Commons.tls_log("CA CRL: Issuer: " + issuer.toString());
+                PubKey pubkey = xs.getPublicKey();
+                res = crl.verify(pubkey);
+                if (res <= 0) {
+                    Commons.tls_log("invalid signature on CRL");
+                    ctx.setError(Commons.X509_V_ERR_CRL_SIGNATURE_FAILURE);
+                    crls.free();
+                    storeCtx.cleanup();
+                    storeCtx.free();
+                    return Commons.FALSE;
+                }
+                res = crl.nextUpdateCmp();
+                if (res == 0) {
+                    Commons.tls_log("CRL has invalid nextUpdate field");
+                    ctx.setError(Commons.X509_V_ERR_ERROR_IN_CRL_NEXT_UPDATE_FIELD);
+                    crls.free();
+                    storeCtx.cleanup();
+                    storeCtx.free();
+                    return Commons.FALSE;
+                }
+                if (res < 0) {
+                    Commons.tls_log("CRL is expired, revoking all certificates until an updated CRL is obtained");
+                    ctx.setError(Commons.X509_V_ERR_CRL_HAS_EXPIRED);
+                    crls.free();
+                    storeCtx.cleanup();
+                    storeCtx.free();
+                    return Commons.FALSE;
+                }
+            }
+            crls.free();
+            crls = null;
+        }
+
+        if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 &&!Commons.HAVE_LIBRESSL) {
+            crls = storeCtx.get1_crls(subject);
+            if (crls!= null) {
+                for (X509CRL crl : crls) {
+                    if (crl.getIssuer().equals(subject)) {
+                        // Verify the scope of the complete CRL
+                        verifyCRLScope(crl, subject);
+                    }
+                }
+            }
+        }
+        else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 &&!Commons.HAVE_LIBRESSL) {
+            crls = Commons.get1_crls(storeCtx, subject);
+            if (crls!= null) {
+                for (X509CRL crl : crls) {
+                    if (crl.getIssuer().equals(subject)) {
+                        // Verify the scope of the complete CRL
+                        verifyCRLScope(crl, subject);
+                    }
+                }
+            }
+        }
+
+        //...
+
+        private void verifyCRLScope(X509CRL crl, X500Principal subject) {
+            // Verify the issuer and scope of the complete CRL as per the specification
+            if (crl.getExtensionValue("2.5.29.31")!= null) { // Check for issuing distribution point extension
+                // Verify the distribution point name and the indirectCRL boolean
+                verifyDistributionPoint(crl, subject);
+            } else {
+                // Verify that the CRL issuer matches the certificate issuer
+                if (!crl.getIssuer().equals(subject)) {
+                    throw new CertificateException("CRL issuer does not match certificate issuer");
+                }
+            }
+
+            // Verify the onlyContainsUserCerts, onlyContainsCACerts, and onlyContainsAttributeCerts booleans
+            verifyOnlyContains(crl);
+        }
+
+        private void verifyDistributionPoint(X509CRL crl, X500Principal subject) {
+            // Verify the distribution point name and the indirectCRL boolean
+            if (crl.getExtensionValue("2.5.29.31.1")!= null) { // Check for distribution point name
+                // Verify that one of the names in the IDP matches one of the names in the DP
+                verifyDistributionPointName(crl, subject);
+            }
+
+            // Verify the onlyContainsUserCerts, onlyContainsCACerts, and onlyContainsAttributeCerts booleans
+            verifyOnlyContains(crl);
+        }
+
+        private void verifyOnlyContains(X509CRL crl) {
+            // Verify the onlyContainsUserCerts boolean
+            if (crl.getExtensionValue("2.5.29.31.2")!= null) { // Check for onlyContainsUserCerts
+                // Verify that the certificate does not include the basic constraints extension with the cA boolean asserted
+                if (crl.getExtensionValue("2.5.29.19")!= null) { // Check for basic constraints extension
+                    throw new CertificateException("Certificate includes basic constraints extension with cA boolean asserted");
+                }
+            }
+
+            // Verify the onlyContainsCACerts boolean
+            if (crl.getExtensionValue("2.5.29.31.3")!= null) { // Check for onlyContainsCACerts
+                // Verify that the certificate includes the basic constraints extension with the cA boolean asserted
+                if (crl.getExtensionValue("2.5.29.19") == null) { // Check for basic constraints extension
+                    throw new CertificateException("Certificate does not include basic constraints extension with cA boolean asserted");
+                }
+            }
+
+            // Verify that the onlyContainsAttributeCerts boolean is not asserted
+            if (crl.getExtensionValue("2.5.29.31.4")!= null) { // Check for onlyContainsAttributeCerts
+                throw new CertificateException("onlyContainsAttributeCerts boolean is asserted");
+            }
+        }
+
+        else {
+            crls = null;
+        }
+        if (crls != null) {
+            for (i = 0; i < crls.size(); i++) {
+                Crl crl = crls.get(i);
+                n = crl.revokedCount();
+                for (int j = 0; j < n; j++) {
+                    X509Revoked revoked = crl.getRevoked(j);
+                    SerialNumber sn = revoked.getSerialNumber();
+                    if (sn.equals(xs.getSerialNumber())) {
+                        Commons.tls_log(
+                                "certificate with serial number " + sn +
+                                        " revoked per CRL from issuer '" + issuer.toString() + "'");
+                        ctx.setError(Commons.X509_V_ERR_CERT_REVOKED);
+                        crls.free();
+                        storeCtx.cleanup();
+                        storeCtx.free();
+                        return Commons.FALSE;
+                    }
+                }
+            }
+            crls.free();
+        }
+        storeCtx.cleanup();
+        storeCtx.free();
+        return ok;
+    }
+}

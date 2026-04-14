@@ -1,0 +1,177 @@
+public class CipherInitializer {
+
+
+    // ... previous code remains unchanged above this point
+        if (!OPENSSL_NO_ENGINE && !FIPS_MODULE) {
+            if (ctx.getEngine() != null && ctx.getCipher() != null &&
+                    (cipher != null && cipher.getNid() == ctx.getCipher().getNid())) {
+                return skipToInit(ctx);
+            }
+
+            if (cipher != null && impl == null) {
+                tmpImpl = Engine.getCipherEngine(cipher.getNid());
+            }
+        }
+
+        // New: Disallow use of a custom engine when in FIPS mode.
+        if (FIPS_MODULE && impl != null) {
+            Err.raise("EVP", "Custom engine selection disallowed in FIPS mode");
+            return 0;
+        }
+
+        // New: Ensure a key is provided.
+        if (key == null || key.length == 0) {
+            Err.raise("EVP", "No key provided or key length is zero");
+            return 0;
+        }
+
+        // New: Validate IV length if the cipher requires an IV.
+        // Assume cipher.requiresIv() returns true for ciphers that need an IV,
+        // and cipher.getIvLength() returns the expected length of the IV.
+        if (cipher != null && cipher.requiresIv()) {
+            if (iv == null || iv.length < cipher.getIvLength()) {
+                Err.raise("EVP", "Invalid IV provided");
+                return 0;
+            }
+        }
+
+        // Proceed with the initialization using the proper engine: either user-supplied or the one looked up.
+        Engine finalImpl = (impl != null ? impl : tmpImpl);
+        n = cipher.init(ctx, key, iv, finalImpl, params);
+
+        return n;
+    }
+
+
+    private static int legacyHandling(EvpCipherCtx ctx, EvpCipher cipher, Engine impl, Engine tmpImpl, int enc) {
+        if (cipher != null) {
+
+            if (ctx.getCipher() != null) {
+                long flags = ctx.getFlags();
+                EvpCipherCtx.reset(ctx);
+                ctx.setEncrypt(enc);
+                ctx.setFlags(flags);
+            }
+
+            if (!CipherInitializer.OPENSSL_NO_ENGINE && !CipherInitializer.FIPS_MODULE) {
+                if (impl != null) {
+                    if (!Engine.init(impl)) {
+                        Err.raise("EVP", "Initialization error");
+                        return 0;
+                    }
+                } else {
+                    impl = tmpImpl;
+                }
+
+                if (impl != null) {
+                    EvpCipher c = Engine.getCipher(impl, cipher.getNid());
+                    if (c == null) {
+                        Err.raise("EVP", "Initialization error");
+                        return 0;
+                    }
+                    cipher = c;
+                    ctx.setEngine(impl);
+                } else {
+                    ctx.setEngine(null);
+                }
+            }
+
+            ctx.setCipher(cipher);
+            if (ctx.getCipher().getCtxSize() > 0) {
+                ctx.setCipherData(new byte[ctx.getCipher().getCtxSize()]);
+                if (ctx.getCipherData() == null) {
+                    ctx.setCipher(null);
+                    Err.raise("EVP", "Memory allocation failure");
+                    return 0;
+                }
+            } else {
+                ctx.setCipherData(null);
+            }
+
+            ctx.setKeyLen(cipher.getKeyLen());
+            ctx.setFlags(ctx.getFlags() & EvpCipher.CTX_FLAG_WRAP_ALLOW);
+
+            if ((ctx.getCipher().getFlags() & EvpCipher.CTRL_INIT) != 0) {
+                if (!EvpCipherCtx.ctrl(ctx, EvpCipher.CTRL_INIT, 0, null)) {
+                    ctx.setCipher(null);
+                    Err.raise("EVP", "Initialization error");
+                    return 0;
+                }
+            }
+        }
+
+        return skipToInit(ctx);
+    }
+
+    private static int skipToInit(EvpCipherCtx ctx) {
+        if (ctx.getCipher() == null) {
+            return 0;
+        }
+
+        assert ctx.getCipher().getBlockSize() == 1
+                || ctx.getCipher().getBlockSize() == 8
+                || ctx.getCipher().getBlockSize() == 16;
+
+        if ((ctx.getFlags() & EvpCipher.CTX_FLAG_WRAP_ALLOW) == 0
+                && EvpCipherCtx.getMode(ctx) == EvpCipher.CTX_FLAG_WRAP_ALLOW) {
+            Err.raise("EVP", "Wrap mode not allowed");
+            return 0;
+        }
+
+        if ((ctx.getCipher().getFlags() & EvpCipher.CTX_CUSTOM_IV) == 0) {
+            switch (EvpCipherCtx.getMode(ctx)) {
+                case EvpCipher.MODE_STREAM_CIPHER:
+                case EvpCipher.MODE_ECB:
+                    break;
+
+                case EvpCipher.MODE_CFB:
+                case EvpCipher.MODE_OFB:
+                    ctx.setNum(0);
+
+                case EvpCipher.MODE_CBC:
+                    int n = EvpCipherCtx.getIvLength(ctx);
+                    if (n < 0 || n > ctx.getIv().length) {
+                        Err.raise("EVP", "Invalid IV length");
+                        return 0;
+                    }
+                    if (ctx.getIv() != null) {
+                        System.arraycopy(ctx.getOiv(), 0, ctx.getIv(), 0, n);
+                    }
+                    break;
+
+                case EvpCipher.MODE_CTR:
+                    ctx.setNum(0);
+                    if (ctx.getIv() != null) {
+                        int ivLen = EvpCipherCtx.getIvLength(ctx);
+                        if (ivLen <= 0 || ivLen > ctx.getIv().length) {
+                            Err.raise("EVP", "Invalid IV length");
+                            return 0;
+                        }
+                        System.arraycopy(ctx.getIv(), 0, ctx.getIv(), 0, ivLen);
+                    }
+                    break;
+
+                default:
+                    return 0;
+            }
+        }
+
+        if (ctx.getCipher().getEncryptInit() != null) {
+            return ctx.getCipher().getEncryptInit().init(ctx.getAlgCtx(),
+                    null, 0, null, 0, new OsslParam[]{});
+        }
+
+        return 1;
+    }
+
+    private static void clearFree(byte[] data, int size) {
+        if (data != null) {
+            java.util.Arrays.fill(data, (byte) 0);
+        }
+    }
+
+
+    public static boolean OPENSSL_NO_ENGINE = false;
+    public static boolean FIPS_MODULE = false;
+
+}

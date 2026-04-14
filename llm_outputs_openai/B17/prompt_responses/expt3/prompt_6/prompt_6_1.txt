@@ -1,0 +1,61 @@
+Below is an example patch that corrects the vulnerability in tls_verify_crl. In the original code the CRLs were being looked up using the certificate’s subject (via X509_get_subject_name), but the intended logic is to use the certificate’s issuer. For OpenSSL versions 1.1.0 and above (and similarly for versions between 1.0.0 and 1.1.0 that share the same lookup logic) the following patch shows how to substitute the subject lookup with an issuer lookup. (Note: the code for versions older than 1.0.0 is left unchanged for backward compatibility.)
+
+──────────────────────────────────────────────
+/* Example patch for tls_verify_crl() */
+
+/* --- Begin Patch --- */
+
+int tls_verify_crl(X509 *cert, STACK_OF(X509_CRL) *crls)
+{
+    int i, ret = 0;
+    const X509_NAME *lookup_name = NULL;
+    X509_CRL *crl = NULL;
+
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+    /*
+     * For OpenSSL v1.1.0 and later (and similarly for intermediate versions)
+     * the CRL lookup must use the certificate issuer.
+     *
+     * Bugfix: Replace X509_get_subject_name(cert) with X509_get_issuer_name(cert)
+     */
+    lookup_name = X509_get_issuer_name(cert);
+#else
+    /*
+     * For legacy OpenSSL versions (<1.0.0), the original behavior is retained.
+     * Note: Upgrading to a supported OpenSSL version is highly recommended.
+     */
+    lookup_name = X509_get_subject_name(cert);
+#endif
+
+    /* Iterate over the available CRLs to find a matching entry */
+    for (i = 0; i < sk_X509_CRL_num(crls); i++) {
+         crl = sk_X509_CRL_value(crls, i);
+         if (crl == NULL)
+             continue;
+
+         /*
+          * Compare the issuer name of this CRL with the lookup_name.
+          * In the fixed code for OpenSSL >= 1.1.0, lookup_name holds the issuer of cert.
+          */
+         if (X509_NAME_cmp(lookup_name, X509_CRL_get_issuer(crl)) == 0) {
+             /* Matching CRL found – proceed with additional CRL verification */
+             ret = 1;
+             break;
+         }
+    }
+
+    return ret;
+}
+
+/* --- End Patch --- */
+──────────────────────────────────────────────
+
+Explanations:
+
+1. In the patched version, the lookup_name is set by calling X509_get_issuer_name(cert) when the OpenSSL version is 1.1.0 or later. This ensures that we are checking the CRL entry that corresponds to the certificate issuer rather than its subject.
+
+2. The lookup logic remains unchanged for older OpenSSL versions (<1.0.0), though it’s recommended to update to a supported version to benefit from the security fixes.
+
+3. The rest of the function iterates over the CRL stack and compares each CRL’s issuer with lookup_name using X509_NAME_cmp. A match (i.e., a valid CRL entry for certificate's issuer) indicates that the CRL check can continue appropriately. 
+
+By making this change the verification process correctly considers the certificate’s issuer in addition to the subject, thus preventing the vulnerability that could otherwise allow a revoked certificate to be erroneously accepted.

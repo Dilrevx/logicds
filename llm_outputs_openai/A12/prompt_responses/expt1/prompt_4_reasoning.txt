@@ -1,0 +1,21 @@
+The repair addresses the key logical vulnerability by ensuring that the proper secret is derived and used depending on the handshake state and the current side of the connection.
+
+1. Boundary Check:  
+Before any processing, the code verifies that the provided buffer has enough room to process the incoming data (including any padding). This pre-check guards against buffer overflow scenarios. The condition now explicitly checks that (*inOutIdx + size + ssl->keys.padSz) does not exceed totalSz. If insufficient space remains, it promptly returns a BUFFER_E error code.
+
+2. Distinguishing Handshake State:  
+The vulnerability stemmed from the incorrect or incomplete handling of handshake states – particularly the logic for determining which secret to use. In TLS 1.3, different secrets are used depending on whether the handshake is complete or still in progress, and also based on whether the side is client or server.
+
+   - When the handshake is completed (ssl->options.handShakeDone is true), the repair calls DeriveFinishedSecret using the client secret for deriving the MAC secret meant for outgoing data (client_write_MAC_secret). This branch handles our own “Finished” message.
+   
+   - Alternatively, if the connection is in progress (and the side is the client, indicated by ssl->options.side == WOLFSSL_CLIENT_END), it implies that the peer's Finished message is being processed. In this branch, a different secret (serverSecret) is used to derive server_write_MAC_secret. This correct distinction is essential to avoid mixing up the cryptographic material that could otherwise lead to verification failures or potential security loopholes.
+   
+   - If neither condition is met, the function logs a message and aborts by returning an error (BAD_FUNC_ARG), ensuring that no undefined or unexpected state is processed.
+
+3. MAC Calculation and Output Safety:  
+After the appropriate secret is derived, the FinishedVerify function is invoked to generate the MAC (Finished message’s verification data). Once computed, another bounds check ensures that writing the computed MAC back into the provided buffer will not overflow it. The check ensures that the addition of finishedSz (the length of the computed MAC) to the current index does not exceed totalSz.
+
+4. Final Memory Operation:  
+Instead of writing directly to the incorrect location or bypassing security checks, the code now safely copies the MAC into the appropriate buffer location and advances the output index.
+
+By clarifying and correctly handling the handshake states, performing rigorous boundary checks, and ensuring that the correct cryptographic secret is used in each scenario, the repair eliminates the logical vulnerability. This prevents potential misuse or miscalculation of the Finished MAC which could compromise the handshake’s integrity and overall TLS security.

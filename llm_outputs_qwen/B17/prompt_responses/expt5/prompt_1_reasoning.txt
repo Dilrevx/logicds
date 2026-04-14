@@ -1,0 +1,57 @@
+The original code snippet contains a vulnerability primarily due to the incorrect macro used to check for the presence of LibreSSL. The macro `HAVE_LIBRESSL` is not a standard macro provided by either OpenSSL or LibreSSL. Instead, LibreSSL defines `LIBRESSL_VERSION_NUMBER`. Using an undefined macro like `HAVE_LIBRESSL` can lead to unexpected behavior, as it will evaluate to false, potentially causing the code to take an unintended path, such as setting `crls` to `NULL` when it should not.
+
+### Detailed Explanation of the Repair
+
+#### Original Code Analysis
+
+1. **Version Check for OpenSSL 1.1.0 and Later:**
+   ```c
+   #if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+       !defined(HAVE_LIBRESSL)
+   ```
+   - This condition checks if the OpenSSL version is 1.1.0 or later and ensures that LibreSSL is not being used. However, `HAVE_LIBRESSL` is not defined by default in LibreSSL or OpenSSL, so this check will always fail if `HAVE_LIBRESSL` is not manually defined elsewhere in the codebase.
+
+2. **Version Check for OpenSSL 1.0.0 and Later:**
+   ```c
+   #elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+         !defined(HAVE_LIBRESSL)
+   ```
+   - Similar to the first condition, this checks for versions from 1.0.0 up to 1.0.2, again failing the LibreSSL check due to the undefined `HAVE_LIBRESSL`.
+
+3. **Fallback for Older Versions:**
+   ```c
+   #else
+     /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+     crls = NULL;
+   #endif
+   ```
+   - This block assumes that if the version is older than 1.0.0 or if `HAVE_LIBRESSL` is not defined (which is always true due to the lack of definition), it sets `crls` to `NULL`. This can lead to incorrect handling of CRLs in systems using LibreSSL, as it would incorrectly assume that the OpenSSL version is too old rather than detecting LibreSSL.
+
+#### Repaired Code Explanation
+
+1. **Correct Macro for LibreSSL Detection:**
+   ```c
+   #if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+       !defined(LIBRESSL_VERSION_NUMBER)
+   ```
+   - Here, `LIBRESSL_VERSION_NUMBER` is used instead of `HAVE_LIBRESSL`. This macro is correctly defined by LibreSSL and provides a reliable way to distinguish between OpenSSL and LibreSSL. This ensures that the correct function (`X509_STORE_CTX_get1_crls`) is called for OpenSSL 1.1.0 and later, excluding LibreSSL.
+
+2. **Handling Older OpenSSL Versions:**
+   ```c
+   #elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+         !defined(LIBRESSL_VERSION_NUMBER)
+   ```
+   - Similarly, for versions from 1.0.0 up to 1.0.2, `LIBRESSL_VERSION_NUMBER` is checked to ensure that LibreSSL is not mistakenly treated as OpenSSL. This allows the use of `X509_STORE_get1_crls`, which is appropriate for these versions of OpenSSL.
+
+3. **Handling LibreSSL and Very Old OpenSSL Versions:**
+   ```c
+   #else
+     /* Your OpenSSL is before 1.0.0 or you are using LibreSSL. Consider upgrading OpenSSL. */
+     crls = NULL;
+   #endif
+   ```
+   - In this fallback scenario, the code now correctly identifies systems using LibreSSL or those with very old versions of OpenSSL. Setting `crls` to `NULL` is still appropriate in these cases, but the comment has been updated to reflect the possibility of using LibreSSL, encouraging users to consider upgrading OpenSSL if possible.
+
+### Conclusion
+
+By replacing `HAVE_LIBRESSL` with `LIBRESSL_VERSION_NUMBER`, the code becomes robust against the presence of LibreSSL and accurately handles different versions of OpenSSL. This repair ensures that the correct functions are called based on the actual library being used, thereby fixing the vulnerability introduced by the incorrect macro usage.

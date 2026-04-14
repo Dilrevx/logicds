@@ -1,0 +1,77 @@
+<repair>
+	if (pkey == NULL) {
+		al = SSL_AD_HANDSHAKE_FAILURE;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_NO_PUBLICKEY);
+		goto f_err;
+	}
+
+	p = s->init_msg;
+	n = s->init_num;
+
+	if (n < 2) {
+		al = SSL_AD_DECODE_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_LENGTH_TOO_SHORT);
+		goto f_err;
+	}
+
+	i = p[0];
+	j = p[1];
+	n -= 2;
+	p += 2;
+
+	if ((i == SSL3_MT_CERTIFICATE_VERIFY) && (n > 0)) {
+		al = SSL_AD_DECODE_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_WRONG_MESSAGE_TYPE);
+		goto f_err;
+	}
+
+	if ((n != EVP_PKEY_size(pkey)) || (n <= 0)) {
+		al = SSL_AD_DECODE_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_LENGTH_MISMATCH);
+		goto f_err;
+	}
+
+	if (s->version >= TLS1_VERSION) {
+		if (!ssl_cert_lookup_by_nid(OBJ_obj2nid(pkey->type), &md, NULL)) {
+			al = SSL_AD_INTERNAL_ERROR;
+			SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_UNKNOWN_PKEY_TYPE);
+			goto f_err;
+		}
+		if (!EVP_VerifyInit_ex(&mctx, md, NULL)) {
+			al = SSL_AD_INTERNAL_ERROR;
+			SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_LIB_EVP);
+			goto f_err;
+		}
+		if (!ssl3_take_mac(s, &mctx)) {
+			al = SSL_AD_INTERNAL_ERROR;
+			SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_LIB_SSL);
+			goto f_err;
+		}
+		if (!EVP_VerifyUpdate(&mctx, s->s3->handshake_buffer->data, s->s3->handshake_buffer->length)) {
+			al = SSL_AD_INTERNAL_ERROR;
+			SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_LIB_EVP);
+			goto f_err;
+		}
+		i = EVP_VerifyFinal(&mctx, p, (unsigned int)n, pkey);
+		if (i < 0) {
+			al = SSL_AD_INTERNAL_ERROR;
+			SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_LIB_EVP);
+			goto f_err;
+		}
+		if (i == 0) {
+			al = SSL_AD_ILLEGAL_PARAMETER;
+			SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_BAD_SIGNATURE);
+			goto f_err;
+		}
+		ret = 1;
+	} else {
+		al = SSL_AD_INTERNAL_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_UNSUPPORTED_PROTOCOL);
+		goto f_err;
+	}
+
+f_err:
+	EVP_PKEY_free(pkey);
+	EVP_MD_CTX_cleanup(&mctx);
+	return ret;
+}</repair>

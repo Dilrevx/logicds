@@ -1,0 +1,17 @@
+The repair addresses a logical vulnerability in the EVP_CTRL_COPY case. Originally, the code duplicates the memory block containing the EVP_CHACHA_AEAD_CTX structure using OPENSSL_memdup. However, this structure contains an internal pointer, actx->aad, which is set to point somewhere within the allocated block. When the memory is simply duplicated, the new structure’s aad pointer (now in the destination context) still points to the offset in the original memory block instead of its own corresponding location. This can lead to data corruption or unintended behavior, because modifications to one instance might affect or reference the wrong memory area.
+
+In the repaired code, after duplicating the memory, we recompute the internal pointer in the copied structure. Here’s how the fix works step-by-step:
+
+1. The original context (actx) is duplicated using OPENSSL_memdup. This creates a new memory block for the destination context (dst->cipher_data).
+
+2. A temporary pointer (dactx) is used to refer to the duplicated context. This makes it easier to adjust the internal pointers of the copy.
+
+3. We check whether actx->aad is non-NULL, meaning that there is an internal pointer that might have been pointing inside the allocated memory block.
+
+4. If actx->aad is set, we calculate its offset within the original block. This is done by subtracting the base address of actx from the pointer actx->aad. This yields the precise offset where the aad data is located relative to the start of actx.
+
+5. Using the computed offset, the code sets the copied structure’s aad pointer (dactx->aad) to point at the corresponding location in the new memory block by adding the offset to the base address of dactx.
+
+This fix ensures that both the original and the copied structures have their internal pointer (aad) correctly referencing their own memory. Without the repair, any operations expecting the aad within the new context would access invalid or unintended memory, potentially leading to vulnerabilities such as memory corruption or sensitive data leakage.
+
+By ensuring the internal pointer is recalculated relative to its own memory block, the code maintains the integrity of the data structures upon copying. This is a crucial correction for any duplicate operation on memory structures that include internal pointers, a common source of bugs in low-level C programming.

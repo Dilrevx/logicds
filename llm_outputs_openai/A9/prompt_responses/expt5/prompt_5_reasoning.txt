@@ -1,0 +1,13 @@
+The repair changes the conditional check to ensure that a new client random is generated when it’s needed, especially for DTLS sessions that have not yet received a hello verify request. Here’s how the change works step by step:
+
+1. The repaired condition starts with checking that the HSK_HRR_RECEIVED flag is not set (i.e., !(session->internals.hsk_flags & HSK_HRR_RECEIVED)). This applies to both DTLS and non-DTLS sessions. It indicates that the session has not received a Hello Retry Request, which is an important signal in the handshake.
+
+2. The next part of the check uses a combined OR condition: (!IS_DTLS(session) || session->internals.dtls.hsk_hello_verify_requests == 0). This is critical in differentiating between DTLS and non-DTLS sessions:
+ • For non-DTLS sessions, !IS_DTLS(session) is true, so the overall condition becomes true regardless of how many hello verify requests there have been. This means that the client random is generated as expected.
+ • For DTLS sessions, IS_DTLS(session) is true, so the first part of the OR becomes false. Therefore, it evaluates the second part, which checks if the count of hello verify requests is zero. Only if no hello verify requests have been processed (i.e., hsk_hello_verify_requests == 0) does the condition evaluate to true and trigger the randomness generation.
+
+3. In the buggy code, the DTLS check was inverted—when a hello verify request had not been received, the condition did not trigger the generation of client random. That was a security vulnerability because, in DTLS’s initial connection (the scenario where the client had no hello verify requests), the client random would remain at an insecure default value (like 32 null bytes). 
+
+4. By modifying the condition to check for a DTLS session and then verifying that hsk_hello_verify_requests equals zero, the repair enforces that when no hello verify has been received, a new, unpredictable random value is generated. This update secures the DTLS client's randomness generation process by guaranteeing that sufficient entropy is used during the handshake.
+
+In summary, the repair fixes the logical misinterpretation in the original code. It ensures that a secure, freshly generated client random is produced in DTLS sessions when required (i.e., if no hello verify request has been received), thereby preventing the use of insecure default values and maintaining the cryptographic strength of the handshake.

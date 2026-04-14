@@ -1,0 +1,14 @@
+The repair adds an extra check to ensure that the cleanup callback is executed only once for each socket. Originally, the code checked whether the current thread is the designated one by comparing sock.tid with NodeManager.nmTid(). If the condition was true, the immediate detach callback, NodeManager.nmhandle_detach_cb(handle), was invoked. However, this approach did not account for whether a close-handle callback had already been registered for the socket. If a previous detach had been scheduled or was already in progress, calling the callback again could lead to conflicts or leave the connection in an unintended state (such as lingering in CLOSE_WAIT).
+
+In the repaired code, the condition has been extended to not only check if the current thread is designated (sock.tid == NodeManager.nmTid()) but also ensure that there is no ongoing close-handle callback attached to the socket (sock.closeHandleCallback == null). This means that if the cleanup callback is already scheduled or active, the immediate synchronous detachment is skipped. Instead, the detachable event is created and handed off to an asynchronous event handler.
+
+If both conditions are satisfied—meaning the current thread is the proper one and no previous callback is pending—the code safely calls NodeManager.nmhandle_detach_cb(handle) right away, processing the detach operation directly. This guarantees that the detachment occurs in a controlled manner and prevents overlapping or redundant calls that can leave the connection in an ambiguous state.
+
+On the other hand, if the extra safeguard condition is not met (either the thread isn’t the designated one or a close-handle callback is already set)—the code creates a new NetiEventDetach event. This event is then passed to the EventPasser and subsequently enqueued into the corresponding worker’s event queue. This asynchronous handling ensures that the detach operation will eventually be processed in the correct order without interfering with an already ongoing operation.
+
+By incorporating this extra check:
+1. It prevents multiple detachment callbacks from executing on the same socket concurrently.
+2. It ensures that once a detachment process has begun (or is scheduled via the socket’s close-handle callback), no new immediate callback is triggered that could conflict or interfere.
+3. It addresses the vulnerability by making sure that cleanup from a malicious or malformed TCP stream is handled cleanly and only once, which, in turn, prevents the connection from being indefinitely retained in the CLOSE_WAIT state.
+
+Overall, this repair enhances the integrity of the socket cleanup process by carefully coordinating the execution of detach operations relative to the socket’s current state, ensuring that each socket’s cleanup is performed only once and in the appropriate context.

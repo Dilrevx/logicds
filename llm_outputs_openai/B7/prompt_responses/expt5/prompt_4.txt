@@ -1,0 +1,54 @@
+<repair>
+	if (!x509_verify_ctx_validate_legacy_chain(ctx, chain, depth))
+		return 0;
+
+	/*
+	 * First, verify the leaf certificate’s validity and hostname.
+	 * This reordering ensures that any error generated during
+	 * leaf certificate verification is recorded before duplicating
+	 * the certificate chain.
+	 */
+	if (!x509_verify_cert_valid(ctx, leaf, NULL)) {
+		/* 
+		 * If no later stage has updated the error depth (i.e. it is still at its
+		 * initial state) and the error isn’t the expected "unable to get issuer cert locally",
+		 * then record this error into the chain’s error list.
+		 */
+		if (ctx->error_depth == 0 &&
+		    ctx->error != X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY) {
+			X509_VERIFY_CHAIN *dup_chain = x509_verify_chain_dup(chain);
+			if (dup_chain == NULL)
+				return x509_verify_cert_error(ctx, last, depth,
+				    X509_V_ERR_OUT_OF_MEM, 0);
+			dup_chain->errors[0] = ctx->error;
+			ctx->chains[ctx->chains_count++] = dup_chain;
+		}
+		return 0;
+	}
+
+	if (!x509_verify_cert_hostname(ctx, leaf, name)) {
+		if (ctx->error_depth == 0 &&
+		    ctx->error != X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY) {
+			X509_VERIFY_CHAIN *dup_chain = x509_verify_chain_dup(chain);
+			if (dup_chain == NULL)
+				return x509_verify_cert_error(ctx, last, depth,
+				    X509_V_ERR_OUT_OF_MEM, 0);
+			dup_chain->errors[0] = ctx->error;
+			ctx->chains[ctx->chains_count++] = dup_chain;
+		}
+		return 0;
+	}
+
+	/*
+	 * Now that leaf certificate checks have succeeded, duplicate the chain.
+	 * Even in the success path, we must ensure that memory allocation does not fail.
+	 */
+	if ((ctx->chains[ctx->chains_count] = x509_verify_chain_dup(chain)) == NULL)
+		return x509_verify_cert_error(ctx, last, depth, X509_V_ERR_OUT_OF_MEM, 0);
+
+	ctx->chains_count++;
+	/* Clear context errors to signal successful processing */
+	ctx->error = X509_V_OK;
+	ctx->error_depth = depth;
+	return 1;
+</repair>

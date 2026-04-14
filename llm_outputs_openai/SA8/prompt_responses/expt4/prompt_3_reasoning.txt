@@ -1,0 +1,13 @@
+The original code silently truncated the client's key exchange method string to remove the extension token, which meant that even if an attacker managed to manipulate the handshake by omitting or altering packets (resulting in a Terrapin attack), the code would still continue with a downgraded security setup. This subtle modification could allow the use of insecure ciphers like ChaCha20-Poly1305 or CBC with Encrypt-then-MAC even when the protocol expects stronger security guarantees.
+
+The repair changes the behavior when such an extension token is detected. Here’s the repair logic step-by-step:
+
+1. The code first checks if the key exchange method string (clientMethods[SSHConstants.SSH_KEX]) contains the vulnerable extension substring by using findSubstring(). This extension indicates that a client is using an extended feature that might be exploited.
+
+2. In the original code, if the token was present, the client’s key exchange string was simply truncated (modified) to remove the extension, thereby letting the process continue. This manipulation was the root cause of the vulnerability since silently removing the extension doesn’t ensure that the key exchange meets all required security invariants.
+
+3. The revised code instead throws an exception (SSHFatalException) if the extension token is detected. By raising an error and terminating the current key exchange process immediately rather than attempting to downgrade or silently modify the security parameters, it prevents potential exploitation. Essentially, any indication of an extension negotiation (and hence a possible Terrapin scenario) results in an immediate abortion of the connection.
+
+4. This approach ensures that the handshake does not complete with a vulnerable or downgraded security state. Aborting the connection forces both parties to renegotiate or abort the session entirely, thus avoiding a scenario where an attacker’s packet manipulation can lead to a weakened cryptographic setup.
+
+In summary, replacing the subtle truncation with an outright failure on detecting vulnerable extensions avoids the possibility of an attacker influencing the key exchange process undetected. Throwing an exception provides a safer fallback by ensuring that compromised or manipulated handshakes do not result in a partial or insecure connection—thereby fixing the vulnerability associated with the Terrapin attack in the SSH transport protocol.

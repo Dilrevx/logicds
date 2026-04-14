@@ -1,0 +1,39 @@
+Below is one example “fix‐in–context” for the TLS 1.3 handshake function. In the vulnerability the server requires mutual authentication but never verifies that the client actually sent a certificate_verify message; that is, the handshake “finishes” even if the client skipped its certificate verification. In this repair the code explicitly checks that if mutual authentication is required, then the certificate_verify message was received before continuing.
+
+Assume that the SSL structure has a flag (for example, hasReceivedCertVerify) that is set during the handshake when a valid certificate_verify is processed. (If your code uses different structures/fields, you’d adapt accordingly.) Also assume that ssl.isMTLSRequired indicates that the server requires a client certificate. The code below shows one patch that performs the additional check before continuing:
+//
+// Original buggy code snippet:
+//
+/*
+    Tls13Helper.WOLFSSL_ENTER("DoTls13Finished");
+
+    if (inOutIdx[0] + size + ssl.keys.padSz > totalSz)
+        return Constants.BUFFER_E;
+*/
+// 
+// Patched version:
+//
+    Tls13Helper.WOLFSSL_ENTER("DoTls13Finished");
+
+    // If mutual authentication is required then ensure that the certificate_verify message was received.
+    if (ssl.isMTLSRequired && !ssl.hasReceivedCertVerify) {
+        // Log error / alert as needed, and abort the handshake.
+        Tls13Helper.WOLFSSL_LEAVE("DoTls13Finished");
+        return Constants.HANDSHAKE_ERROR;  // or other appropriate error code
+    }
+
+    // Continue with buffer bounds check.
+    if (inOutIdx[0] + size + ssl.keys.padSz > totalSz) {
+        Tls13Helper.WOLFSSL_LEAVE("DoTls13Finished");
+        return Constants.BUFFER_E;
+    }
+
+    // Continue with additional processing
+    ...
+    
+In this repair the main changes are:
+1. A check is added right after entering the function to verify that if a client certificate is required then the server verifies the presence of a valid certificate_verify message.
+2. If the certificate_verify message was not received the handshake is aborted (returning an error).
+3. The original bounds check remains unchanged.
+
+This patch (or equivalent modifications in your codebase) prevents a malicious client from bypassing client certificate verification simply by omitting the certificate_verify message, thereby repairing the vulnerability.

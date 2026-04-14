@@ -1,0 +1,63 @@
+<repair>
+#if !defined(OPENSSL_NO_ENGINE) && !defined(FIPS_MODULE)
+    /*
+     * Legacy engine support code path.
+     * Corrected logical vulnerability: if no implementation was provided but an
+     * ENGINE is reserved for this cipher, then use that ENGINE.
+     */
+    if (cipher != NULL && impl == NULL)
+        tmpimpl = ENGINE_get_cipher_engine(cipher->nid);
+#endif
+
+    /*
+     * If an ENGINE was found (or was provided externally), use it.
+     * Also, if the context already has an ENGINE and cipher, and if the
+     * new cipher is either not specified or has the same nid, then simply
+     * skip engine reinitialisation.
+     */
+    if (ctx->engine && ctx->cipher
+        && (cipher == NULL || cipher->nid == ctx->cipher->nid))
+        goto skip_to_init;
+
+#if !defined(OPENSSL_NO_ENGINE) && !defined(FIPS_MODULE)
+    /*
+     * If tmpimpl was obtained by ENGINE_get_cipher_engine(), assign it.
+     * This fixes the vulnerability by ensuring that a reserved ENGINE is
+     * properly selected for subsequent operations.
+     */
+    if (cipher != NULL && impl == NULL)
+        impl = tmpimpl;
+#endif
+
+skip_to_init:
+
+#if !defined(OPENSSL_NO_ENGINE) && !defined(FIPS_MODULE)
+    if (impl != NULL) {
+        ctx->engine = impl;
+        /* Replace the cipher with the ENGINE-specific version */
+        cipher = ENGINE_get_cipher(ctx->engine, cipher->nid);
+        if (cipher == NULL) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+    }
+#endif
+
+    /* Assign the (possibly updated) cipher to the context */
+    ctx->cipher = cipher;
+
+    /*
+     * Call the cipher's initialization routine.
+     * This routine must be present.  If it's missing or fails then bail out.
+     */
+    if (cipher->init != NULL) {
+        if (!cipher->init(ctx, key, iv, params))
+            return 0;
+    } else {
+        ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+        return 0;
+    }
+
+    return 1;
+}
+</repair>

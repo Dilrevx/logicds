@@ -1,0 +1,59 @@
+To address the vulnerability described, we need to ensure that the `dns_dlzallowzonexfr` method is called for writable DLZ (Dynamic Loadable Zones) zones. The current code checks if the zone is in the DLZ database but does not explicitly handle the case where the zone is writable and should have its transfer permissions checked.
+
+Here's a step-by-step approach to fix this issue:
+
+1. **Identify Writable DLZ Zones**: We need to determine if the zone in question is a writable DLZ zone. This might require additional context or flags in the `db` object or elsewhere in the data structure representing the zone.
+
+2. **Call `dns_dlzallowzonexfr` for Writable Zones**: If the zone is identified as writable, we should call `dns_dlzallowzonexfr` to check if the zone transfer is allowed.
+
+3. **Handle the Result Appropriately**: Based on the result from `dns_dlzallowzonexfr`, we should either proceed with the zone transfer or deny it.
+
+Given that the exact criteria for determining if a DLZ zone is writable are not provided in the snippet, I'll assume there's a flag or some other mechanism within `db` or another part of the context that can be used to determine writability. For the sake of this example, let's assume there's a boolean flag `db->is_writable`.
+
+Here's how you might modify the code:
+
+```c
+if (result != ISC_R_SUCCESS) {
+    /*
+     * Normal zone table does not have a match.
+     * Try the DLZ database
+     */
+    // Temporary: only searching the first DLZ database
+    if (!ISC_LIST_EMPTY(client->view->dlz_searched)) {
+        result = dns_dlzfindzone(client->view, question_name, &db);
+
+        if (result == ISC_R_SUCCESS && db != NULL && db->is_writable) {
+            // Check if zone transfer is allowed for writable DLZ zones
+            result = dns_dlzallowzonexfr(client->view, question_name, &client->peeraddr, db);
+
+            if (result == ISC_R_NOPERM) {
+                char _buf1[DNS_NAME_FORMATSIZE];
+                char _buf2[DNS_RDATACLASS_FORMATSIZE];
+
+                result = DNS_R_REFUSED;
+                dns_name_format(question_name, _buf1, sizeof(_buf1));
+                dns_rdataclass_format(question_class, _buf2, sizeof(_buf2));
+                ns_client_log(client, DNS_LOGCATEGORY_SECURITY, NS_LOGMODULE_XFER_OUT, ISC_LOG_ERROR,
+                              "zone transfer '%s/%s' denied", _buf1, _buf2);
+                goto failure;
+            }
+            if (result != ISC_R_SUCCESS)
+                FAILQ(DNS_R_NOTAUTH, "non-authoritative zone", question_name, question_class);
+        } else if (result != ISC_R_SUCCESS) {
+            FAILQ(DNS_R_NOTAUTH, "non-authoritative zone", question_name, question_class);
+        }
+        is_dlz = true;
+    } else {
+        /*
+         * not DLZ and not in normal zone table, we are
+         * not authoritative
+         */
+        FAILQ(DNS_R_NOTAUTH, "non-authoritative zone", question_name, question_class);
+    }
+} else {
+```
+
+**Notes**:
+- The `dns_dlzfindzone` function is assumed to populate `db` with the correct zone information, including whether it is writable (`db->is_writable`). You may need to adjust this based on your actual implementation.
+- Ensure that `db->is_writable` is correctly set in your DLZ zone handling logic.
+- This solution assumes that the `dns_dlzfindzone` function is available and correctly implemented to retrieve the zone information and its writability status. Adjust the function calls according to your actual API.

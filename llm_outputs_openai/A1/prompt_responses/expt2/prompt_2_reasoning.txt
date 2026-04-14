@@ -1,0 +1,17 @@
+The repair begins by preserving the original behavior for contexts configured with no padding. The initial check (using the EVP_CIPH_NO_PADDING flag) remains intact to ensure that if the context was set up for no padding, the cipher continues with that configuration.
+
+The main improvement is wrapped in an #ifndef FIPS_MODULE block. This means that for non-FIPS builds, where the vulnerability is present, the repair introduces additional logic to address the timing of key and IV length initialization. The vulnerability is due to the fact that the OSSL_PARAM array was processed after the key and IV had already been established. This could have led to issues like truncation or overruns resulting in non-unique IVs, which may compromise confidentiality.
+
+Inside the conditional block, the code first checks if the params pointer is not NULL. This means that extra initialization parameters have been provided. It then creates a temporary array (upd_params) that can hold up to two parameters (one for the key length and one for the IV length) with a terminator. This temporary array is used to extract and process the necessary parameters early in the initialization process. 
+
+The repair uses OSSL_PARAM_locate_const() to search for the key length parameter using a known constant identifier (OSSL_CIPHER_PARAM_KEYLEN). If found, it copies that parameter into the temporary array. This ensures that any user-specified key length is applied to the cipher context immediately before any further processing.
+
+Similarly, for the IV length parameter, the code again uses OSSL_PARAM_locate_const() but checks for two synonymous identifiers (first OSSL_CIPHER_PARAM_IVLEN, then "ivlen"). This dual check is important to ensure both naming conventions are supported, thereby increasing compatibility and ensuring that the IV length is correctly applied.
+
+Once these parameters are safely gathered in the temporary array, the function EVP_CIPHER_CTX_set_params() is called. This function is responsible for updating the cipher context’s internal state with the early-specified key and IV lengths. By doing so, the cipher context is pre-configured with explicit lengths before the later parts of the initialization routine run. This early application prevents the risk of incorrect object state due to late overwrites, thus mitigating the vulnerability.
+
+If the call to set these parameters fails, an error is raised, and the initialization process is halted. This prevents the use of an improperly or inconsistently initialized context, further enhancing security.
+
+Finally, the repair leaves the call to the cipher’s internal encryption initialization function (ctx->cipher->einit) intact. This means that after the early parameter configuration, the encryption initialization proceeds as usual using the now correctly pre-configured state.
+
+In summary, the repair ensures that critical parameters (key and IV lengths) are extracted and applied to the context early in the process. This early processing prevents cases where those parameters might be inadvertently modified or applied too late, thereby fixing the vulnerability related to potential truncation, overruns, or non-unique IVs.

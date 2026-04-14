@@ -1,0 +1,29 @@
+The repair addresses a critical vulnerability in the DNSSEC validation process within the BIND DNS server software, specifically related to the handling of mirror zones. The original code snippet contains a flaw where it does not adequately verify whether a key found in the trust anchor table is indeed trusted. This allows an attacker to potentially inject malicious DNS data by exploiting the assumption that any key found in the trust anchor table is automatically trustworthy.
+
+### Vulnerability Analysis
+
+In the original code, when `dns_keytable_findkeynode` returns `ISC_R_SUCCESS`, indicating that the key corresponding to the DNSKEY RRset has been found in the trust anchor table, the code immediately sets the trust level of the DNSKEY RRset and its signatures to `dns_trust_secure` and marks the key as good (`*goodkey = true`). This action is performed without further verification of the key's trustworthiness.
+
+However, the trust anchor table can be manipulated or corrupted, either intentionally by an attacker or unintentionally due to software bugs or external factors. Simply finding a key in the trust anchor table does not guarantee that the key is valid or has not been tampered with. Therefore, relying solely on the presence of a key in the trust anchor table to establish trust can lead to the acceptance of forged DNS data.
+
+### Repair Explanation
+
+The repair introduces a critical check to ensure that the key found in the trust anchor table is indeed marked as trusted. This is achieved by calling `dns_key_is_trusted(keynode)` after successfully finding the key node. If the key is trusted, the code proceeds as originally intended, setting the trust levels and marking the key as good. If the key is not trusted, the code sets the result to `DNS_R_UNTRUSTEDKEY`, indicating that the key cannot be used to validate the DNSKEY RRset.
+
+This additional check effectively mitigates the risk of accepting untrusted keys from the trust anchor table, thereby preventing an attacker from injecting malicious DNS data through a man-in-the-middle attack or other means of manipulating the trust anchor table.
+
+### Code Changes Breakdown
+
+1. **Check for Trusted Key**: 
+   - The line `if (dns_key_is_trusted(keynode)) {` is added right after the successful lookup of the key node in the trust anchor table. This function call verifies whether the key is explicitly marked as trusted.
+
+2. **Handle Untrusted Keys**:
+   - If the key is not trusted, the code sets `result = DNS_R_UNTRUSTEDKEY;`. This ensures that the function returns an error indicating that the key cannot be used to validate the DNSKEY RRset, thus preventing the use of untrusted keys.
+
+3. **Maintain Original Functionality**:
+   - If the key is trusted, the original functionality remains intact, setting the trust levels of the DNSKEY RRset and its signatures to secure and marking the key as good.
+
+4. **Error Handling**:
+   - The default case in the switch statement remains unchanged, ensuring that any unexpected errors during the search of the trust anchor table are returned to the caller.
+
+By implementing these changes, the BIND DNS server can more securely handle mirror zones and other DNSSEC-related operations, significantly reducing the risk of accepting malicious DNS data. This repair aligns with best practices in cryptographic validation and trust management, ensuring the integrity and security of DNS data served by the server.

@@ -1,0 +1,141 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+OpenSSL supports creating a custom cipher via the legacy EVP_CIPHER_meth_new() function and associated function calls. OpenSSL versions 3.0.0 to 3.0.5 incorrectly handle legacy custom ciphers passed to the EVP_EncryptInit_ex2(), EVP_DecryptInit_ex2() and EVP_CipherInit_ex2() functions (as well as other similarly named encryption and decryption initialisation functions). Instead of using the custom cipher directly it incorrectly tries to fetch an equivalent cipher from the available providers. An equivalent cipher is found based on the NID passed to EVP_CIPHER_meth_new(). This NID is supposed to represent the unique NID for a given cipher. However it is possible for an application to incorrectly pass NID_undef as this value in the call to EVP_CIPHER_meth_new(). When NID_undef is used in this way the OpenSSL encryption/decryption initialisation function will match the NULL cipher as being equivalent and will fetch this from the available providers. This will succeed if the default provider has been loaded (or if a third party provider has been loaded that offers this cipher). Using the NULL cipher means that the plaintext is emitted as the ciphertext.
+</vulnerability_description>
+Here is the buggy source code:
+<buggy_code>
+    public static int evpCipherInitInternal(EvpCipherCtx ctx, EvpCipher cipher,
+                                            Engine impl, byte[] key, byte[] iv,
+                                            int enc, OsslParam[] params) {
+        int n = 0;
+        Engine tmpImpl = null;
+
+        if (!OPENSSL_NO_ENGINE && !FIPS_MODULE) {
+            tmpImpl = null;
+        }
+
+        ctx.setIvLen(-1);
+
+        if (enc == -1) {
+            enc = ctx.getEncrypt();
+        } else {
+            enc = (enc == 1) ? 1 : 0;
+            ctx.setEncrypt(enc);
+        }
+
+        if (cipher == null && ctx.getCipher() == null) {
+            Err.raise("EVP", "No cipher set");
+            return 0;
+        }
+
+        if (!OPENSSL_NO_ENGINE && !FIPS_MODULE) {
+            if (ctx.getEngine() != null && ctx.getCipher() != null &&
+                    (cipher == null || cipher.getNid() == ctx.getCipher().getNid())) {
+                return skipToInit(ctx);
+            }
+
+            if (cipher != null && impl == null) {
+                tmpImpl = Engine.getCipherEngine(cipher.getNid());
+            }
+        }
+
+
+        if (ctx.getEngine() != null || (!OPENSSL_NO_ENGINE && !FIPS_MODULE && tmpImpl != null)
+                || impl != null) {
+
+            if (ctx.getCipher() == ctx.getFetchedCipher()) {
+                ctx.setCipher(null);
+            }
+            EvpCipher.free(ctx.getFetchedCipher());
+            ctx.setFetchedCipher(null);
+            return legacyHandling(ctx, cipher, impl, tmpImpl, enc);
+        }
+
+
+
+        if (cipher != null && ctx.getCipher() != null) {
+            clearFree(ctx.getCipherData(), ctx.getCipher().getCtxSize());
+            ctx.setCipherData(null);
+        }
+
+        if (cipher != null && ctx.getCipher() != null) {
+            long flags = ctx.getFlags();
+            EvpCipherCtx.reset(ctx);
+            ctx.setEncrypt(enc);
+            ctx.setFlags(flags);
+        }
+
+        if (cipher == null) {
+            cipher = ctx.getCipher();
+        }
+
+
+
+        if (cipher.getProv() == null) {
+            if (FIPS_MODULE) {
+                Err.raise("EVP", "Initialization error");
+                return 0;
+            } else {
+                EvpCipher provCipher = EvpCipher.fetch(null,
+                        (cipher.getNid() == EvpCipher.NID_UNDEF) ? "NULL" : Obj.nidToSn(cipher.getNid()), "");
+
+                if (provCipher == null) {
+                    return 0;
+                }
+                cipher = provCipher;
+                EvpCipher.free(ctx.getFetchedCipher());
+                ctx.setFetchedCipher(provCipher);
+            }
+        }
+
+        if (cipher.getProv() != null) {
+            if (!EvpCipher.upRef(cipher)) {
+                Err.raise("EVP", "Initialization error");
+                return 0;
+            }
+            EvpCipher.free(ctx.getFetchedCipher());
+            ctx.setFetchedCipher(cipher);
+        }
+
+        ctx.setCipher(cipher);
+
+        if (ctx.getAlgCtx() == null) {
+            ctx.setAlgCtx(ctx.getCipher().newCtx(OsslProviderCtx.getContext(cipher.getProv())));
+            if (ctx.getAlgCtx() == null) {
+                Err.raise("EVP", "Initialization error");
+                return 0;
+            }
+        }
+
+        if ((ctx.getFlags() & EvpCipher.CTX_NO_PADDING) != 0) {
+            if (!EvpCipherCtx.setPadding(ctx, 0)) {
+                return 0;
+            }
+        }
+
+        if (enc == 1) {
+            if (ctx.getCipher().getEncryptInit() == null) {
+                Err.raise("EVP", "Initialization error");
+                return 0;
+            }
+
+            return ctx.getCipher().getEncryptInit().init(ctx.getAlgCtx(), key,
+                    (key == null ? 0 : EvpCipherCtx.getKeyLength(ctx)), iv,
+                    (iv == null ? 0 : EvpCipherCtx.getIvLength(ctx)), params);
+        }
+
+        if (ctx.getCipher().getDecryptInit() == null) {
+            Err.raise("EVP", "Initialization error");
+            return 0;
+        }
+
+        return ctx.getCipher().getDecryptInit().init(ctx.getAlgCtx(), key,
+                (key == null ? 0 : EvpCipherCtx.getKeyLength(ctx)), iv,
+                (iv == null ? 0 : EvpCipherCtx.getIvLength(ctx)), params);
+    }
+
+</buggy_code>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

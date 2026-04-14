@@ -1,0 +1,18 @@
+The repair restructures the code to ensure that the signature algorithm (sigAlgo) presented in the CertificateVerify message is strictly validated against the type of key (and certificate) that was provided. Here’s a walkthrough of the changes and how they address the vulnerability:
+
+1. Use of a Switch Statement:  
+   Instead of a series of if-statements, the repair uses a switch-case construct based on args.sigAlgo. This improves code clarity and makes it easier to ensure every supported algorithm is handled explicitly. By adding a default case at the end, the code now also rejects any unsupported or unexpected signature algorithms, preventing the use of algorithms not clearly associated with the certificate.
+
+2. Clear Association Between Algorithm and Certificate:  
+   For each supported signature algorithm (e.g. ED25519, ED448, ECC DSA, Falcon Level 1/5, RSA-PSS), the repair code checks if the corresponding flag indicating that a compatible certificate/key is present is set (e.g. ssl.peerEd25519KeyPresent). If the flag is not set, an appropriate error message is logged, and the function returns an error code (SIG_VERIFY_E). This guarantees that the actual public key used for signature verification matches the algorithm declared in the CertificateVerify message.
+
+3. Prohibition of Deprecated Algorithms:  
+   For RSA using PKCS#1.5 (rsa_sa_algo), the repair explicitly rejects its use by returning an INVALID_PARAMETER error. This aligns with the TLS v1.3 requirements, which mandate that RSA signatures in CertificateVerify must be RSASSA-PSS even if other algorithms appear in the supported list. This explicit rejection eliminates the possibility of bypassing certificate checks by mixing a mismatching algorithm.
+
+4. Handling RSA-PSS:  
+   For the RSA-PSS algorithm (rsa_pss_sa_algo), the code checks that the RSA key is present and valid (ssl.peerRsaKey != null and ssl.peerRsaKeyPresent). By doing so, it ensures that an RSA-PSS signature is only accepted if the corresponding RSA certificate has been provided—thereby preventing any mismatch.
+
+5. Fallback for Unknown Algorithms:  
+   The default case in the switch logs an “unsupported signature algorithm” error and returns SIG_VERIFY_E. This is crucial because if an algorithm not explicitly allowed appears, the handshake is terminated rather than risking that an unsupported or erroneously verified algorithm could bypass certificate verification.
+
+Overall, the repaired code ensures that every signature algorithm used in a CertificateVerify message is not only from the set of allowed algorithms but also fully consistent with the type of key confirmed to be present by the corresponding certificate message. This tightly couples the cryptographic algorithm used with its corresponding certificate, in line with the TLS v1.3 specification, and thereby prevents an attacker from bypassing certificate checks by presenting mismatched algorithms.

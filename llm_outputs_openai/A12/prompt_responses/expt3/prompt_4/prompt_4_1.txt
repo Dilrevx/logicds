@@ -1,0 +1,32 @@
+Below is one way to repair the vulnerability. In the buggy code the Finished processing does not verify that the client has sent its certificate‐verify message when mutual authentication is required. An attacker can therefore omit certificate verification and still complete the handshake. The fix is to add an explicit check that, when the server is configured for mutual authentication (or “client authentication required”), the client has actually sent the certificate_verify message; if it hasn’t, the handshake must be rejected.
+
+For example, assuming that (a) a Boolean flag (say, ssl->mutualAuth) indicates that the server requires client authentication and (b) a flag (say, ssl->gotCertVerify) is set to true only when a valid certificate_verify message is processed, you might patch the code as follows:
+
+---------------------------------------------------------------
+/* Check against totalSz */
+if (*inOutIdx + size + ssl->keys.padSz > totalSz)
+    return BUFFER_E;
+
+/* NEW: Enforce client certificate verification if mutual authentication is required. */
+if (ssl->mutualAuth && !ssl->gotCertVerify) {
+    /* Log the error as appropriate */
+    return CERT_VERIFY_MISSING;  /* Use an appropriate error code */
+}
+
+if (ssl->options.handShakeDone) {
+    ret = DeriveFinishedSecret(ssl, ssl->clientSecret,
+                               ssl->keys.client_write_MAC_secret);
+    if (ret != 0)
+        return ret;
+
+    secret = ssl->keys.client_write_MAC_secret;
+}
+---------------------------------------------------------------
+
+Notes on the repair:
+1. The newly added check immediately aborts the handshake if mutual authentication is required but the client has not sent a certificate_verify message.
+2. Be sure to set the ssl->gotCertVerify flag appropriately when processing a valid certificate_verify message.
+3. Replace CERT_VERIFY_MISSING with your implementation’s proper error code.
+
+This repair ensures that an incomplete client authentication (i.e. missing certificate_verify) does not result in a successful TLS handshake with a TLS v1.3 server.
+///

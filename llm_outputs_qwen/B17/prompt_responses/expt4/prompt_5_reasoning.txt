@@ -1,0 +1,41 @@
+The provided repair addresses a critical vulnerability in the `tls_verify_crl` function, which is responsible for verifying Certificate Revocation Lists (CRLs) during the TLS handshake process. The original code incorrectly checks for CRLs using the `subject` name of the certificate twice, instead of checking once for the `subject` and once for the `issuer`. This oversight can lead to scenarios where valid CRLs are ignored, allowing revoked certificates to pass validation and establish connections, thus compromising security.
+
+### Vulnerability Analysis
+
+The primary issue lies in the logic used to retrieve CRLs for verification. Specifically, the code retrieves CRLs based on the `subject` of the current certificate twice:
+
+1. **First Retrieval**: The code attempts to retrieve CRLs using the `subject` of the certificate to verify the integrity of the CRL itself.
+2. **Second Retrieval**: Instead of switching to the `issuer` of the certificate to check for revocation status, the code again retrieves CRLs using the `subject`.
+
+This incorrect approach means that the function fails to properly check if the certificate has been revoked according to the CRL issued by the certificate's issuer. As a result, even if a certificate has been revoked, the function might not detect it, leading to a security breach.
+
+### Repair Implementation
+
+To address this vulnerability, the repair modifies the second retrieval of CRLs to use the `issuer` of the certificate instead of the `subject`. Here’s how the repair is implemented:
+
+1. **First Retrieval**: This part remains unchanged. It correctly retrieves CRLs using the `subject` of the certificate to verify the integrity of the CRLs.
+   
+2. **Second Retrieval**: The repair changes the function to retrieve CRLs using the `issuer` of the certificate. This change ensures that the function checks the correct CRL for revocation information.
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, issuer);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+By making this change, the function now correctly retrieves the CRL issued by the certificate's issuer to check if the certificate has been revoked. This ensures that the revocation status of the certificate is accurately verified, preventing revoked certificates from being accepted during the TLS handshake.
+
+### Additional Considerations
+
+- **Version Compatibility**: The repair maintains compatibility across different versions of OpenSSL by using preprocessor directives to handle differences in API functions. This ensures that the function works correctly regardless of the OpenSSL version in use.
+  
+- **Error Handling**: The repair retains robust error handling mechanisms, ensuring that any issues encountered during CRL verification are logged and appropriately handled, maintaining the overall security and stability of the system.
+
+In summary, the repair corrects the logical flaw in the CRL verification process by ensuring that the function checks the correct CRL for revocation status. This change significantly enhances the security of the TLS implementation by preventing the acceptance of revoked certificates.

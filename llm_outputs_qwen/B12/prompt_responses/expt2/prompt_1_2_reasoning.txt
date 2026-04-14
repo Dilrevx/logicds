@@ -1,0 +1,25 @@
+The provided repair addresses a critical vulnerability in the wolfSSL library that could allow a man-in-the-middle (MITM) attacker to impersonate a TLS 1.3 server and bypass authentication. The vulnerability stems from improper handling of digital signatures and public keys sent by the peer during the TLS handshake process. Specifically, the original code does not adequately validate the presence and integrity of these keys, which can be exploited by an attacker.
+
+### Original Code Analysis
+
+In the original code snippet, the library checks if the peer has sent specific types of keys or signatures (ED25519, ED448, ECC DSA, RSA PKCS#1.5, and RSA PSS). However, the handling of these checks is inconsistent and incomplete:
+
+- **ED25519, ED448, and ECC DSA**: If the peer sends a key of these types but it is not present in the verification process (`!ssl->peerEd25519KeyPresent`, `!ssl->peerEd448KeyPresent`, `!ssl->peerEccDsaKeyPresent`), the library logs a message ("Oops, peer sent [key type] key but not in verify") but does not terminate the connection or reject the handshake. This allows the handshake to continue even if the expected keys are missing, potentially enabling a MITM attack.
+  
+- **RSA PKCS#1.5**: If the peer sends an RSA PKCS#1.5 signature, the library logs a message and terminates the handshake with an `INVALID_PARAMETER` error. This is a correct response because RSA PKCS#1.5 is not used in TLS 1.3, and its presence indicates an attempt to use an outdated or invalid signature algorithm.
+  
+- **RSA PSS**: If the peer sends an RSA PSS signature but the corresponding RSA key is either not present or not marked as present (`ssl->peerRsaKey == NULL || !ssl->peerRsaKeyPresent`), the library logs a message and terminates the handshake. This is also a correct response, ensuring that the handshake only proceeds if the necessary keys are available.
+
+### Repair Explanation
+
+The repair involves modifying the behavior of the library when it detects that a required key is missing during the handshake process. Specifically, the repair ensures that the library terminates the handshake with an `INVALID_PARAMETER` error when any of the following conditions are met:
+
+- **ED25519 Key Missing**: If the peer is supposed to send an ED25519 key but it is not present, the library now logs a message and terminates the handshake. This prevents the handshake from continuing without the necessary key, which could be exploited by an attacker to impersonate the server.
+  
+- **ED448 Key Missing**: Similarly, if the peer is supposed to send an ED448 key but it is not present, the library logs a message and terminates the handshake. This ensures that the handshake only proceeds if the correct key is received.
+  
+- **ECC DSA Key Missing**: If the peer is supposed to send an ECC DSA key but it is not present, the library logs a message and terminates the handshake. This step is crucial for maintaining the security of the handshake process.
+
+By implementing these changes, the repair ensures that the library strictly adheres to the expected behavior during the TLS 1.3 handshake process. It prevents the handshake from proceeding if any required keys are missing, thereby mitigating the risk of a MITM attack. The use of `ERROR_OUT(INVALID_PARAMETER, exit_dcv)` ensures that the handshake is terminated gracefully, providing a clear indication of the failure reason.
+
+In summary, the repair enhances the robustness and security of the wolfSSL library by ensuring that all necessary keys are properly validated before the handshake is allowed to proceed. This change aligns with best practices for secure communication protocols and helps protect against sophisticated attacks that could compromise the integrity of the TLS connection.

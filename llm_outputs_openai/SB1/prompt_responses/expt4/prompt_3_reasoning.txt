@@ -1,0 +1,18 @@
+The repair addresses the vulnerability by ensuring that a CertificateVerify message is required when the client's certificate does not support signing. Originally, the code erroneously allowed a client with a Diffie-Hellman (DH) certificate—which does not include signing support (i.e. lacks the EVP_PKT_SIGN flag)—to reuse the certificate message even if no CertificateVerify message was received.
+
+Here's how the repair works:
+
+1. The repaired condition checks whether the received certificate does not support signing. It does this by verifying that the signature-related bit is not set in the "type" variable (i.e. (type & Constants.EVP_PKT_SIGN) equals 0). This is the opposite of the original code, which incorrectly checked for the presence of the signing bit. A DH certificate typically lacks this signing capability.
+
+2. If the certificate (peer) is present and it does not have signing capabilities, then the absence of a CertificateVerify message is not acceptable because a valid CertificateVerify message is required to prove possession of the private key in TLS handshakes. This extra step prevents an attacker from reusing a DH certificate—which, even if trusted, should not bypass the verification process—thus closing the window of unauthorized access.
+
+3. Upon detecting that the client certificate cannot be used for signing (i.e., it is a DH certificate), the function sets an appropriate alert code (SSL_AD_UNEXPECTED_MESSAGE), logs an error (with SSL_R_MISSING_VERIFY_MESSAGE), sends the alert to the client (using ssl3_send_alert), and returns immediately without further processing the handshake message.
+
+4. For certificates that support signing (i.e., when (type & Constants.EVP_PKT_SIGN) != 0), the repair allows the message to be processed normally. This ensures that only certificates that can logically provide a valid CertificateVerify message (by demonstrating possession of the private key) are permitted to bypass the reuse message scenario.
+
+In summary, the repair fixes the vulnerability by:
+• Reversing the conditional check to correctly determine if the provided certificate has signing capabilities.
+• Forcing a validation step (CertificateVerify message) for certificates that cannot sign, such as DH certificates.
+• Preventing attackers from taking advantage of a flawed logic path that could allow bypassing essential authentication steps in the TLS handshake.
+
+This adjustment enforces the correct semantics of TLS client authentication, ensuring that only certificates capable of being properly validated are allowed to proceed without an explicit CertificateVerify message, while any certificate (like a DH certificate) that doesn’t support signing must provide the extra authentication proof.

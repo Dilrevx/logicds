@@ -1,0 +1,20 @@
+The repair adds extra verification steps that validate the CA basic constraints for certificates that are used as issuers. In particular, we now check that any certificate acting as a Certification Authority is actually authorized—that is, that its Basic Constraints extension indicates it is a CA.
+
+Here’s a breakdown of the changes:
+
+1. In the branch for a self-signed certificate when the chain size is one, after calling ctx.get_issuer(x), we add a new check:
+   • Immediately after confirming that the issuer certificate (available as Helper.lastIssuer) equals the current certificate, we invoke Helper.isValidCA on Helper.lastIssuer.
+   • If this certificate is not a valid CA (i.e., it does not have proper Basic Constraints set), an error is set using Constants.X509_V_ERR_INVALID_CA, and the verification callback is invoked. This prevents a non-authorized certificate from being treated as a trusted CA.
+
+2. In the loop that builds the certificate chain (the for(;;) loop), after calling ctx.get_issuer(x) for non-self-signed certificates, if an issuer was found (ok > 0) we now perform a similar Basic Constraints check on Helper.lastIssuer.
+   • If the certificate does not pass the CA check, the same error is set, and the callback is called. This interrupts the chain build if the issuer is not authorized as a CA.
+
+3. In the alternative chain verification within the while loop inside the "if" block under X509_V_FLAG_NO_ALT_CHAINS, before freeing the issuer:
+   • We check once again with Helper.isValidCA to ensure that this potential alternative chain issuer holds appropriate CA credentials. If the certificate fails this check, the verification error is set accordingly and the callback is triggered, preventing the use of an unauthorized certificate even in an alternative chain scenario.
+
+By inserting these checks:
+• The repair ensures that any certificate used to build or extend the chain must have valid CA credentials as indicated by its Basic Constraints. This directly addresses the vulnerability where the original implementation could inadvertently treat valid leaf certificates as if they were CAs, exploiting the chain building process.
+• This extra validation prevents attackers from crafting a chain with a leaf certificate that impersonates a CA by either omission or misrepresentation of its Basic Constraints.
+• The changes also maintain existing error handling and callback mechanisms, ensuring that if an invalid CA is encountered, the chain validation process aborts appropriately.
+
+Overall, these modifications enforce the proper use of X.509 Basic Constraints, ensuring that only certificates legitimately capable of issuing subordinate certificates are used as trust anchors during certification chain verification.

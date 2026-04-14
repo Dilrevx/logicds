@@ -1,0 +1,21 @@
+The repair addresses a logical vulnerability in how the trust anchor lookup and update are handled. Here’s a walkthrough of the changes and how they fix the vulnerability:
+
+1. Trust Anchor Lookup:
+ • The code first calls dns_keytable_findkeynode to search for a matching keynode in the trust anchor table (vctx->secroots) using the algorithm and key ID from the key. This part of the logic remains unchanged.
+
+2. Problematic Detach Operation:
+ • In the original code, if the keynode was found (ISC_R_SUCCESS), the code detached the keynode from the trust anchor table using dns_keytable_detachkeynode. Detaching the trust anchor is risky because it might inadvertently remove a key that is still needed for the proper validation of subsequent DNS responses. Removing a trust anchor could lead to false negatives when checking valid digitally signed responses.
+ • The repair removes the detach operation. Instead of detaching, it immediately sets the trust state (dns_trust_secure) for both the keyset and key signatures within the validation context (vctx). This way, the anchor remains intact for any future validations.
+
+3. Handling Non-Matching Results:
+ • If the key isn’t found (DNS_R_PARTIALMATCH or ISC_R_NOTFOUND), the new logic simply resets the result to ISC_R_SUCCESS. This means that although the current key isn’t marked as trusted based on the anchor table, it doesn’t cause an error. This is consistent with the idea that other keys signing the DNSKEY set might still be valid.
+ • If there is another type of error returned from the trust anchor lookup, the new code simply propagates that error, allowing the calling function to handle it appropriately without making unsafe state changes.
+
+4. Cleanup:
+ • After handling the trust anchor detection logic, the code calls dst_key_free(&key) to clean up any allocated resources associated with the key. This ensures that memory is handled properly regardless of whether the key was found in the trust anchor table.
+
+5. Overall Impact:
+ • The primary vulnerability fixed by this repair is the inadvertent removal of trust anchors. By keeping the trust anchor in the table intact (i.e., not calling dns_keytable_detachkeynode), the repaired code preserves the necessary state for future validations.
+ • This repair also enhances the clarity and stability of the function, ensuring that it simply marks a matching key as trusted without altering the trust anchor table itself.
+
+In summary, the repair ensures that a trust anchor is not removed when located, thereby maintaining the integrity of the trust anchor table and preventing issues with subsequent validations. This approach follows the principle of “do no harm” to the system’s trust data, correctly updates the validation flags, and handles errors appropriately.

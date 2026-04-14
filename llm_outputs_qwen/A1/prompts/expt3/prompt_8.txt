@@ -1,0 +1,84 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags. Do not provide any extra text explanation.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+As an example, here is a vulnerability description of a buggy source code:
+<example_vulnerability_description>
+ChaCha20-Poly1305 is an AEAD cipher, and requires a unique nonce input for every encryption operation. RFC 7539 specifies that the nonce value (IV) should be 96 bits (12 bytes). OpenSSL allows a variable nonce length and front pads the nonce with 0 bytes if it is less than 12 bytes. However it also incorrectly allows a nonce to be set of up to 16 bytes. In this case only the last 12 bytes are significant and any additional leading bytes are ignored. It is a requirement of using this cipher that nonce values are unique. Messages encrypted using a reused nonce value are susceptible to serious confidentiality and integrity attacks. If an application changes the default nonce length to be longer than 12 bytes and then makes a change to the leading bytes of the nonce expecting the new value to be a new unique nonce then such an application could inadvertently encrypt messages with a reused nonce. 
+</example_vulnerability_description>
+Here is the buggy source code of the example:
+<example_buggy_code>
+    case EVP_CTRL_AEAD_SET_IVLEN:
+        if (arg <= 0 || arg > CHACHA_CTR_SIZE)
+            return 0;
+        actx->nonce_len = arg;
+        return 1;
+
+</example_buggy_code>
+Here is the fixed code of the example:
+<example_answer>
+<repair>
+    case EVP_CTRL_AEAD_SET_IVLEN:
+        if (arg <= 0 || arg > CHACHA20_POLY1305_MAX_IVLEN)
+            return 0;
+        actx->nonce_len = arg;
+        return 1;
+
+</repair>
+</example_answer>
+Here is the vulnerability description of the buggy source code we want to fix:
+<vulnerability_description>
+A bug has been identified in the processing of key and initialisation vector (IV) lengths. This can lead to potential truncation or overruns during the initialisation of some symmetric ciphers. A truncation in the IV can result in non-uniqueness, which could result in loss of confidentiality for some cipher modes. When calling EVP_EncryptInit_ex2(), EVP_DecryptInit_ex2() or EVP_CipherInit_ex2() the provided OSSL_PARAM array is processed after the key and IV have been established. 
+</vulnerability_description>
+Here is the buggy source code we want to fix:
+<buggy_code>
+    if ((ctx->flags & EVP_CIPH_NO_PADDING) != 0) {
+        /*
+         * If this ctx was already set up for no padding then we need to tell
+         * the new cipher about it.
+         */
+        if (!EVP_CIPHER_CTX_set_padding(ctx, 0))
+            return 0;
+    }
+
+    if (enc) {
+        if (ctx->cipher->einit == NULL) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+
+        return ctx->cipher->einit(ctx->algctx,
+                                  key,
+                                  key == NULL ? 0
+                                              : EVP_CIPHER_CTX_get_key_length(ctx),
+                                  iv,
+                                  iv == NULL ? 0
+                                             : EVP_CIPHER_CTX_get_iv_length(ctx),
+                                  params);
+    }
+
+</buggy_code>
+Here is a repair description to fix the buggy source code we want to fix
+<repair_description>
+The repair addresses a critical vulnerability related to how key and initialization vector (IV) lengths are handled during the initialization of symmetric ciphers using functions like `EVP_EncryptInit_ex2()`, `EVP_DecryptInit_ex2()`, or `EVP_CipherInit_ex2()`. The original code processes the provided `OSSL_PARAM` array after the key and IV have been established, potentially leading to truncation or overruns that can compromise security, especially in modes requiring unique IVs.
+
+To mitigate this issue, the repair introduces a preprocessing step for the `OSSL_PARAM` array before the actual cipher initialization. Here’s a detailed breakdown of the repair steps:
+
+1. **Check for No Padding Requirement**: The function first checks if the context (`ctx`) has been set up for no padding. If so, it ensures that the new cipher also operates without padding by calling `EVP_CIPHER_CTX_set_padding(ctx, 0)`. This step remains unchanged from the original code and sets the stage for subsequent operations.
+
+2. **Conditional Preprocessing for Non-FIPS Modules**: The repair introduces a conditional block that only executes for non-FIPS modules. This is crucial because FIPS (Federal Information Processing Standard) modules have different internal mechanisms that prevent the vulnerability. The condition `#ifndef FIPS_MODULE` ensures that the additional steps are applied only where necessary.
+
+3. **Prepare for Parameter Handling**: Inside the conditional block, a temporary array `param_lens` is declared to hold parameters related to key length (`OSSL_CIPHER_PARAM_KEYLEN`) and IV length (`OSSL_CIPHER_PARAM_IVLEN`). This array is designed to store up to three parameters but currently uses only two, with the third slot reserved for future use or safety margin.
+
+4. **Locate Key Length Parameter**: The repair searches the `params` array for the key length parameter using `OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_KEYLEN)`. If found, this parameter is copied into the `param_lens` array. This ensures that the correct key length is recognized before proceeding with initialization, preventing any mismatches or truncations.
+
+5. **Locate IV Length Parameter**: Similarly, the repair looks for the IV length parameter using `OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_IVLEN)`. Since `OSSL_CIPHER_PARAM_AEAD_IVLEN` is a synonym for `OSSL_CIPHER_PARAM_IVLEN`, this step covers both AEAD (Authenticated Encryption with Associated Data) and non-AEAD modes. If the IV length parameter is present, it is added to the `param_lens` array.
+
+6. **Set Parameters Before Initialization**: After collecting the relevant parameters, the repair checks if any parameters were found by comparing `q` (the pointer to the next available slot in `param_lens`) with its initial value `param_lens`. If parameters were added, the repair calls `EVP_CIPHER_CTX_set_params(ctx, param_lens)` to apply these settings to the context. This ensures that the key and IV lengths are correctly set before the cipher initialization proceeds, thus preventing truncation or overrun issues.
+
+7. **Error Handling**: If setting the parameters fails, the repair raises an error using `ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_LENGTH)` and returns 0, indicating failure. This robust error handling ensures that any issues with parameter setting are immediately apparent and can be addressed.
+
+8. **Proceed with Cipher Initialization**: Finally, if all previous steps succeed, the repair proceeds with the cipher initialization by calling `ctx->cipher->einit()` with the appropriate arguments. This step remains unchanged from the original code but now operates on a context where key and IV lengths have been correctly set.
+
+By implementing these steps, the repair ensures that key and IV lengths are accurately and securely configured before the cipher initialization process begins, effectively mitigating the risk of truncation or overruns and enhancing the overall security of the cryptographic operations.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability we want to fix.

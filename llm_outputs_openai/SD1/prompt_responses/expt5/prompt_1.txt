@@ -1,0 +1,37 @@
+<repair>
+    if (srtp.probation_cnt > 0 &&
+        (err == SRTP_ERR_REPLAY_OLD || err == SRTP_ERR_REPLAY_FAIL))
+    {
+        /*
+         * SECURITY FIX:
+         * An attacker could trigger a replay error on many packets to force the
+         * SRTP session to stop and restart repeatedly, leading to a denial‐of‐service.
+         * To mitigate this, we impose a minimum time interval between automatic
+         * reinitializations.
+         */
+        static pj_uint32_t last_restart_time = 0;
+        pj_uint32_t current_time = pj_get_ticks();
+        const pj_uint32_t MIN_RESTART_INTERVAL_MS = 5000;  // 5 seconds
+
+        if (current_time - last_restart_time >= MIN_RESTART_INTERVAL_MS) {
+            last_restart_time = current_time;
+            /* Stop the current SRTP session before restarting */
+            pj_status_t stop_status = pjmedia_transport_srtp_stop(srtp);
+            if (stop_status != PJ_SUCCESS) {
+                /* Optionally log or handle the stop failure */
+            }
+            SrtpCrypto tx = srtp.tx_policy;
+            SrtpCrypto rx = srtp.rx_policy;
+            int status = pjmedia_transport_srtp_start(srtp, tx, rx);
+            if (status == PJ_SUCCESS && !srtp.bypass_srtp) {
+                err = srtp_unprotect(srtp.srtp_rx_ctx, pkt, len);
+            }
+        }
+        else {
+            /* Too soon to restart the session again.
+             * Drop the packet to avoid repeated disruptions (and possible DoS).
+             */
+            err = SRTP_ERR_REPLAY_FAIL;
+        }
+    }
+</repair>

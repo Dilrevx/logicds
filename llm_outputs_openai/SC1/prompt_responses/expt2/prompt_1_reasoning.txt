@@ -1,0 +1,25 @@
+The repair adds a safeguard by checking if the verification function returns a negative value, which indicates an internal error (like an out-of-memory condition), rather than a simple certificate failure. In the buggy code, if X509_STORE_CTX.verify_cert(ctxStore) returns a negative number, that negative value might later be misinterpreted by higher-level functions (such as SSL_get_error()) as the special SSL_ERROR_WANT_RETRY_VERIFY error. This error code is typically reserved for cases when the application has explicitly set a custom certificate verification callback via SSL_CTX_set_cert_verify_callback(), but most applications don’t do this. As a result, an internal error could lead to unexpected behavior in client applications, since they might mistakenly think the verification process simply needs to be retried.
+
+To fix this, the repair code checks if the result (stored in the variable i) is less than 0. If it is, the code then forces i to 0. In the context of certificate verification, a return value of 0 is interpreted as a verification failure. This means that if an internal error occurs (indicated by a negative return), we now safely convert it into a failure, thereby eliminating any misinterpretation of the certificate status. This change ensures that higher-level functions will behave as expected for a verified certificate failure and will not attempt to treat the situation as one that might resolve via a retry.
+
+The repaired snippet is as follows:
+
+<repair>
+        if (s.ctx.app_verify_callback != null)
+            i = s.ctx.app_verify_callback.verify(ctxStore, s.ctx.app_verify_arg);
+        else
+            i = X509_STORE_CTX.verify_cert(ctxStore);
+        /* If a negative value is returned (indicating an internal error),
+           force it to a verifiable failure (0) to prevent misinterpretation
+           as SSL_ERROR_WANT_RETRY_VERIFY in higher-level code. */
+        if (i < 0)
+            i = 0;
+</repair>
+
+By normalizing any negative error codes to a simple verification failure, the repair avoids the potential mishandling where an internal error (signaled by a negative return) inadvertently triggers an unexpected retry error (SSL_ERROR_WANT_RETRY_VERIFY). This not only brings consistency with the expectations of the SSL_get_error() function but also ensures that client applications see only valid and expected verification results, preventing unintended behaviors in SSL handshake and connection setup processes.
+
+In summary, the repair fixes the vulnerability by:
+1. Detecting when X509_STORE_CTX.verify_cert(ctxStore) returns a negative value.
+2. Converting the negative value to 0 to indicate a certificate verification failure.
+3. Preventing higher-level functions from misinterpreting the error as being related to a need to retry verification.
+This approach strengthens the robustness of the SSL verification process and ensures a more predictable application flow in case of internal errors.

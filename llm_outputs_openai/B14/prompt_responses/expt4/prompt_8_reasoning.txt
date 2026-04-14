@@ -1,0 +1,17 @@
+The repair changes the decision logic to ensure that a socket’s handle is detached immediately only if both conditions are met: the current thread matches the network manager’s thread and the socket does not already have a pending close callback (i.e. its close-callback pointer is NULL).
+
+Originally, the code checked only whether the thread identifier of the socket (sock->tid) equaled the current network manager thread (isc_nm_tid()). If they matched, it immediately called the detach callback (nmhandle_detach_cb). This approach could be problematic when there's already an asynchronous close callback scheduled (indicated by a non-NULL sock->close_cb). In such cases, executing the immediate detach callback might bypass or interfere with the proper asynchronous cleanup. This faulty handling could lead to sockets staying in the CLOSE_WAIT state indefinitely, particularly when clients use specially crafted TCP streams that trigger these scenarios.
+
+With the repair, an additional check is introduced:
+
+  if ((sock->tid == isc_nm_tid()) && (sock->close_cb == NULL)) { … }
+
+This augmented condition ensures that immediate detachment happens only under two circumstances:
+1. The code is executing on the correct network manager thread.
+2. The socket currently does not have a close-handle callback already registered or scheduled for asynchronous processing.
+
+If both conditions hold, the immediate detach callback (nmhandle_detach_cb) is invoked, thereby correctly closing the connection and releasing resources promptly. This prevents the scenario where a connection might linger in the CLOSE_WAIT state because the resource cleanup was deferred indefinitely.
+
+If either condition fails—either the thread identifier does not match or a close-handle callback is present—the code proceeds to set up an asynchronous detachment. It retrieves an asynchronous event using isc__nm_get_netievent_detach, stores the handle in the event, and enqueues the event for processing. This delayed handling gives time for any pending cleanup operations that might be required because of asynchronous processing needs. As a result, cleanup is deferred in a controlled manner, which avoids interfering with proper connection teardown while also ensuring that no socket is left hanging in the CLOSE_WAIT state.
+
+Overall, this repair carefully partitions detachment between synchronous and asynchronous processing. By checking for an existing asynchronous close callback, the repair ensures that the immediate callback is only executed in scenarios that are safe—with no pending asynchronous operations—thus preventing conflicts that could leave the TCP socket in CLOSE_WAIT indefinitely. This nuanced approach addresses the vulnerability by preventing overlapping or redundant structure detachment, ensuring that cleanup is performed promptly and correctly according to the current state and execution context of the socket.

@@ -1,0 +1,58 @@
+<repair>
+    public static void x509_crt_verify_name(MbedtlsX509Crt crt, String cn, int[] flags) {
+        MbedtlsX509Name name;
+        MbedtlsX509Sequence cur;
+        int cn_len = cn.length();
+        // If the certificate has a SubjectAltName extension then verify the name against those entries.
+        if ((crt.extTypes & MbedtlsConstants.MBEDTLS_X509_EXT_SUBJECT_ALT_NAME) != 0) {
+            for (cur = crt.subjectAltNames; cur != null; cur = cur.next) {
+                // Only consider DNS-type names; assume that cur.data holds the SAN value as a String.
+                if (cur.data instanceof String) {
+                    String san = (String)cur.data;
+                    // Use a dedicated comparison that supports wildcard matching instead of a simple substring match.
+                    if (x509_dns_name_match(san, cn)) {
+                        flags[0] = 0; // Name verified OK, zero indicates success.
+                        return;
+                    }
+                }
+            }
+            // No SAN entry matched, flag the error.
+            flags[0] = MbedtlsConstants.X509_BADCERT_CN_MISMATCH;
+            return;
+        }
+        // When there is no SubjectAltName extension, fall back to verifying the certificate’s subject CN.
+        for (name = crt.subject; name != null; name = name.next) {
+            if (name.oid.equals(MbedtlsConstants.OID_COMMON_NAME)) {
+                // Compare the entire string rather than doing a partial match.
+                if (name.value.equalsIgnoreCase(cn)) {
+                    flags[0] = 0;
+                    return;
+                }
+            }
+        }
+        // If no matching CN was found, flag the error.
+        flags[0] = MbedtlsConstants.X509_BADCERT_CN_MISMATCH;
+    }
+
+    // Helper method to compare DNS names with support for wildcard matching.
+    private static boolean x509_dns_name_match(String pattern, String hostname) {
+        if (pattern == null || hostname == null) {
+            return false;
+        }
+        // If the pattern starts with a wildcard character, handle it appropriately.
+        if (pattern.charAt(0) == '*') {
+            // A wildcard must be followed by a dot to be valid.
+            int patternDot = pattern.indexOf('.');
+            int hostnameDot = hostname.indexOf('.');
+            if (patternDot > 0 && hostnameDot > 0) {
+                String patternSuffix = pattern.substring(patternDot);
+                String hostnameSuffix = hostname.substring(hostnameDot);
+                // Compare the remainder of the name ignoring case.
+                return patternSuffix.equalsIgnoreCase(hostnameSuffix);
+            }
+            return false;
+        } else {
+            return pattern.equalsIgnoreCase(hostname);
+        }
+    }
+</repair>

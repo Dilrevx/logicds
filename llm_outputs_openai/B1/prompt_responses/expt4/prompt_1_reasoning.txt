@@ -1,0 +1,11 @@
+Below is an explanation of the repair:
+
+1. The patch adds a check for the certificate’s public key type using X509_get_pubkey and then verifying if it is a Diffie–Hellman (DH) key via EVP_PKEY_id. Previously, the check only considered certificates flagged with EVP_PKT_SIGN. However, a DH certificate might not set this flag but still needs a proper CertificateVerify message to ensure authentication. Without this check, crafted TLS handshakes with DH certificates could bypass authentication.
+
+2. After obtaining the public key with X509_get_pubkey(peer), the code immediately checks if it exists. If it does, it then uses EVP_PKEY_id to determine if the certificate uses a DH key. If a DH key is detected, the public key is freed, and the function sets an error (using SSL_AD_UNEXPECTED_MESSAGE and SSL_R_MISSING_VERIFY_MESSAGE) before jumping to the error exit (goto f_err). This ensures that any certificate that uses the DH mechanism is required to send a valid CertificateVerify message, closing the vulnerability.
+
+3. The repair also preserves the legacy behavior – if the certificate has signing capability (indicated by type & EVP_PKT_SIGN) but wasn’t handled above, the error is similarly raised. This means that for all certificates presenting either a DH key or a signing key, the absence of a CertificateVerify message is considered a protocol violation.
+
+4. By correctly identifying DH keys and ensuring the CertificateVerify message is present, the patch blocks an attacker from bypassing client authentication. This makes it much harder to impersonate a client without possessing the appropriate private key.
+
+Overall, the changes tighten the authentication process by requiring proof of possession of the private key for DH certificates, as well as for certificates marked with signing capabilities. This repair directly addresses the vulnerability where a DH certificate could be misused to gain unauthorized access in the TLS handshake.

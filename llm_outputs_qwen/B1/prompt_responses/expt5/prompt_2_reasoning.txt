@@ -1,0 +1,23 @@
+The original code snippet from `ssl3_get_cert_verify` function in OpenSSL does not properly handle the scenario where a client presents a Diffie-Hellman (DH) certificate but does not send a corresponding `CertificateVerify` message. This oversight can lead to a security vulnerability, as it allows an attacker to bypass the intended authentication process by omitting the `CertificateVerify` step, thus gaining unauthorized access.
+
+### Vulnerability Analysis
+
+In TLS, when a client authenticates itself to a server using a public key certificate, it must also prove possession of the corresponding private key through a `CertificateVerify` message. This message is a digital signature created using the client's private key over a hash of the handshake messages up to that point. If the server does not require this `CertificateVerify` message when a client presents a signing-capable certificate (such as one supporting Diffie-Hellman), it can lead to a situation where the server mistakenly accepts the client as authenticated without verifying the client's possession of the private key.
+
+The vulnerability arises because the original code does not enforce the requirement for a `CertificateVerify` message when a client uses a certificate that includes signing capabilities (indicated by `EVP_PKT_SIGN`). Specifically, if the client uses a DH certificate, the server might accept the client without checking the `CertificateVerify` message, leading to a potential security breach.
+
+### Repair Explanation
+
+To address this vulnerability, the repair modifies the logic to ensure that a `CertificateVerify` message is required when a client presents a certificate with either signing (`EVP_PKT_SIGN`) or key exchange (`EVP_PKT_EXCH`) capabilities. Here’s how the repair works:
+
+1. **Check for Certificate Type**: The code first checks if the received message type is not `SSL3_MT_CERTIFICATE_VERIFY`. This indicates that the expected `CertificateVerify` message is missing.
+
+2. **Evaluate Certificate Capabilities**:
+   - **Signing Capability (`EVP_PKT_SIGN`)**: If the client certificate has signing capabilities, the server should expect a `CertificateVerify` message. If it is missing, the server responds with an `SSL_AD_UNEXPECTED_MESSAGE` alert and an error code `SSL_R_MISSING_VERIFY_MESSAGE`, indicating that the `CertificateVerify` message was expected but not received.
+   - **Key Exchange Capability (`EVP_PKT_EXCH`)**: The repair introduces a new check for key exchange capabilities. If the client certificate supports key exchange (as indicated by `EVP_PKT_EXCH`), the server similarly expects a `CertificateVerify` message. If missing, the server responds with an `SSL_AD_HANDSHAKE_FAILURE` alert and a specific error code `SSL_R_MISSING_VERIFY_MESSAGE_WITH_DH_CERT`, indicating that a `CertificateVerify` message was expected for a certificate with key exchange capabilities but was not received.
+
+3. **Reuse Message Handling**: If neither of the above conditions apply (i.e., the client certificate does not have signing or key exchange capabilities, or the `CertificateVerify` message is correctly provided), the server sets `s->s3->tmp.reuse_message=1` to reuse the current message in subsequent processing steps. It then sets `ret=1` to indicate successful handling and proceeds to the end of the function.
+
+### Conclusion
+
+By enforcing the requirement for a `CertificateVerify` message for certificates with both signing and key exchange capabilities, the repair ensures that the server only accepts clients as authenticated after verifying their possession of the private key associated with the presented certificate. This modification effectively mitigates the risk of an attacker bypassing the client authentication process through a crafted TLS handshake, thereby enhancing the security of the TLS connection.

@@ -1,0 +1,68 @@
+Below is an example patch in C that adds a state‐aware check for processing a ChangeCipherSpec (CCS) message. In this example the handshake state structure ("hs") contains a flag named ccs_expected that is nonzero only when a CCS message is allowed. The repair verifies that flag immediately after confirming that the record is well formed and that a new cipher has been negotiated; if the flag is not set, an error is raised. Once a valid CCS arrives, the flag is cleared so that no further CCS messages are accepted until allowed by the handshake state.
+
+Below is an illustrative snippet of the patched code:
+
+------------------------------------------------------------
+/* Example function processing a ChangeCipherSpec message */
+int process_change_cipher_spec(SSL *ssl, Record *rec)
+{
+    HandshakeState *hs = ssl->handshake;
+    /* Check that the record contains exactly one byte and that it
+       is the expected ChangeCipherSpec value. */
+    if (rec->length != 1 || rec->data[0] != SSL3_CHANGE_CIPHER_SPEC) {
+        SSLerr(SSL_F_PROCESS_CHANGE_CIPHER_SPEC, SSL_R_BAD_CHANGE_CIPHER_SPEC);
+        return 0;  /* Terminate processing due to malformed CCS message */
+    }
+
+    /* Verify that a new cipher has been negotiated prior to processing CCS.
+       (This check ensures that the handshake is in a state where a
+       cipher change is relevant.) */
+    if (hs->new_cipher == NULL) {
+        SSLerr(SSL_F_PROCESS_CHANGE_CIPHER_SPEC, SSL_R_NO_NEW_CIPHER);
+        return 0;
+    }
+
+    /* --- REPAIR: Check that a CCS message is actually expected at this point --- */
+    if (!hs->ccs_expected) {
+        SSLerr(SSL_F_PROCESS_CHANGE_CIPHER_SPEC, SSL_R_UNEXPECTED_CCS);
+        ssl->s3->alert_dispatch = SSL3_AL_FATAL;
+        ssl->s3->alert_value = SSL_AD_UNEXPECTED_MESSAGE;
+        return 0;
+    }
+
+    /* Clear the flag so that any subsequent out-of-order CCS messages are rejected */
+    hs->ccs_expected = 0;
+
+    /* Reset the record length so that the subsequent processing does not re-read it */
+    rec->length = 0;
+
+    /* Optionally invoke the message callback (if configured) */
+    if (ssl->msg_callback != NULL) {
+         ssl->msg_callback(0, ssl->version,
+                           SSL3_RT_CHANGE_CIPHER_SPEC,
+                           rec->data, 1, ssl, ssl->msg_callback_arg);
+    }
+
+    /* Update handshake state to reflect that the ChangeCipherSpec has been received */
+    hs->state = SSL3_ST_CHANGE_CIPHER_SPEC;
+  
+    /* Continue processing: engage the new cipher and advance the handshake */
+    if (!ssl3_do_change_cipher_spec(ssl)) {
+         return 0;
+    }
+
+    return 1;
+}
+------------------------------------------------------------
+
+Explanation of the changes:
+
+1. The code begins by checking that the record’s length is exactly one byte and that this byte equals the expected CCS value (SSL3_CHANGE_CIPHER_SPEC). It also verifies that a new cipher has been negotiated.
+
+2. The repaired section then adds a new check: if the handshake state flag (hs->ccs_expected) is not set, the function logs an error, dispatches an alert, and terminates processing. This prevents any unsolicited or rogue CCS messages from being processed.
+
+3. Once it has verified that the CCS is expected, the code clears the flag to disallow any additional CCS messages until the handshake protocol explicitly permits them again.
+
+4. Finally, the function continues with the original flow: it calls an optional message callback, updates the state to reflect the change, and proceeds with switching to the new cipher.
+
+This patch ensures that a CCS message is only processed when the handshake protocol state indicates that it should be, thus mitigating the vulnerability whereby a man-in-the-middle attacker could inject a rogue CCS message.

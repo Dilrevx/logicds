@@ -1,0 +1,47 @@
+Below is one acceptable repair. In the original code the memcmp() result was negated, so that even if the certificate’s serial matched the OCSP serial data (with potential extra bytes due to gnutls_malloc’s uninitialized tail), the check would erroneously fail to reject the response. In the repair we also make sure that we compare exactly the number of bytes we expect (i.e. the length from the certificate’s serial number) rather than using the potentially oversized length from the OCSP‐response allocation.
+
+For example, change this code:
+
+--------------------------------------------------
+        if (ret < 0) {
+            return ret;
+        }
+    
+        if (rserial.size != cserial.size
+                || !Helper.memcmp(cserial.data, rserial.data, rserial.size)) {
+            return ErrorCodes.GNUTLS_E_OCSP_RESPONSE_ERROR;
+        }
+--------------------------------------------------
+
+to something like the following repair:
+
+--------------------------------------------------
+        if (ret < 0) {
+            return ret;
+        }
+    
+        /* 
+         * First, verify that the length of the OCSP serial matches the certificate’s
+         * serial length. This prevents an attacker from appending extra bytes that
+         * might be left by gnutls_malloc.
+         */
+        if (rserial.size != cserial.size) {
+            return ErrorCodes.GNUTLS_E_OCSP_RESPONSE_ERROR;
+        }
+    
+        /* 
+         * Compare exactly cserial.size bytes instead of relying on the possibly larger
+         * rserial.size. memcmp returns 0 for a match.
+         */
+        if (Helper.memcmp(cserial.data, rserial.data, cserial.size) != 0) {
+            return ErrorCodes.GNUTLS_E_OCSP_RESPONSE_ERROR;
+        }
+--------------------------------------------------
+
+Step by step explanation:
+1. We first check that no error occurred with “ret”.
+2. We then compare the two length values. Although the original code did compare rserial.size with cserial.size, the actual data comparison later was performed over rserial.size rather than the certificate’s length. Since gnutls_malloc may leave “trailing bytes” in the allocated block (which might not be zeroed), the OCSP response’s serial data could include unintended extra bytes.
+3. By comparing exactly cserial.size bytes (using memcmp(...) != 0), we ensure that only the actual certificate serial (with its proper length) is used in the comparison. This eliminates any vector where an attacker might exploit trailing garbage data.
+4. If any of the checks fail, we return the appropriate OCSP response error.
+
+This repair both enforces the expected serial length and corrects the misuse of memcmp’s return value, thus closing the vulnerability.

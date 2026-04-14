@@ -1,0 +1,45 @@
+Below is one way to repair the vulnerability. In the buggy code the TSIG verification merely looks at the decoded rdata’s status but does not check that the key used is actually authorized for AXFR (or NOTIFY) operations. This may allow an attacker who “knows” a valid TSIG key name (but not necessarily its secret) to craft a request that bypasses the intended access controls. To fix this issue you must add an explicit access control–check (ACL) against the TSIG key—ensuring that only keys authorized for the zone or operation in question (e.g. zone transfer, NOTIFY) are accepted, even if the TSIG record parses as “correct.”
+
+One repair might look roughly as follows:
+
+-------------------------------------------------
+/* First, de-serialize the TSIG RDATA into a structure. */
+result = dns_rdata_tostruct(&rdata, &tsig, NULL);
+if (result != ISC_R_SUCCESS)
+    return result;  /* Proper error handling instead of INSIST */
+
+/* Verify that the TSIG itself did not report an error. */
+if (msg->tsigstatus != dns_rcode_noerror)
+    return DNS_R_TSIGVERIFYFAILURE;
+
+/* 
+ * Additional check (newly added): verify that the TSIG key is actually 
+ * authorized for this operation (such as an AXFR or NOTIFY request). 
+ * A check like this forces the server not to rely solely on TSIG validation.
+ *
+ * The helper function tsig_key_is_authorized() should check that the TSIG key 
+ * in msg->tsig_key (or tsig.key) is among the keys allowed for the requested operation,
+ * against a configured ACL.
+ */
+if (!tsig_key_is_authorized(msg->tsig_key, msg->operation)) {
+    return DNS_R_TSIGVERIFYFAILURE;
+}
+
+/* Finally, check if the TSIG record had any error fields set. */
+if (tsig.error != dns_rcode_noerror)
+    return DNS_R_TSIGERRORSET;
+
+return ISC_R_SUCCESS;
+-------------------------------------------------
+
+Step by step explanation:
+
+1. Instead of using INSIST() which will abort on failure, we now explicitly handle errors by checking the result of dns_rdata_tostruct().
+
+2. After ensuring that the decoded TSIG RDATA has no inherent errors (using msg->tsigstatus), we add an explicit ACL or authorization check. The helper function tsig_key_is_authorized() (which you would implement elsewhere) performs the necessary lookup into your configured access control list to confirm that the key is allowed for the current operation. This additional check prevents an attacker who may know a valid TSIG key name from using it out of context (such as making an unauthorized AXFR or submitting a NOTIFY).
+
+3. After that ACL check, we verify if any error flag from the tsig structure itself is set, returning an error if so.
+
+4. Only if all of these checks pass do we return success (ISC_R_SUCCESS).
+
+This repair forces the server to apply an ACL check in addition to TSIG authentication, greatly reducing the risk of unauthorized zone transfers or bogus NOTIFY packets.

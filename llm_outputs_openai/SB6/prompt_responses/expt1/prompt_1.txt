@@ -1,0 +1,89 @@
+<repair>
+    public static void x509_crt_verify_name(MbedtlsX509Crt crt, String cn, int[] flags) {
+        // Ensure the input common name is non-null and non-empty.
+        if (cn == null || cn.isEmpty()) {
+            flags[0] |= MbedtlsConstants.MBEDTLS_X509_BADCERT_CN_MISMATCH;
+            return;
+        }
+        int cn_len = cn.length();
+        boolean matchFound = false;
+
+        // First, check Subject Alternative Names if present.
+        if ((crt.extTypes & MbedtlsConstants.MBEDTLS_X509_EXT_SUBJECT_ALT_NAME) != 0) {
+            for (MbedtlsX509Sequence cur = crt.subjectAltNames; cur != null; cur = cur.next) {
+                if (cur.data == null) {
+                    continue;
+                }
+                // Use secure hostname matching that restricts wildcard usage properly.
+                if (verifyHostName(cur.data, cn)) {
+                    matchFound = true;
+                    break;
+                }
+            }
+            if (!matchFound) {
+                flags[0] |= MbedtlsConstants.MBEDTLS_X509_BADCERT_CN_MISMATCH;
+                return;
+            }
+        } else {
+            // Fallback to checking the subject name fields.
+            for (MbedtlsX509Name name = crt.subject; name != null; name = name.next) {
+                // Check only commonName (CN) OIDs.
+                if (MbedtlsConstants.OID_AT_CN.equals(name.oid)) {
+                    if (name.val == null) {
+                        continue;
+                    }
+                    if (verifyHostName(name.val, cn)) {
+                        matchFound = true;
+                        break;
+                    }
+                }
+            }
+            if (!matchFound) {
+                flags[0] |= MbedtlsConstants.MBEDTLS_X509_BADCERT_CN_MISMATCH;
+                return;
+            }
+        }
+        // If we get here, the certificate name matches the supplied name.
+    }
+
+    /**
+     * Secure hostname verification function.
+     * It performs case-insensitive matching and enforces that wildcards
+     * (if present) are only allowed as the entire left-most label (per RFC 6125).
+     */
+    private static boolean verifyHostName(String pattern, String hostName) {
+        if (pattern == null || hostName == null) {
+            return false;
+        }
+        // Convert both strings to lowercase for case-insensitive comparison.
+        pattern = pattern.toLowerCase();
+        hostName = hostName.toLowerCase();
+
+        // If the pattern contains a wildcard, validate its placement.
+        if (pattern.contains("*")) {
+            // Wildcard must appear only at the beginning and immediately followed by a dot.
+            int starIndex = pattern.indexOf('*');
+            if (starIndex != 0 || pattern.length() < 3 || pattern.charAt(1) != '.') {
+                return false;
+            }
+            // Ensure there's no second wildcard.
+            if (pattern.indexOf('*', 1) != -1) {
+                return false;
+            }
+            // The wildcard pattern should match only a single domain level.
+            String suffix = pattern.substring(1); // removes the '*' but leaves the dot (".example.com")
+            if (!hostName.endsWith(suffix)) {
+                return false;
+            }
+            // Make sure the part of the hostname that replaces the wildcard does not contain a dot.
+            String prefix = hostName.substring(0, hostName.length() - suffix.length());
+            if (prefix.contains(".")) {
+                return false;
+            }
+            return true;
+        } else {
+            // No wildcard, do an exact match.
+            return hostName.equals(pattern);
+        }
+    }
+</repair>

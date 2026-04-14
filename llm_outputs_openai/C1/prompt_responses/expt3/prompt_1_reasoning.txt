@@ -1,0 +1,13 @@
+The repair introduces an additional check after calling X509_verify_cert(). In the original code, when no application callback is provided, the return value from X509_verify_cert() was directly used. However, if X509_verify_cert() returns a negative value (which indicates an internal error such as an out-of-memory situation), that negative value could later lead to SSL_get_error() returning SSL_ERROR_WANT_RETRY_VERIFY. This error code is generally meant to be used only if an application supplied a certificate verification callback, and most applications are not prepared for it.
+
+Here’s what the repair does step-by-step:
+
+1. It calls the application’s certificate verification callback if one is provided. The behavior in this branch remains unchanged.
+
+2. If no callback is set, it calls X509_verify_cert(ctx) to verify the certificate against a set of criteria (chain, trust anchors, etc.).
+
+3. Immediately after calling X509_verify_cert(), it adds an if-statement that checks if the return value i is negative. If i < 0, the code sets i to 0. This conversion normalizes the error handling by ensuring that the negative error is not propagated upward as a negative value.
+
+The primary benefit of this change is that it avoids incorrectly signaling a potential retry indication (SSL_ERROR_WANT_RETRY_VERIFY) in the SSL handshake process. By converting negative errors to the more standard failure code (0), the repair ensures that the handshake failure is handled in the way that most applications expect. This prevents applications from finding themselves in an unexpected state where they would think a retry verification mechanism was being used.
+
+Overall, the repair simplifies error handling and avoids misinforming the application regarding the nature of the error during SSL handshakes, thereby fixing the vulnerability associated with the negative error propagation from the internal certificate verification function.

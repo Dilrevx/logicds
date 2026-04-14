@@ -1,0 +1,15 @@
+The repair changes the logic so that the system always checks the DLZ transfer controls whenever a DLZ database is present, not just in the case when the normal zone lookup fails. This is important because even if a zone is found in the normal zone table, if it exists in a DLZ zone, it must still enforce its zone transfer controls.
+
+Originally, the code only attempted a DLZ lookup if the normal zone lookup failed (i.e. when result != ISC_R_SUCCESS). That meant that if a DLZ zone was writable and the normal lookup was successful, then the allowzonexfr check for the DLZ zone was never called. This left a vulnerability where the zone transfer restriction for such zones was effectively bypassed.
+
+In the repaired code, before the normal “failure” handling, the system first checks if the DLZ database list is non-empty. If so, it calls dns_dlzallowzonexfr regardless of the outcome of the normal zone lookup. The call to dns_dlzallowzonexfr verifies whether the client is authorized to perform a zone transfer on the DLZ database.
+
+There are two key outcomes here:
+
+1. If dns_dlzallowzonexfr returns ISC_R_NOPERM, then it means the client is not permitted to perform the zone transfer. The code logs an error message, updates the result to DNS_R_REFUSED, and exits via goto failure.
+
+2. If the return code is non-success for any other reason, it invokes the FAILQ macro, which not only logs the error (clearly indicating the issue with a DLZ zone), but also terminates the zone transfer request by setting the correct error result.
+
+Additionally, the flag is_dlz is set to true, indicating that the DLZ check was performed. Later, if result is still an error and no DLZ zone was processed (i.e. !is_dlz), the function will again explicitly reject the transfer request with a non-authoritative error.
+
+Thus, the change fixes the vulnerability by ensuring that even when a zone exists normally, any corresponding DLZ zone must have its transfer allowed through the proper DLZ zone transfer control mechanism. This way, the security controls specifically designed for DLZ zones are always effective, maintaining the intended access restrictions.

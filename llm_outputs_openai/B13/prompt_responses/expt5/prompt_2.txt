@@ -1,0 +1,38 @@
+<repair>
+	/* Convert the TSIG RDATA into a structured record. */
+	result = dns_rdata_tostruct(&rdata, &tsig, NULL);
+	INSIST(result == ISC_R_SUCCESS);
+
+	/*
+	 * Enforce additional checks on TSIG authentication for AXFR and NOTIFY requests.
+	 * These messages are sensitive and must not be authorized solely based on possession
+	 * of a valid TSIG key name.  In addition to checking the TSIG status and error codes,
+	 * verify that the TSIG key used is properly authorized for this type of request.
+	 */
+	if (msg->opcode == dns_opcode_axfr || msg->opcode == dns_opcode_notify) {
+		if (msg->tsigstatus != dns_rcode_noerror ||
+		    tsig.error != dns_rcode_noerror ||
+		    !authorized_tsig_key(msg->tsigkey, &tsig)) {
+			/* The TSIG check on a sensitive request failed. */
+			result = DNS_R_TSIGVERIFYFAILURE;
+		} else {
+			/* The TSIG was properly validated and the key has sufficient privileges. */
+			result = ISC_R_SUCCESS;
+		}
+	} else {
+		/* For non-sensitive messages, perform the normal TSIG check. */
+		if (msg->tsigstatus != dns_rcode_noerror)
+			result = DNS_R_TSIGVERIFYFAILURE;
+		else if (tsig.error != dns_rcode_noerror)
+			result = DNS_R_TSIGERRORSET;
+		else
+			result = ISC_R_SUCCESS;
+	}
+</repair>
+
+<!-- 
+Note: The helper function "authorized_tsig_key()" should be implemented so that it verifies 
+that the TSIG key used in the request is authorized (e.g. via an ACL check or proper configuration)
+to perform AXFR or NOTIFY operations. This additional check prevents an attacker with knowledge 
+of a TSIG key name (but not the actual secret or proper privileges) from bypassing TSIG authentication.
+-->

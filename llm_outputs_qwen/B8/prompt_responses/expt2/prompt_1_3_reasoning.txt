@@ -1,0 +1,34 @@
+### Repair Explanation for the Buggy Code Snippet
+
+The vulnerability described pertains to a specific scenario within the TLS 1.3 protocol implementation in wolfSSL, a widely used embedded SSL/TLS library. The issue arises when a TLS 1.3 client receives a `ServerHello` message from a server that does not include either the Pre-Shared Key (PSK) extension or the Key Share (KSE) extension. In such a case, the client uses a default, predictable Initial Key Material (IKM) value to generate the session master secret. Since this IKM is predictable, an attacker can potentially reconstruct the master secret, leading to an insecure session.
+
+To mitigate this vulnerability, the repair introduces a check to ensure that at least one of the required extensions—either PSK or KSE—is present in the `ServerHello` message. If neither extension is present, the client should terminate the handshake process immediately to prevent the use of a predictable IKM.
+
+#### Detailed Steps of the Repair:
+
+1. **Check for Key Share Extension:**
+   - After checking for the presence of the PSK extension, the repair adds a new step to check for the Key Share extension. This is done by calling `TLSX_Find` with `TLSX_KEY_SHARE` as the parameter.
+   - The result of this search is stored in the `keyShareExt` variable.
+
+2. **Conditionally Validate Extensions:**
+   - The repair then introduces a conditional statement that checks if `keyShareExt` is `NULL` (indicating the absence of the Key Share extension) and simultaneously checks if `psk` is also `NULL` (indicating the absence of the PSK extension).
+   - This condition ensures that the handshake is aborted only if neither of the necessary extensions is present.
+
+3. **Abort Handshake with Error:**
+   - If the condition is met, indicating that both extensions are missing, the repair logs a message using `WOLFSSL_MSG` to indicate the nature of the problem.
+   - It then returns an error code, `BAD_TLS13_SECRET_ERROR`, to abort the handshake process. This error code signifies that the session master secret cannot be safely derived without the necessary extensions.
+
+4. **Continue Handshake Otherwise:**
+   - If either the PSK or KSE extension is present, the repair allows the handshake to proceed as usual. This includes setting `ssl->keys.encryptionOn` to `1` and updating the server state to `SERVER_HELLO_COMPLETE`.
+
+#### Impact of the Repair:
+
+- **Security Enhancement:** By ensuring that the handshake is terminated when neither the PSK nor KSE extension is present, the repair prevents the use of a predictable IKM. This significantly reduces the risk of an attacker reconstructing the master secret and compromising the session's security.
+  
+- **Compliance with Standards:** The repair aligns the behavior of the wolfSSL library with the TLS 1.3 standard, which requires that clients and servers negotiate these extensions to derive secure keys.
+
+- **Maintaining Functionality:** The repair does not alter the normal flow of the handshake when the necessary extensions are present. It only intervenes in cases where the security of the session would otherwise be compromised.
+
+- **Error Handling:** The introduction of a specific error code (`BAD_TLS13_SECRET_ERROR`) provides clear feedback about the reason for the handshake failure, aiding in debugging and maintenance.
+
+By implementing this repair, the wolfSSL library becomes more robust against a specific class of attacks related to the misuse of predictable IKMs in TLS 1.3 handshakes. This enhancement not only protects users from potential security threats but also ensures compliance with cryptographic standards, thereby maintaining the integrity and trustworthiness of the library.

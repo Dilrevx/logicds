@@ -1,0 +1,36 @@
+Below is one example of a repair. The root cause was that when the selected signature algorithm did not match a key that the peer actually sent, the code only printed a message (or, in one case, logged an error but not consistently) rather than actively aborting the handshake. This could allow an attacker to bypass proper verification. In the patched code each condition where a key is expected but not available now aborts the connection by returning an error. For example:
+
+--------------------------------------------------
+/* Repaired version with proper abort on missing keys */
+if (args.sigAlgo == Commons.ed25519_sa_algo && !ssl.peerEd25519KeyPresent) {
+    Wslib.WOLFSSL_MSG("ED25519 key not present in verify; aborting TLS handshake");
+    return Commons.INVALID_PARAMETER;
+}
+
+if (args.sigAlgo == Commons.ed448_sa_algo && !ssl.peerEd448KeyPresent) {
+    Wslib.WOLFSSL_MSG("ED448 key not present in verify; aborting TLS handshake");
+    return Commons.INVALID_PARAMETER;
+}
+
+if (args.sigAlgo == Commons.ecc_dsa_sa_algo && !ssl.peerEccDsaKeyPresent) {
+    Wslib.WOLFSSL_MSG("ECC key not present in verify; aborting TLS handshake");
+    return Commons.INVALID_PARAMETER;
+}
+
+if (args.sigAlgo == Commons.rsa_sa_algo) {
+    Wslib.WOLFSSL_MSG("PKCS#1.5 signatures disallowed for TLS 1.3 clients; aborting TLS handshake");
+    return Commons.INVALID_PARAMETER;
+}
+
+if (args.sigAlgo == Commons.rsa_pss_sa_algo && !ssl.peerRsaKeyPresent) {
+    Wslib.WOLFSSL_MSG("RSA key not present in verify for RSA-PSS; aborting TLS handshake");
+    return Commons.INVALID_PARAMETER;
+}
+--------------------------------------------------
+
+Step by step, these changes do the following:
+1. For each supported algorithm (ED25519, ED448, ECC DSA, and RSA-PSS), we now check that the corresponding key is actually present.
+2. If the required key isn’t present, the function logs an error message and immediately returns an error (here, Commons.INVALID_PARAMETER), thereby aborting the handshake.
+3. The RSA case (PKCS#1.5), which is disallowed for TLS 1.3 clients, already returned an error; the repair simply clarifies this with an improved message.
+
+This repair ensures that if an attacker attempts to force a mismatch (or uses an insecure RSA signature) during the handshake, the TLS session is terminated rather than proceeding with weakened or bypassed authentication.

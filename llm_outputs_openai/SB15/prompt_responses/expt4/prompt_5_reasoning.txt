@@ -1,0 +1,18 @@
+The repair makes the process of validating DNSKEY signatures stricter by ensuring that only DNSKEYs present in the configured trust anchors (i.e., the security roots) are accepted as valid. Here’s a walkthrough of the key changes and how they address the vulnerability:
+
+1. Trusted Key Presence Enforcement:
+ • In the original code, if the DNSKEY validation process did not find a matching key in the trust anchor list (vctx.secroots), it simply returned a success (or a partial-match code), potentially allowing an untrusted, forged key to be accepted. 
+ • In the repair, after attempting to locate the DNSKEY in the trusted anchor table (via Keytable.dns_keytable_findkeynode), the code now explicitly checks if the search was unsuccessful. Instead of proceeding normally, it calls Dst.dst_key_free(keyOut) to free resources and then returns an error code (Commons.DNS_R_BOGUS). This change effectively stops the use of data that was not validated against a known, trusted DNSKEY.
+
+2. Early Validation Rejection:
+ • By requiring a successful search (i.e., a successful match in the trust anchor list) before proceeding to mark the key as “good”, the repair prevents a scenario in which an attacker (who could forge DNS responses) might insert false key data. If a manipulated or spoofed DNSKEY is encountered, the lack of a trust anchor match leads to an immediate error, thereby preventing the bypass of proper DNSSEC validation.
+ • This ensures that any mirror zone data which might have been manipulated in transit is not accepted, as the fallback to traditional recursion is not allowed if the trust anchor validation fails. This is a crucial defense measure against on-path attackers who could otherwise exploit the original vulnerability to insert falsified root zone data.
+
+3. Resource Management:
+ • The repair also highlights proper cleanup by calling Dst.dst_key_free(keyOut) before returning the error. This ensures that memory or resource leaks are avoided even when the received DNS data is rejected.
+
+4. Overall Security Enhancements:
+ • The repaired snippet makes it clear that trust anchors are a mandatory check. Without a successful, validated match against a configured trust anchor, the method will not set the key as “good” (goodkey[0] remains false) and will not mark the DNS data as secure. This closes the window through which an attacker could inject forged data, ensuring that any DNS data used in subsequent operations is fully trusted.
+ • In environments where mirror zones are used (for example, serving a local copy of the root zone), this guarantee is crucial. The changes ensure that a forged zone cannot override validated data—a protection against the specific vulnerability where an attacker could manipulate the DNS responses by being on the network path.
+
+In summary, by modifying the behavior when a DNSKEY isn’t found in the trusted anchors (returning an error rather than falling back to a less secure state), the repaired code prevents attackers from substituting validated zone data with forged data. This strict requirement ensures that only DNS responses that can be fully validated against trusted DNSKEYs get accepted, thereby mitigating the risk described in the vulnerability.

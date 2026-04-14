@@ -1,0 +1,16 @@
+The repair addresses the vulnerability by checking if the return value from the verification function is negative (i.e., less than 0). In the buggy code, a negative value—indicating an internal error such as an out-of-memory condition—was not handled properly. This could cause unexpected behavior later when SSL_get_error() returns SSL_ERROR_WANT_RETRY_VERIFY, leading to improper error handling by the application.
+
+Here’s what the repair does:
+
+1. After calling either the application-provided verification callback or the default X509_STORE_CTX.verify_cert() function, the code captures the return value in the variable "i". This value signals whether the certificate verification was successful, failed in a controlled manner, or encountered an internal error.
+
+2. Directly after handling the certificate chain and before freeing ctxStore resources, a new check is added:
+   • If (i < 0), it means that the internal OpenSSL call encountered an error (like memory allocation failure). Instead of letting this negative value propagate upward, which might be misinterpreted as SSL_ERROR_WANT_RETRY_VERIFY in later calls (like SSL_connect() or SSL_do_handshake()), the code resets i to a defined error code, SSL_R_CERTIFICATE_VERIFY_FAILED.
+
+3. The use of SSL_R_CERTIFICATE_VERIFY_FAILED converts any negative response (indicative of internal errors) into a known certificate verification failure error code. This allows the application to uniformly handle errors without concern that the error code might be confused with the special case when an application-supplied callback was used (or that it might trigger unexpected behavior).
+
+4. By doing this normalization of the error value, the repair ensures that any verification failure—especially an internal negative error—is communicated back with a predictable and standard failure code. This eliminates the risk posed by internal errors being misinterpreted as an unexpected SSL_ERROR_WANT_RETRY_VERIFY error in the SSL handshake process.
+
+5. After this check and possible normalization of “i”, the function proceeds to free the ctxStore resources and then returns the adjusted error code.
+
+In summary, the repair adds a safeguard that intercepts unexpected negative return values. It replaces them with a consistent error code (SSL_R_CERTIFICATE_VERIFY_FAILED), ensuring the higher layers of the SSL logic do not misbehave by interpreting internal errors as an opportunity to retry the verification process. Thus, the vulnerability where the client might receive the special retry error code without having set up the appropriate callback is mitigated.

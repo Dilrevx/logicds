@@ -1,0 +1,69 @@
+<repair>
+{
+	isc_result_t result;
+	dns_keynode_t *keynode = NULL;
+	bool match_found = false;
+
+	/* Look for an initial candidate keynode in the trust anchor table */
+	result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+	                                   dst_key_alg(key), dst_key_id(key),
+	                                   &keynode);
+	/* If no candidate is found or if only a partial match was found, exit cleanly */
+	if (result == DNS_R_PARTIALMATCH || result == ISC_R_NOTFOUND) {
+		result = ISC_R_SUCCESS;
+		goto cleanup;
+	} else if (result != ISC_R_SUCCESS) {
+		/* Some other error occurred */
+		goto cleanup;
+	}
+
+	/* Iterate over all candidates from the trust anchor table */
+	while (result == ISC_R_SUCCESS) {
+		/*
+		 * Use a secure comparison to check if the current keynode exactly matches
+		 * the supplied key.
+		 */
+		if (dst_key_securecompare(keynode, key)) {
+			/*
+			 * An exact match was found. Remove this keynode from the trust anchor table
+			 * to prevent further use.
+			 */
+			dns_keytable_detachkeynode(vctx->secroots, &keynode);
+
+			/* Update the trust status to indicate secure validation */
+			dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+			dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+			*goodkey = true;
+			match_found = true;
+			break;
+		}
+
+		/*
+		 * Detach the current candidate since it is not an exact match before
+		 * searching for the next candidate.
+		 */
+		dns_keytable_detachkeynode(vctx->secroots, &keynode);
+
+		/* Attempt to retrieve the next candidate keynode */
+		result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+		                                   dst_key_alg(key), dst_key_id(key),
+		                                   &keynode);
+	}
+
+	/* If no exact match was found, ensure the result is set to success */
+	if (!match_found)
+		result = ISC_R_SUCCESS;
+
+cleanup:
+	/*
+	 * Clean up: If a remaining keynode exists, detach it.
+	 * Also free the provided key to avoid memory leaks.
+	 */
+	if (keynode != NULL)
+		dns_keytable_detachkeynode(vctx->secroots, &keynode);
+
+	dst_key_free(&key);
+
+	return result;
+}
+</repair>

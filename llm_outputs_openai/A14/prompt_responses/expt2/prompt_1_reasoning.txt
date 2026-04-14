@@ -1,0 +1,20 @@
+The main change in the repair is the introduction of a check at the very beginning of the CCS processing block that ensures only one ChangeCipherSpec message is accepted. Here’s how the repair addresses the vulnerability:
+
+1. Prevent Multiple CCS Processing:
+   - The newly added block checks if s->s3->change_cipher_spec is already set. Since this flag indicates that a CCS message has already been processed, encountering another CCS suggests a potential attack (such as a CCS injection). 
+   - If the flag is set, the function immediately raises an unexpected message error (SSL_AD_UNEXPECTED_MESSAGE) and exits with an error state. This prevents the processing of any additional CCS messages beyond the first one.
+
+2. Verification of the CCS Record Structure:
+   - The code continues to verify that the CCS record is formatted correctly: it should have exactly one byte (length 1), begin at offset 0, and the single byte must match the expected value (SSL3_MT_CCS). This ensures that only properly structured CCS messages are accepted.
+   - If these conditions are not met, an illegal parameter error (SSL_AD_ILLEGAL_PARAMETER) is raised.
+
+3. Ensuring a Valid Cipher is Set:
+   - The code checks that a new cipher has been set (s->s3->tmp.new_cipher is not NULL), which is required before changing the cipher state. If there isn’t a valid cipher, it raises an error, preventing an improper transition.
+
+4. Final Processing:
+   - If all validations pass, the record length is reset and the CCS message is logged via any registered callback.
+   - Finally, the flag s->s3->change_cipher_spec is set to indicate that a CCS message has been processed, and the function then calls ssl3_do_change_cipher_spec to perform the actual cipher state change.
+
+By adding the early check for an already processed CCS message, the repair directly mitigates the vulnerability where a man-in-the-middle could send a crafted duplicate CCS to induce an insecure (zero-length master key) state transition. This guard prevents any subsequent CCS messages after the first one, thereby avoiding the risk of session hijacking or data decryption due to improper state transitions.
+
+In summary, the repair reinforces the integrity of the TLS handshake by strictly enforcing that only one valid ChangeCipherSpec message is accepted during a session, which in turn thwarts the CCS injection attack described in the vulnerability.

@@ -1,0 +1,21 @@
+The repair introduces a rigorous check that prevents the key exchange from proceeding if the client’s and server’s algorithms for key exchange or host key verification do not match. Originally, the code simply logged whether the guess was “wrong” or “right” without enforcing any error handling, which meant that even when there was a mismatch—a potential vector for downgrade attacks—the handshake would continue. 
+
+In the repaired code, if a mismatch is detected (by comparing the algorithms using cmp_first_kex_algo), an error is logged at the error level and the function immediately returns an error code (SSH_ERR_INVALID_FORMAT). By aborting the key exchange early, the repair stops the process from continuing with insecure parameters, thereby mitigating the vulnerability where an attacker might force the server and client to use downgraded or entirely disabled security features.
+
+Additionally, logging at the error level (SSH_LOG_ERR) rather than at the debug level (SSH_LOG_DEBUG) makes sure that such critical mismatches are appropriately flagged in the logs, aiding in troubleshooting and security auditing.
+
+By ensuring that the key exchange only continues when both sides agree on the critical algorithms, the repair effectively closes the loophole that could be exploited via Terrapin attacks.
+
+<repair>
+    if (first_kex_packet_follows || session->send_first_kex_follows) {
+        char **client_methods = crypto->client_kex.methods;
+        char **server_methods = crypto->server_kex.methods;
+        if (cmp_first_kex_algo(client_methods[SSH_KEX], server_methods[SSH_KEX]) ||
+            cmp_first_kex_algo(client_methods[SSH_HOSTKEYS], server_methods[SSH_HOSTKEYS])) {
+            SSH_LOG(SSH_LOG_ERR, "Mismatch in first kex algorithms; aborting key exchange.");
+            return SSH_ERR_INVALID_FORMAT;
+        }
+        session->first_kex_follows_guess_wrong = 0;
+        SSH_LOG(SSH_LOG_DEBUG, "The initial guess was correct.");
+    }
+</repair>

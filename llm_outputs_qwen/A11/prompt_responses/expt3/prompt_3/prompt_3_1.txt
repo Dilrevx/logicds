@@ -1,0 +1,56 @@
+To address the vulnerability described, we need to ensure that the certificate revocation check is not susceptible to manipulation through changes in the local system clock. The current implementation checks if the `revocation_date` is in the past using `mbedtls_x509_time_is_past()`, which is directly influenced by the local time settings.
+
+One way to mitigate this issue is to use a more robust method for validating the certificate revocation status that doesn't rely solely on the local system time. This could involve:
+
+1. **Using a trusted time source:** Incorporate a secure time protocol like Network Time Protocol (NTP) to synchronize the system clock with a reliable time server.
+2. **Certificate Revocation Lists (CRLs) or Online Certificate Status Protocol (OCSP):** Ensure that CRLs are checked against a trusted source and consider implementing OCSP for real-time validation.
+3. **Implementing a time margin or tolerance:** Although this doesn't completely solve the problem, adding a small tolerance for time discrepancies can help mitigate minor clock skew issues.
+
+However, since the problem specifically mentions the local clock manipulation and the `revocation_date` check, a practical solution would be to implement a secure time synchronization mechanism or use OCSP for real-time validation.
+
+For the given code snippet, we can enhance it by checking the `revocation_date` against a securely obtained current time rather than relying solely on the local system time. Here’s how you might adjust the code:
+
+```c
+#include <time.h>
+
+// Assume get_secure_time() is a function that returns the current time from a secure source
+int get_secure_time(time_t *current_time);
+
+int check_certificate_revocation(const mbedtls_x509_crt *crt, const mbedtls_x509_crl *crl) {
+    const mbedtls_x509_crl_entry *cur = crl->entry;
+
+    while (cur != NULL) {
+        if (crt->serial.len == cur->serial.len &&
+            memcmp(crt->serial.p, cur->serial.p, crt->serial.len) == 0) {
+
+            time_t secure_current_time;
+            if (get_secure_time(&secure_current_time) != 0) {
+                // Handle error: Could not obtain secure time
+                return -1; // Or appropriate error handling
+            }
+
+            mbedtls_x509_time secure_time;
+            if (mbedtls_x509_time_from_time_t(&secure_time, secure_current_time) != 0) {
+                // Handle error: Could not convert time
+                return -1; // Or appropriate error handling
+            }
+
+            if (mbedtls_x509_time_compare(&cur->revocation_date, &secure_time) < 0) {
+                // If the revocation date is in the past, the certificate is revoked
+                return 1;
+            }
+        }
+        cur = cur->next;
+    }
+
+    // If no matching serial number was found or the certificate is not revoked
+    return 0;
+}
+```
+
+In this adjusted code:
+- We assume the existence of a `get_secure_time()` function that fetches the current time from a secure source.
+- We convert this secure time into a format compatible with `mbedtls_x509_time`.
+- We then compare the `revocation_date` with this secure time.
+
+This approach ensures that the certificate revocation check is not easily manipulated by altering the local system clock. However, implementing `get_secure_time()` securely is crucial for the effectiveness of this solution.

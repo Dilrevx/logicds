@@ -1,0 +1,56 @@
+The vulnerability described pertains to a specific scenario in the TLS 1.3 protocol implementation within the wolfSSL library. When a TLS 1.3 client connects to a server and receives a ServerHello message that lacks both the Pre-Shared Key (PSK) extension and the Key Share (KSE) extension, the client uses a default, predictable buffer as the Input Key Material (IKM) for deriving the session master secret. This predictability can be exploited by an attacker to reconstruct the session keys, leading to potential eavesdropping or tampering with the encrypted communication.
+
+### Analysis of the Buggy Code
+
+The original code snippet checks for the presence of the PSK extension in the received ServerHello message. If the PSK extension is not found, it resets the PSK-related fields and proceeds without using a PSK. However, it fails to check for the presence of the Key Share extension. If neither extension is present, the code does not explicitly handle this situation, which can lead to the use of a default or predictable IKM.
+
+### Proposed Repair
+
+The repair involves modifying the code to ensure that both the PSK and Key Share extensions are checked. If neither is present, the handshake should be terminated or handled in a way that prevents the use of a predictable IKM. Here’s a detailed breakdown of the changes:
+
+1. **Addition of Key Share Extension Check:**
+   - The code now includes a check for the Key Share extension in addition to the PSK extension. This is done by searching for the `TLSX_KEY_SHARE` extension in the list of extensions received from the server.
+   - ```java
+     TlsExtension ext = TLSX.find(ssl.extensions, CommonsConstants.TLSX_KEY_SHARE);
+     if (ext != null)
+         ks = (KeyShare) ext.data;
+     ```
+   
+2. **Handling the Case Where Neither Extension is Present:**
+   - After checking for both extensions, the code now includes a condition to handle the scenario where neither the PSK nor the Key Share extension is present.
+   - ```java
+     if (psk == null && ks == null) {
+         // Handle case where neither PSK nor Key Share is provided
+         // This should ideally terminate the handshake or generate a secure random IKM
+         return -1; // Return error or handle appropriately
+     }
+     ```
+   - In this scenario, the function returns an error code (`-1` in this example), indicating that the handshake cannot proceed due to the absence of necessary key material. This prevents the use of a default or predictable IKM, thus mitigating the vulnerability.
+
+3. **Preserving Existing Functionality:**
+   - If only the PSK extension is missing, the code resets the PSK-related fields and continues without using a PSK, as per the original logic.
+   - If the PSK extension is present and valid, the code processes it as before, setting up the PSK key and marking the PSK as negotiated.
+   - ```java
+     if (psk == null) {
+         ssl.options.resuming = false;
+         ssl.arrays.psk_keySz = 0;
+         for (int i = 0; i < ssl.arrays.psk_key.length; i++)
+             ssl.arrays.psk_key[i] = 0;
+     } else {
+         ret = SetupPskKey(ssl, psk, 0);
+         if (ret != 0)
+             return ret;
+         ssl.options.pskNegotiated = true;
+     }
+     ```
+
+4. **Continuation of Handshake:**
+   - Once the necessary checks and conditions are satisfied, the code sets the encryption flag and updates the server state to indicate that the ServerHello message has been processed.
+   - ```java
+     ssl.keys.encryptionOn = true;
+     ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE;
+     ```
+
+### Conclusion
+
+By ensuring that both the PSK and Key Share extensions are checked and handling the scenario where neither is present, the repair addresses the vulnerability by preventing the use of a default or predictable IKM. This change enhances the security of the TLS 1.3 handshake process, protecting against potential attacks that could exploit the predictability of the IKM. The repair maintains the integrity of the existing functionality while adding a critical safeguard against a specific security threat.

@@ -1,0 +1,26 @@
+The repair addresses the vulnerability by replacing the incorrect use of the AAD (Additional Authenticated Data) as the MAC (Message Authentication Code) key with the proper retrieval of the MAC key. In the original code, after processing the AAD for TLS initialization using tls_init(), the same parameter was later used to initialize the MAC key via init_mackey(). This was a critical mistake because the AAD is derived from predictable protocol data and isn’t secret. As a result, an attacker could predict the MAC key, allowing them to tamper with the data while still passing integrity checks.
+
+Here’s a step-by-step breakdown of the repair:
+
+1. Parameter Retrieval for TLS Initialization:
+   - The code first locates the parameter corresponding to OSSL_CIPHER_PARAM_AEAD_TLS1_AAD.
+   - It checks that the parameter’s data type is an OCTET_STRING.
+   - It then calls tls_init() with the AAD data to perform necessary TLS initialization, storing any necessary padding size in ctx->tls_aad_pad_sz.
+   - This part remains unchanged since using AAD for TLS initialization is valid. The AAD here is still used correctly, only for TLS handshake purposes, not for MAC computation.
+
+2. Correcting the MAC Key Retrieval:
+   - The previous version mistakenly used the AAD parameter to recover the key for MAC initialization. This posed a security risk since AAD data is predictable.
+   - In the repair, the code now locates a distinct parameter, OSSL_CIPHER_PARAM_MAC_KEY, specifically intended to hold the MAC key information.
+   - By doing this, we ensure that the MAC key is sourced from a parameter meant for secure key material, typically generated and kept secret.
+   - The repair also maintains the same data type check to confirm that the parameter is indeed an OCTET_STRING, before passing it to the init_mackey() function.
+   
+3. Ensuring Parameter Integrity:
+   - The repair maintains additional parameter checks for the key length, IV length, and TLS version, ensuring that all validation for other cryptographic parameters remains intact.
+   - The separation of responsibilities—using one parameter strictly for TLS-related AAD processing, and another for MAC key initialization—ensures that the code now operates securely. 
+
+4. How This Fix Increases Security:
+   - By decoupling the MAC key from the predictable AAD, the repair prevents an attacker from being able to know or predict the MAC key.
+   - This ensures that the MAC computation remains robust, protecting against attacks where an adversary might otherwise intercept and modify data, yet still produce a correctly computed MAC.
+   - The repair emphasizes the importance of using secure, genuinely random key material for cryptographic operations. When the MAC key is obtained from OSSL_CIPHER_PARAM_MAC_KEY rather than the AAD, the integrity verification mechanism is reinforced against potential tampering by malicious actors.
+
+In summary, the repair corrects the underlying flaw by ensuring that the MAC key is retrieved from a secure source specifically designated for that purpose. This appropriately separated parameter usage is critical to thwart man-in-the-middle and similar attacks that capitalize on predictable key material, thus significantly enhancing the security of the RC4-MD5 ciphersuite implementation in OpenSSL 3.0.

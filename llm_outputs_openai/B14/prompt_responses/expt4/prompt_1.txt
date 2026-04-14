@@ -1,0 +1,32 @@
+<repair>
+	sock = handle->sock;
+	if (sock->tid == isc_nm_tid()) {
+		/* If we’re on the proper thread, do the detach immediately. */
+		nmhandle_detach_cb(&handle FLARG_PASS);
+	} else {
+		/*
+		 * Before enqueuing an asynchronous detach event,
+		 * force the socket to close immediately by setting
+		 * SO_LINGER with a 0 timeout.  This prevents a crafted
+		 * TCP stream from leaving the socket in CLOSE_WAIT indefinitely.
+		 */
+		{
+			struct linger ling;
+			ling.l_onoff = 1;
+			ling.l_linger = 0;
+			(void)setsockopt(sock->fd, SOL_SOCKET, SO_LINGER,
+			                 (char *)&ling, sizeof(ling));
+		}
+
+		isc__netievent_detach_t *event =
+			isc__nm_get_netievent_detach(sock->mgr, sock);
+		/*
+		 * We are using an implicit "attach" as the last reference.
+		 * It must be destroyed explicitly in the async callback.
+		 */
+		event->handle = handle;
+		FLARG_IEVENT_PASS(event);
+		isc__nm_enqueue_ievent(&sock->mgr->workers[sock->tid],
+				       (isc__netievent_t *)event);
+	}
+</repair>

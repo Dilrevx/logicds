@@ -1,0 +1,13 @@
+The repair reorders the certificate checks so that the validation that ensures a certificate is authorized to issue other certificates (i.e. that it is a valid CA) is performed before, and therefore cannot be overwritten by, the elliptic curve parameter checks. In the vulnerable code, if both strictures were applied, the explicit parameter check was performed first. If it set an error (or reset the validation result), and then the CA check occurred, it would override that result. This meant that even if a certificate was not valid as a CA—an important security check—it could later pass if the EC check overwrote the CA check’s error. 
+
+Here’s what the repair does, step by step:
+
+1. The CA check is now performed first. The code checks whether the certificate does not have the CA flag (via (x.ex_flags & X509.EXFLAG_CA)) and if there’s any limitation indicated by x.ex_pathlen. If these conditions are met in “strict” mode, it immediately sets the certificate validation error to indicate an invalid extension and stops further checking (by setting ret = 0).
+
+2. Only if the certificate passes this initial CA validation (i.e., it is either a valid CA or not subject to the CA restrictions) does the code then proceed to apply the explicit elliptic curve parameter check under the same strict conditions. 
+
+3. The reordering ensures that the essential CA check is not overwritten by the subsequent EC parameter check. In cases where the certificate is not allowed to act as a CA, the code immediately flags an error and does not execute the additional EC check. This behavior ensures that non-CA certificates are not erroneously permitted to issue certificates simply because they might pass the EC parameter check.
+
+Thus, by verifying CA authorities first and only then checking for explicit EC parameters, the repair maintains the intended layered security logic. If an application sets the X509_V_FLAG_X509_STRICT flag, the CA validation is not accidentally subverted, preserving the expected rigorous security model where non-CA certificates are properly rejected.
+
+In summary, the reordering eliminates the vulnerability by ensuring that the stricter CA requirement is applied independently and is not overridden by later checks, thus preserving the intended semantics of the X509_V_FLAG_X509_STRICT flag in validating certificate chains.

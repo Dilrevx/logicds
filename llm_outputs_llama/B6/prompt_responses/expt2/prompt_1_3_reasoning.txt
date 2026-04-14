@@ -1,0 +1,43 @@
+The original buggy code snippet has a vulnerability in the verification of X.509 certificates. The issue lies in the way it matches the expected common name (the `cn` argument of `mbedtls_x509_crt_verify`) with the actual certificate name when the subjectAltName extension is present. The code compares the expected name to any name in the subjectAltName extension, regardless of its type. This means that an attacker could potentially impersonate a 4-byte or 16-byte domain by getting a certificate for the corresponding IPv4 or IPv6 address.
+
+To fix this vulnerability, the repair code adds an additional check to ensure that the name in the subjectAltName extension is of the correct type (i.e., a DNS name) before comparing it to the expected common name. This prevents an attacker from using an IP address in the subjectAltName extension to impersonate a domain.
+
+Here's a step-by-step explanation of the changes made in the repair code:
+
+1.  **Checking the type of name in the subjectAltName extension**: In the original code, the loop iterates over the names in the subjectAltName extension and checks if the expected common name matches any of these names. In the repair code, an additional check is added to ensure that the name is of type `MBEDTLS_ASN1_OID_ID_ON`, which represents a DNS name.
+
+    ```c
+if( cur->type == MBEDTLS_ASN1_OID_ID_ON )
+{
+    if( MBEDTLS_OID_CMP( MBEDTLS_OID_AT_DNS_NAME, &cur->name ) == 0 )
+    {
+        if( x509_crt_check_cn( &cur->buf, cn, cn_len ) == 0 )
+            break;
+    }
+}
+```
+
+    This check ensures that only DNS names in the subjectAltName extension are considered when matching the expected common name.
+
+2.  **Handling cases where the subjectAltName extension is present but no matching DNS name is found**: If the loop completes without finding a matching DNS name in the subjectAltName extension, the code falls back to checking the subject names in the certificate. This ensures that certificates without a subjectAltName extension or with a subjectAltName extension that does not contain a DNS name are still verified correctly.
+
+    ```c
+if( cur == NULL )
+{
+    for( name = &crt->subject; name!= NULL; name = name->next )
+    {
+        if( MBEDTLS_OID_CMP( MBEDTLS_OID_AT_CN, &name->oid ) == 0 &&
+            x509_crt_check_cn( &name->val, cn, cn_len ) == 0 )
+        {
+            break;
+        }
+    }
+
+    if( name == NULL )
+        *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+}
+```
+
+3.  **No changes are made to the case where the subjectAltName extension is not present**: The original code correctly handles this case by checking the subject names in the certificate, and this behavior is preserved in the repair code.
+
+By adding an additional check to ensure that only DNS names in the subjectAltName extension are considered when matching the expected common name, the repair code prevents an attacker from using an IP address in the subjectAltName extension to impersonate a domain, thus fixing the vulnerability.

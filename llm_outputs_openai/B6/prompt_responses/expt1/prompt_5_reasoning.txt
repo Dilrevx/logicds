@@ -1,0 +1,18 @@
+The repair ensures that when subjectAltName (SAN) is used in a certificate, only the DNSName type is considered for matching the expected common name. Originally, the code looped over all items in the SAN without discriminating by type. This could allow an attacker to exploit non-DNS types (like IP addresses) to bypass the check—even if the expected name was a DNS name.
+
+Here’s a breakdown of the fix:
+
+1. When the certificate has a SAN extension (indicated by crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME), the code enters the first block. Instead of iterating over all SAN items blindly, the repair adds an extra check on each SAN entry using:
+   
+   if( cur->buf.tag != MBEDTLS_X509_SAN_DNSNAME )
+       continue;
+   
+   This ensures that only SAN elements with the tag indicating a DNS name are used for verification. Any other type (for instance, IP addresses) in the SAN sequence is skipped, preventing them from inadvertently matching the expected common name. This is crucial because without this restriction, an attacker might get a certificate that lists an IP address in the SAN to impersonate a domain.
+
+2. If the code finds a DNS SAN record that matches the expected common name (using x509_crt_check_cn), it breaks from the loop. If no matching DNSName is found, the code sets a flag, MBEDTLS_X509_BADCERT_CN_MISMATCH, to indicate that the certificate’s name does not meet the verification criteria.
+
+3. If there is no SAN extension, the code falls back to checking the subject’s Common Name (CN) field. This part of the code remains unchanged because it already limits the check to the CN field found in the subject structure.
+
+By only checking DNS SAN types, the repair prevents a potential vulnerability where a certificate with SAN IP addresses or other non-DNS types could mistakenly be accepted as having a valid DNS name. This change aligns with common practices and security expectations for TLS certificate validation—ensuring that the certificate name is strictly tied to the expected DNS domain.
+
+Overall, the repair closes the logical vulnerability by tightly scoping the comparison to DNS names in the SAN, thereby stopping any bypass where an attacker could substitute a non-DNS subjectAltName for the expected DNS name in a certificate, which would otherwise undermine the intended security validation.

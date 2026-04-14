@@ -1,0 +1,17 @@
+The repair adds extra checks to ensure that a reply to a forwarded query actually comes from the expected network source. Originally, the code only checked that the reply had the same query ID (and optionally a matching hash), but this left it vulnerable because an attacker could forge replies with just the correct ID/hash—even if they came from an unauthorized network location.
+
+Here’s how the repair addresses that:
+
+1. After confirming that the reply is linked to a pending query (by checking ID and hash), the code introduces a boolean flag (validFd) which will only be set to true if the correct file descriptor (fd) is validated.
+
+2. The repair distinguishes between IPv4 and IPv6. It checks the family of the address contained in f.sentto:
+   - For an IPv4 address (detected using an instanceof check on Inet4Address), it checks that the original query’s IPv4-specific file descriptor (f.ipv4Fd) is not null and that its value matches the file descriptor 'fd' of the incoming packet.
+   - Similarly, for an IPv6 address, it performs the check using the IPv6-specific field (f.ipv6Fd).
+
+3. To cover all cases, the repair includes a fallback check. If the valid file descriptor hasn’t been verified through the IPv4 or IPv6 checks, it then looks at a socket file descriptor embedded in the f.sentto (via getSocketFd()). If that file descriptor exists and matches 'fd', validFd is set to true.
+
+4. Only if validFd is true does the code return the forwarded query object (f). This ensures that the reply is only accepted if it follows the network path expected for that forwarded query.
+
+By comparing the file descriptors, the repair effectively binds the query to the specific network channel from which it was sent. An attacker would have to not only guess the correct query ID and hash but also mimic the exact network context (including the correct file descriptor), which is much more difficult to achieve in practice. This additional validation aligns with guidelines from RFC5452 and significantly reduces the risk of cache poisoning, because it forces an extra layer of authenticity beyond basic ID/hash matching.
+
+In summary, the repair fixes the vulnerability by ensuring that any reply must originate from the same network source (validated via file descriptor comparisons) as the original query. This makes it much harder for an attacker to inject forged replies, as they would need to compromise the underlying network transmission paths rather than merely spoofing the query ID and hash.

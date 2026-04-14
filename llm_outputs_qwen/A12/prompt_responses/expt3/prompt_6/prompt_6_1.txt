@@ -1,0 +1,49 @@
+Based on the provided repair description, here is a sample code snippet that incorporates the necessary checks to prevent a TLS v1.3 server from being bypassed when mutual authentication is required. This code assumes the use of the WolfSSL library, given the specific macros and functions mentioned in the repair description.
+
+```c
+#include <wolfssl/ssl.h>
+
+int ProcessFinishedMessage(WOLFSSL* ssl) {
+    int ret = 0; // Assume no error initially
+
+#if !defined(NO_CERTS) && !defined(WOLFSSL_NO_CLIENT_AUTH)
+    // Ensure the checks are only applied when certificates are enabled and client authentication is not disabled
+    if (ssl->options.side == WOLFSSL_SERVER_END) { // Check if this is the server side
+        if ((ssl->options.mutualAuth || ssl->options.failNoCert) && // Check if mutual auth is required or server fails on no cert
+            ssl->options.havePeerVerify && !ssl->options.resuming) { // Check if peer was verified and this is not a resumed session
+            if (!ssl->options.havePeerCert) { // Check if there is no peer certificate
+                DoCertFatalAlert(ssl, ret); // Send a fatal alert to the client
+                return ret; // Return the error code, stopping the handshake
+            }
+        }
+    }
+#endif
+
+    // Continue with existing logic for processing the Finished message
+    if (ssl->buffers.inputBuffer.length < FINISHED_SZ) {
+        return BUFFER_ERROR;
+    }
+
+    // Derive finished secret if the handshake is not yet complete
+    if (!IsHandshakeDone(ssl)) {
+        ret = DeriveFinishedSecret(ssl);
+        if (ret != 0) {
+            return ret;
+        }
+    }
+
+    // Additional existing logic can go here
+
+    return ret; // Return success or other appropriate status
+}
+```
+
+### Explanation:
+- **Preprocessing Directives**: The code uses `#if !defined(NO_CERTS) && !defined(WOLFSSL_NO_CLIENT_AUTH)` to ensure that the checks are only compiled when certificates and client authentication are enabled.
+- **Server-Side Check**: It checks if the current side is the server using `ssl->options.side == WOLFSSL_SERVER_END`.
+- **Mutual Authentication Requirement Check**: It verifies if mutual authentication is required or if the server should fail on no certificate using `ssl->options.mutualAuth || ssl->options.failNoCert`.
+- **Peer Verification Check**: It ensures that the peer's certificate has been verified and that the session is not being resumed using `ssl->options.havePeerVerify && !ssl->options.resuming`.
+- **Error Handling**: If the client has not provided a certificate (`!ssl->options.havePeerCert`), it sends a fatal alert using `DoCertFatalAlert(ssl, ret)` and returns an error code.
+- **Continuation of Existing Logic**: After the security checks, the function continues with its original logic to process the `Finished` message.
+
+This code snippet should be integrated into the appropriate part of the WolfSSL library's implementation where the `Finished` message is processed during a TLS handshake.

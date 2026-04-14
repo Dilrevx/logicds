@@ -1,0 +1,18 @@
+The repair changes the code’s behavior when SRTP fails to restart after detecting a potential replay attack. Here's a walkthrough:
+
+1. Stopping SRTP:  
+   The repair keeps the call to pjmedia_transport_srtp_stop() to reset internal SRTP state including the roll-over counter. This ensures that any stale state is cleared before attempting a restart.
+
+2. Restarting SRTP:  
+   The code saves the current encryption policies (tx_policy and rx_policy) and then attempts to restart SRTP using pjmedia_transport_srtp_start(). In the repair, if the restart fails (status != PJ_SUCCESS), the code logs the error just as before but—critically—returns an error (PJ_EIO) immediately. This early return is a security improvement because it prevents any fallback to basic RTP, which would be insecure. The vulnerability was due to the possibility that failing to restart SRTP might result in reversion to standard, unprotected RTP, exposing media streams.
+
+3. Removing Fallback to Insecure Transport:  
+   In the original code, if the SRTP restart was successful and srtp->bypass_srtp flag was not set, it tried to unprotect the packet using SRTP even after a restart failure. Here, the repair does not include a bypass mechanism. It forcibly attempts the SRTP unprotect operation after a successful restart. If the unprotect call fails even after the restart, the packet is dropped (error is logged and returned). This ensures that packets are always processed using secure SRTP, thereby eliminating the risk of media being sent insecurely.
+
+4. Consistent Use of SRTP:  
+   The repaired snippet makes it clear and explicit that under no circumstances should the code default to unprotected RTP. It tightly couples the SRTP restart status with the subsequent handling of the media packet. If the restart does not succeed, the packet is rejected instead of risking sending data over an insecure channel.
+
+5. Logging and Error Handling:  
+   The repair uses proper logging to indicate the failure to restart SRTP, making it easier to diagnose issues. Moreover, by returning an error immediately upon a failure, it avoids any possibility that the processing could inadvertently revert to basic RTP processing. This is the key fix that mitigates the vulnerability.
+
+In summary, the vulnerability was fixed by ensuring that failure to restart SRTP does not result in a fallback to unencrypted RTP media transport. Instead, the packet is dropped, thereby preventing any insecure media session from occurring.

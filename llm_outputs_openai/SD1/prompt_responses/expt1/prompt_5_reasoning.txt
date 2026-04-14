@@ -1,0 +1,22 @@
+The repair addresses the vulnerability by reordering and reinforcing the sequence of operations when handling error conditions during the probation period. Here’s a step‐by‐step walkthrough of the fix:
+
+1. Probation Conditions and Error Checking:
+   • The code first checks whether the probation counter (srtp.probation_cnt) is greater than 0. This indicates we are in a state where the SRTP context might be unstable.
+   • It then tests whether the error (err) encountered is either SRTP_ERR_REPLAY_OLD or SRTP_ERR_REPLAY_FAIL. These error codes hint at a replay attack detection or similar failure during unprotection. Under these conditions, the original code attempted to mitigate the issue by restarting SRTP but performed operations in the wrong sequence.
+
+2. Stopping the SRTP Channel Before Restart:
+   • In the fixed code, before attempting to restart SRTP, the transport is stopped by calling pjmedia_transport_srtp_stop(srtp). This is crucial because any attempt to reinitialize the connection without first stopping the current (possibly compromised) session can lead to an insecure fallback. If the session isn’t cleanly stopped, the system might inadvertently continue processing packets under an unsecured RTP context.
+
+3. Restarting SRTP with the Correct Policy:
+   • After stopping, the code retrieves the transmission (tx) and reception (rx) policies. It then invokes pjmedia_transport_srtp_start(srtp, tx, rx) to restart the secure session. This restart ensures that all crypto contexts and keys are re-established securely in light of the errors encountered earlier.
+   • Importantly, the repair ensures that SRTP is properly restarted before processing vulnerable packets. A successful restart reinitializes the secure session, preventing any fallback to basic RTP, which is less secure.
+
+4. Conditional Reprocessing of the Packet:
+   • If the restart is successful (status equals PJ_SUCCESS) and the bypass flag (srtp.bypass_srtp) is not set, the code reattempts to unprotect the packet with the newly established SRTP context.
+   • This reattempt is vital because it allows the system another chance to securely process the packet, rather than defaulting to an insecure mode. It guarantees that packet processing only continues if the secure context is correctly reestablished.
+
+5. Final Callback Invocation:
+   • Even if the packet was processed earlier or after the restart, the fixed code finally checks if the error code (err) is PJ_SUCCESS and that a callback (srtp.rtp_cb) is defined. If so, it invokes the callback to process the packet.
+   • This design ensures that only correctly unprotected packets are forwarded, preserving the intended security guarantees.
+
+In summary, the repair ensures that any detected replay errors while under probation lead to a clean stop and restart of the SRTP session. The secure session is reinitialized before any further packet unprotection, closing the vulnerability that otherwise might have allowed packets to be processed insecurely (falling back to RTP). This tightens control over how SRTP errors are handled, maintaining media transport security and preventing any side-effects that could introduce security breaches.

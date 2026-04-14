@@ -1,0 +1,11 @@
+The repair adds an explicit verification step to ensure that when mutual authentication is required by the server, the client has actually sent a valid certificate_verify message. Previously, even if the server was configured to require mutual authentication, the client could bypass this requirement by omitting the certificate_verify message, and the handshake would continue after verifying the Finished HMAC.
+
+Here’s what the repair does:
+
+1. It introduces a new conditional block inside the Finished message processing (after verifying the HMAC via Tls13Helper.XMEMCMP). In this block, it checks if the server requires mutual authentication (using a hypothetical flag, ssl.options.requireMutualAuth) and also verifies that the certificate verification message was received (using a flag, ssl.options.certVerifyReceived). 
+
+2. If the server is on the receiving side (indicated by ssl.options.side == Constants.WOLFSSL_SERVER_END) and mutual authentication is required but the flag certVerifyReceived is false, then the code immediately sends an alert with a bad_certificate error through Tls13Helper.SendAlert. This stops further processing by returning a VERIFY_FINISHED_ERROR. This check ensures that a client cannot successfully complete the handshake unless it provides a valid certificate_verify message, thus preventing the bypass vulnerability.
+
+3. The rest of the handshake logic remains unchanged: it updates the inOutIdx, sets keys if necessary, and completes the handshake state transitions. The added conditional block specifically targets the vulnerability scenario without impacting other aspects of the TLS 1.3 handshake processing.
+
+In summary, the repair fixes the vulnerability by enforcing that for TLS 1.3 servers requiring mutual authentication, the handshake is aborted if the certificate_verify message is missing or invalid. This stops a malicious client from connecting without the necessary certificate verification, thereby bolstering the security of the mutual authentication process.

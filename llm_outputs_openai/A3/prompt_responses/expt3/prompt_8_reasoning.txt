@@ -1,0 +1,11 @@
+The repair adds two extra checks to the beginning of the conditional to detect when a legacy cipher is in use. This is done by checking the flags field in the cipher structure (or the context’s cipher if the local pointer is NULL) to see if it has been marked as a legacy cipher (using EVP_CIPH_FLAG_LEGACY). 
+
+In detail, the code now verifies: 
+1. If the cipher passed to the function is non‑NULL and flagged as legacy (cipher->flags & EVP_CIPH_FLAG_LEGACY). 
+2. If the local cipher pointer is NULL, it then examines the ctx->cipher to see if it is non‑NULL and carries the legacy flag. 
+
+By incorporating these checks along with the existing ones (which were based on whether engine pointers or various implementation pointers were non‑NULL), the repair ensures that if any such condition is met, the routine immediately treats the cipher as one requiring legacy handling. 
+
+Once this condition is satisfied, the code first compares ctx->cipher and ctx->fetched_cipher. If they are identical, it sets ctx->cipher to NULL. This prevents the use of a potentially incorrect provider-based cipher, such as the dangerous NULL cipher that might have been substituted due to an incorrect NID (like NID_undef). The fetched cipher is then freed and the pointer is cleared, thereby removing any reference to the fetched provider cipher. Finally, by jumping to the legacy label, the legacy initialization path is enforced, ensuring that any custom cipher created using the legacy EVP_CIPHER_meth_new() routines is handled correctly. 
+
+This approach fixes the vulnerability by ensuring that when a custom (legacy) cipher is in use—even if it was erroneously associated with a provider cipher via a mistaken NID—the initialization routine does not use that fetched cipher. Instead, it ensures that the custom cipher goes through the proper legacy handling routines, which prevents the fallback to the NULL cipher that could inadvertently result in the plaintext being emitted as ciphertext.

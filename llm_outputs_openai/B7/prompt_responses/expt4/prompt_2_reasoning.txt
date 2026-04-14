@@ -1,0 +1,15 @@
+The repair rearranges the operations to ensure that any error generated during the verification of the leaf certificate is captured before the chain is duplicated into the context. Here’s a breakdown of the key changes:
+
+1. Verification Order Change:  
+   In the buggy code, the certificate chain was duplicated before the leaf certificate was verified. In the repair, the leaf certificate’s validity and hostname are checked immediately after validating the legacy chain. This guarantees that if the leaf certificate fails validation, the error is caught early and handled properly, preventing it from being lost or overwritten later.
+
+2. Error Capture and Recording:  
+   When the leaf certificate check (both validity and hostname) fails, the repair code checks if the context’s error depth is still at its initial value and ensures that the error isn’t X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY (a case we want to avoid overriding). If these conditions are met, it calls a helper function (assumed to exist and named x509_verify_chain_set_error) to record the error in the certificate chain’s error list. This step makes sure that errors are explicitly tied to the certificate chain rather than left in the context (where they might be improperly reset), thus maintaining a reliable error history.
+
+3. Conditional Chain Duplication:  
+   After successful leaf certificate verification, the certificate chain is duplicated. By postponing the duplication until after the leaf is verified, any errors that occur during verification will halt processing before new memory is allocated for the chain copy. This also means that if chain duplication itself fails (for example, due to an out-of-memory condition), the error returned will reflect that specific problem without overwriting any previous leaf verification errors.
+
+4. Final State Update:  
+   If all verifications pass and the chain is duplicated successfully, the repair increments the chains count and resets the context’s error state to success (X509_V_OK) with the current depth. This marks the certificate chain as having been successfully processed, with any error information from earlier stages stored within the chain’s error tracking structure.
+
+In summary, the repair addresses the vulnerability by ensuring that any error from leaf certificate verification is captured immediately and stored separately before any further processing (like chain duplication) occurs. This prevents scenarios where a verification callback instructs the process to continue despite an error—events that previously could have led to an incorrect overall error status. The repair guarantees robust error handling by preserving the context and integrity of error data, thereby ensuring that the error reported accurately reflects the actual cause of the failure.

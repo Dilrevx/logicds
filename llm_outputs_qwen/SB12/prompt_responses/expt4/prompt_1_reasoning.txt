@@ -1,0 +1,28 @@
+The provided repair addresses a critical vulnerability in the handling of digital signatures within a TLS 1.3 client implementation, specifically in the context of the wolfSSL library. The original code snippet contained checks for various signature algorithms used by the peer (server) during the TLS handshake process. However, it failed to properly handle cases where the expected public keys corresponding to these signature algorithms were not present, potentially allowing a man-in-the-middle (MITM) attacker to impersonate the server and bypass authentication.
+
+### Vulnerability Analysis
+
+The core issue in the original code lies in its lack of enforcement when a peer sends a signature algorithm for which no corresponding public key is available. This can be exploited by an attacker who intercepts the TLS handshake process. By sending a signature algorithm that the client expects (e.g., Ed25519, Ed448, ECDSA, RSA), the attacker can trick the client into believing that the correct server has sent its public key. However, since the attacker does not actually possess the server's private key, they cannot generate a valid signature. Nonetheless, the client might proceed with the handshake due to the absence of a strict check for the presence of the peer's public key, thus falling victim to a MITM attack.
+
+### Repair Strategy
+
+To mitigate this vulnerability, the repair strategy involves adding explicit return statements with an `INVALID_PARAMETER` error code whenever the peer's public key corresponding to the announced signature algorithm is missing. This ensures that the client immediately terminates the handshake process and does not proceed under suspicious conditions.
+
+#### Detailed Changes:
+
+1. **Consistent Error Handling:**
+   - For each signature algorithm (`ed25519`, `ed448`, `ecc_dsa`, `rsa`, `rsa_pss`), the code now includes a check to ensure the presence of the corresponding public key (`peerEd25519KeyPresent`, `peerEd448KeyPresent`, `peerEccDsaKeyPresent`, `peerRsaKeyPresent`).
+   - If the public key is absent, the client logs a detailed message indicating the discrepancy and returns `Commons.INVALID_PARAMETER` to halt the handshake process.
+
+2. **Enhanced Logging:**
+   - The log messages have been slightly modified to be more descriptive, clarifying the nature of the issue encountered. For example, "Peer sent ED25519 key but not in verify" is now used instead of "Oops, peer sent ED25519 key but not in verify". This helps in diagnosing issues more effectively.
+
+3. **RSA Signature Handling:**
+   - The RSA signature algorithms (`rsa_sa_algo` and `rsa_pss_sa_algo`) now include checks for the presence of the RSA public key (`peerRsaKeyPresent`). This was missing in the original code for the `rsa_sa_algo`, which could allow an attacker to exploit the lack of verification for RSA signatures.
+
+4. **Preventing Handshake Completion:**
+   - By returning `Commons.INVALID_PARAMETER` when a mismatch is detected, the client prevents the handshake from progressing further. This action is crucial as it stops the client from accepting a potentially malicious server or a server whose identity cannot be verified, thereby thwarting MITM attacks.
+
+### Conclusion
+
+The repair ensures that the TLS 1.3 client strictly enforces the presence of the correct public keys corresponding to the signature algorithms announced by the peer. This change significantly enhances the security of the client by preventing it from being deceived by an attacker attempting to impersonate the server. By implementing these modifications, the client adheres to the principle of least privilege, only proceeding with the handshake when all necessary cryptographic material is correctly verified and present.

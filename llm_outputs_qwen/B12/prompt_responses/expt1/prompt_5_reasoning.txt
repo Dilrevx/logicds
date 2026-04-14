@@ -1,0 +1,69 @@
+The repair addresses a significant security vulnerability in the `DoTls13CertificateVerify` function, specifically related to the verification of the peer's certificate signature in TLS 1.3. The original code had a logical flaw that allowed an attacker to potentially bypass the authentication process, which could lead to a man-in-the-middle (MITM) attack. Let's delve into the specifics of the issue and the repair.
+
+### Original Vulnerability
+
+In the original code, there were checks to ensure that the correct type of public key was present based on the signature algorithm received from the peer. However, these checks did not enforce that the presence of the expected public key was mandatory. Instead, they merely logged a message and continued processing. This allowed an attacker to send a signature using an algorithm for which no corresponding public key was provided, effectively bypassing the intended verification process.
+
+For example, if the peer sent a signature using the Ed25519 algorithm (`ed25519_sa_algo`), the original code would log a message if the Ed25519 public key was not present but would not terminate the verification process. Similarly, for RSA, even if the RSA public key was not present or valid, the code would continue without enforcing this requirement.
+
+### Repair Implementation
+
+The repair involves modifying these checks so that they not only log a message but also explicitly terminate the verification process if the expected public key is missing. This ensures that the integrity and authenticity of the peer's certificate cannot be compromised by an attacker who might try to use an unsupported or missing public key.
+
+Here's a detailed breakdown of the changes made:
+
+1. **Ed25519 Signature Algorithm Check:**
+   ```c
+   #ifdef HAVE_ED25519
+       if (args->sigAlgo == ed25519_sa_algo && !ssl->peerEd25519KeyPresent) {
+           WOLFSSL_MSG("Peer sent ED25519 key but not in verify");
+           ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+       }
+   #endif
+   ```
+   - If the signature algorithm is Ed25519 and the Ed25519 public key is not present, the function logs a message and exits with an `INVALID_PARAMETER` error.
+
+2. **Ed448 Signature Algorithm Check:**
+   ```c
+   #ifdef HAVE_ED448
+       if (args->sigAlgo == ed448_sa_algo && !ssl->peerEd448KeyPresent) {
+           WOLFSSL_MSG("Peer sent ED448 key but not in verify");
+           ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+       }
+   #endif
+   ```
+   - Similar to Ed25519, if the signature algorithm is Ed448 and the Ed448 public key is not present, the function logs a message and exits with an `INVALID_PARAMETER` error.
+
+3. **ECC DSA Signature Algorithm Check:**
+   ```c
+   #ifdef HAVE_ECC
+       if (args->sigAlgo == ecc_dsa_sa_algo && !ssl->peerEccDsaKeyPresent) {
+           WOLFSSL_MSG("Peer sent ECC key but not in verify");
+           ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+       }
+   #endif
+   ```
+   - For ECC DSA signatures, if the ECC public key is not present, the function logs a message and exits with an `INVALID_PARAMETER` error.
+
+4. **RSA Signature Algorithm Checks:**
+   ```c
+   #ifndef NO_RSA
+       if (args->sigAlgo == rsa_sa_algo && (ssl->peerRsaKey == NULL || !ssl->peerRsaKeyPresent)) {
+           WOLFSSL_MSG("Peer sent RSA key but not in verify");
+           ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+       }
+       if (args->sigAlgo == rsa_pss_sa_algo && (ssl->peerRsaKey == NULL || !ssl->peerRsaKeyPresent)) {
+           WOLFSSL_MSG("Peer sent RSA key but not in verify");
+           ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+       }
+   #endif
+   ```
+   - For both RSA PKCS#1.5 and RSA PSS signatures, the function checks if the RSA public key is both non-null and present. If either condition fails, it logs a message and exits with an `INVALID_PARAMETER` error.
+
+### Benefits of the Repair
+
+- **Security Enhancement:** By enforcing the presence of the appropriate public key for each signature algorithm, the repair prevents attackers from using unsupported or missing keys to forge signatures, thereby maintaining the security of the TLS 1.3 handshake.
+- **Consistency:** The repair ensures that all signature algorithms are treated consistently, with strict validation checks in place for each.
+- **Error Handling:** The use of `ERROR_OUT` with specific error codes (`INVALID_PARAMETER`) provides clear feedback about the nature of the failure, aiding in debugging and maintenance.
+
+In summary, the repair strengthens the `DoTls13CertificateVerify` function by ensuring that the verification process is robust against attempts to bypass the public key validation step, thus safeguarding the security of TLS 1.3 communications.

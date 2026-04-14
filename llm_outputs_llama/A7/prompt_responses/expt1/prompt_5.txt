@@ -1,0 +1,80 @@
+<repair>
+                if (ok > 0) {
+                    /*
+                     * Free up the found cert we'll add it again later
+                     */
+                    X509_free(xtmp);
+
+                    /*
+                     * Dump all the certs above this point - we've found an
+                     * alternate chain
+                     */
+                    while (num > j) {
+                        xtmp = sk_X509_pop(ctx->chain);
+                        X509_free(xtmp);
+                        num--;
+                        ctx->last_untrusted--;
+                    }
+                    retry = 1;
+                    break;
+                } else if (ok == 0) {
+                    /* 
+                     * If no issuer found, check if the current cert is a CA 
+                     * and if so, check if it's trusted.
+                     */
+                    if (X509_check_ca(xtmp2) && 
+                        X509_check_trust(xtmp2, X509_TRUST_TRUSTED)) {
+                        retry = 1;
+                        break;
+                    }
+                }
+            }
+        }
+        if (retry)
+            continue;
+        break;
+    }
+
+    if (bad_chain)
+        goto end;
+
+    /* If explicitly trusted then we are done */
+    if (i == X509_TRUST_TRUSTED) {
+        ok = 1;
+        goto end;
+    }
+
+    /* If explicitly rejected error */
+    if (i == X509_TRUST_REJECTED) {
+        ctx->error = X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE;
+        ctx->current_cert = x;
+        ctx->error_depth = num - 1;
+        ok = cb(0, ctx);
+        if (!ok)
+            goto end;
+    }
+
+    /* If not trusted then we have to check application callback */
+    ok = cb(i, ctx);
+    if (!ok)
+        goto end;
+
+    /* If we have a self signed cert left over then we need to check it */
+    if (chain_ss!= NULL) {
+        ctx->error = X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN;
+        ctx->current_cert = chain_ss;
+        ctx->error_depth = num;
+        ok = cb(0, ctx);
+        if (!ok)
+            goto end;
+    }
+
+    ok = 1;
+
+end:
+    if (sktmp!= NULL)
+        sk_X509_free(sktmp);
+    if (chain_ss!= NULL)
+        X509_free(chain_ss);
+    return ok;
+}

@@ -1,0 +1,105 @@
+Below is one example of a fix that follows the recommended repair. In this example the code first preserves the “no‐padding” setting, then (only when the FIPS module isn’t active) collects any OSSL_PARAM entries that indicate a key length or IV length and applies them immediately to the context. (Many actual implementations will have helper functions for “collect‐and‐apply” of OSSL_PARAM strings; in our example the helper function is called update_ctx_length_parameters().) Once the lengths have been fixed up, the code continues with the normal encryption initialization call.
+
+─────────────────────────────
+// NOTE: This example assumes that in non-FIPS builds the macro USE_FIPS is not defined.
+
+if ((ctx->flags & EVP_CIPH_NO_PADDING) != 0) {
+    /* Preserve the existing No Padding mode in the cipher context */
+    if (!EVP_CIPHER_CTX_set_padding(ctx, 0))
+        return 0;
+}
+
+#ifndef USE_FIPS
+    /* Pre-process the OSSL_PARAM parameters to catch key/IV length settings */
+    if (params != NULL) {
+        /*
+         * temporary_params is used to hold up to two parameters: one for key length
+         * and one for IV length (or its AEAD synonym). This helper is responsible for
+         * extracting them from the provided params array.
+         */
+        if (!update_ctx_length_parameters(ctx, params)) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_LENGTH);
+            return 0;
+        }
+    }
+#endif
+
+if (enc) {
+    if (ctx->cipher->einit == NULL) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+        return 0;
+    }
+    /*
+     * With key and IV lengths now pre-processed and applied, we call the
+     * underlying cipher initialization.
+     */
+    return ctx->cipher->einit(ctx->algctx,
+                              key,
+                              key == NULL ? 0 : EVP_CIPHER_CTX_get_key_length(ctx),
+                              iv,
+                              iv == NULL ? 0 : EVP_CIPHER_CTX_get_iv_length(ctx),
+                              params);
+}
+
+─────────────────────────────
+
+/*
+ * Helper function: update_ctx_length_parameters()
+ *
+ * This helper examines the provided params array for any parameters related
+ * to key length, IV length, or AEAD IV length. If found, these are applied to
+ * the cipher context so that internal length settings are updated before the
+ * key and IV data is used.
+ *
+ * Returns 1 on success, 0 on failure.
+ */
+int update_ctx_length_parameters(EVP_CIPHER_CTX *ctx, const OSSL_PARAM params[])
+{
+    OSSL_PARAM temp_params[3] = { OSSL_PARAM_END, OSSL_PARAM_END, OSSL_PARAM_END };
+    uint32_t keylen = 0, ivlen = 0;
+    int found = 0;
+
+    /* Look for the key length parameter */
+    const OSSL_PARAM *p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_KEYLEN);
+    if (p != NULL && !OSSL_PARAM_get_uint(p, &keylen)) {
+        return 0;
+    }
+    if (p != NULL) {
+        temp_params[0] = OSSL_PARAM_construct_uint(OSSL_CIPHER_PARAM_KEYLEN, &keylen, sizeof(keylen));
+        found = 1;
+    }
+
+    /* Look for the IV length parameter; note sometimes the AEAD parameter
+       name may be used instead */
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_IVLEN);
+    if (p == NULL)
+        p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_AEAD_IVLEN);
+    if (p != NULL && !OSSL_PARAM_get_uint(p, &ivlen)) {
+        return 0;
+    }
+    if (p != NULL) {
+        temp_params[1] = OSSL_PARAM_construct_uint(OSSL_CIPHER_PARAM_IVLEN, &ivlen, sizeof(ivlen));
+        found = 1;
+    }
+
+    /* Only update if at least one length parameter was found */
+    if (found) {
+        if (!EVP_CIPHER_CTX_set_params(ctx, temp_params))
+            return 0;
+    }
+    return 1;
+}
+
+─────────────────────────────
+
+Explanation of the changes:
+
+1. The code first checks if the context was configured with no padding and ensures that the new cipher configuration maintains that behavior.
+
+2. In the non-FIPS build (guarded by #ifndef USE_FIPS), the helper function update_ctx_length_parameters() is called when an OSSL_PARAM array is provided. This function looks for key length and IV length parameters (including an alternate parameter name for AEAD IV length) and applies those values to the context before any encryption/decryption work occurs.
+
+3. If applying the new parameters fails, an error is raised and the function returns 0 to prevent continuing with a misconfigured context.
+
+4. Finally, the standard encryption initialization call is performed with the now-correct key and IV lengths already set in the context.
+
+This fix ensures that any changes to key or IV length supplied via OSSL_PARAM are applied prior to using the key and IV values directly, thereby mitigating the risk of truncation or overrun described by CVE-2023-5363.

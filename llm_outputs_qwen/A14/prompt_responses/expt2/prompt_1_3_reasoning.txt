@@ -1,0 +1,34 @@
+The provided repair addresses a critical vulnerability in the OpenSSL implementation related to the processing of ChangeCipherSpec (CCS) messages during the TLS handshake. This vulnerability, commonly known as the "CCS Injection" vulnerability, allows a man-in-the-middle (MITM) attacker to potentially hijack sessions or obtain sensitive information by injecting a CCS message at an inappropriate time in the handshake process.
+
+### Understanding the Vulnerability
+
+In a typical TLS handshake, the `ChangeCipherSpec` message is used to indicate that the sender is switching to the new encryption parameters established in the handshake. The sequence of events should be such that the `ChangeCipherSpec` message is sent immediately before the `Finished` message, ensuring that both parties agree on the encryption parameters before encrypted data is exchanged.
+
+However, the original code did not strictly enforce this sequence. Specifically, it allowed the server to send the `ChangeCipherSpec` message without ensuring that the `Finished` message was immediately subsequent, creating a window of opportunity for an attacker to inject a `ChangeCipherSpec` message, leading to a potential downgrade attack where the session uses a weaker, possibly zero-length, master key.
+
+### Analysis of the Original Code
+
+The original code snippet shows several states in the TLS handshake process:
+
+- **SSL3_ST_SR_CERT_VRFY_B**: Handles certificate verification from the client.
+- **SSL3_ST_SR_FINISHED_A/B**: Receives the `Finished` message from the client.
+- **SSL3_ST_SW_CHANGE_A/B**: Sends the `ChangeCipherSpec` message from the server.
+- **SSL3_ST_SW_FINISHED_A/B**: Sends the `Finished` message from the server.
+
+In the original code, the transition from `SSL3_ST_SW_CHANGE_A/B` to `SSL3_ST_SW_FINISHED_A` occurs immediately after sending the `ChangeCipherSpec` message, without explicitly ensuring that no other messages (such as an injected `ChangeCipherSpec` message from an attacker) can be processed in between.
+
+### The Repair
+
+The repair focuses on ensuring that the `ChangeCipherSpec` message is sent and processed correctly, and that the cipher state is updated only after the `ChangeCipherSpec` message has been successfully sent. Here's how the repair achieves this:
+
+1. **Order Preservation**: The repair maintains the order of operations: first, the `ChangeCipherSpec` message is sent, and then the cipher state is updated. This ensures that the `ChangeCipherSpec` message is not followed by any other messages that could be injected by an attacker.
+
+2. **Immediate State Transition**: After sending the `ChangeCipherSpec` message, the repair updates the cipher state immediately. This ensures that the server transitions to the next state (`SSL3_ST_SW_FINISHED_A`) only after the `ChangeCipherSpec` message has been processed, minimizing the window of opportunity for an attacker to inject a malicious `ChangeCipherSpec` message.
+
+3. **Error Handling**: The repair includes error handling to ensure that if any part of the process fails (e.g., if sending the `ChangeCipherSpec` message fails), the process terminates with an error. This prevents the server from proceeding with the handshake if any step is compromised.
+
+4. **Consistency with TLS Protocol**: By enforcing the correct sequence of messages and ensuring that the cipher state is updated only after the `ChangeCipherSpec` message is sent, the repair aligns with the TLS protocol specifications, enhancing the security of the handshake process.
+
+### Conclusion
+
+The repair effectively mitigates the CCS Injection vulnerability by ensuring that the `ChangeCipherSpec` message is sent and processed correctly, preventing an attacker from injecting a malicious `ChangeCipherSpec` message that could lead to session hijacking or the use of a zero-length master key. This change strengthens the security of the TLS handshake process, protecting against a significant class of attacks that target the delicate timing and ordering of messages in the handshake protocol.

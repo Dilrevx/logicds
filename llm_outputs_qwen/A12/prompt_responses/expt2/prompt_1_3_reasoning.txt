@@ -1,0 +1,38 @@
+The provided repair addresses a critical vulnerability in the TLS 1.3 implementation where a server expecting mutual authentication could be bypassed by a malicious client that fails to send the `CertificateVerify` message. This bypass allows the client to establish a connection without presenting a certificate, which is a significant security risk as it undermines the mutual authentication mechanism intended to verify both parties' identities.
+
+### Original Vulnerability
+
+In the original code snippet, the `DoTls13Finished` function is responsible for processing the `Finished` message during the TLS 1.3 handshake. This function is part of the protocol's post-handshake phase, where the `Finished` message is used to confirm that all previous handshake messages have been correctly received and processed by both the client and server. However, the function does not include a check to ensure that the `CertificateVerify` message, which is crucial for verifying the client's certificate, has been received if mutual authentication is required.
+
+### Security Implications
+
+The absence of this check means that a malicious client can skip sending the `CertificateVerify` message. In a scenario where mutual authentication is enabled (i.e., the server requires the client to present a certificate), this omission allows the client to connect to the server without providing the necessary proof of identity. This defeats the purpose of mutual authentication and can lead to unauthorized access, man-in-the-middle attacks, or other forms of security breaches.
+
+### The Repair
+
+To address this vulnerability, the repair introduces a check to ensure that the `CertificateVerify` message has been received if the server is configured to require mutual authentication. Specifically, the following lines are added:
+
+```c
+/* Ensure CertificateVerify has been received if required */
+if (ssl->options.verifyPeer && !ssl->peerCertReceived) {
+    return BAD_PEER_CERTIFICATE_E;
+}
+```
+
+#### Explanation of the Repair
+
+- **`ssl->options.verifyPeer`**: This flag indicates whether the server is configured to require mutual authentication. If set, the server expects the client to present a valid certificate and send a `CertificateVerify` message.
+  
+- **`ssl->peerCertReceived`**: This flag should be set by the TLS implementation when the `CertificateVerify` message is successfully received and verified. If the client fails to send this message, or if the message is invalid, this flag remains unset.
+
+- **`BAD_PEER_CERTIFICATE_E`**: This error code is returned if the server requires mutual authentication (`verifyPeer` is true) but the `CertificateVerify` message has not been received (`peerCertReceived` is false). Returning this error code terminates the handshake process, preventing the establishment of an unauthenticated connection.
+
+### Implementation Considerations
+
+- **Initialization of `peerCertReceived`**: It is crucial that the `peerCertReceived` flag is properly initialized and updated throughout the handshake process. This flag should be reset at the beginning of each handshake and set only after the `CertificateVerify` message has been successfully validated.
+  
+- **Error Handling**: The repair ensures that the handshake is terminated with an appropriate error code if the `CertificateVerify` message is missing. This prevents any further communication over an unauthenticated connection, maintaining the security integrity of the TLS protocol.
+
+- **Testing**: After implementing the repair, thorough testing is necessary to ensure that the handshake process behaves correctly under various scenarios, including successful authentications, failed authentications due to missing or invalid certificates, and different configurations of the `verifyPeer` option.
+
+By incorporating this check, the repair ensures that the server enforces mutual authentication requirements, thereby mitigating the risk of bypassing the `CertificateVerify` message and establishing unauthenticated connections. This enhancement strengthens the security of the TLS 1.3 implementation, ensuring that only authenticated clients can establish secure connections with the server.

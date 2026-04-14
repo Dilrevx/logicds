@@ -1,0 +1,28 @@
+Below is one example of a repair. The bug comes from not checking whether X509_verify_cert() returned a negative value (which signals an internal error) before propagating the result. In other words, if the application did not set a cert‐verify callback and X509_verify_cert() returns –1 (or any negative number), that “internal error” gets passed up and later interpreted by SSL_get_error() as SSL_ERROR_WANT_RETRY_VERIFY—which only makes sense if the application had installed its own verification callback. To fix this we must detect negative return values from X509_verify_cert() and instead signal a fatal error (for example, by logging the error and returning a failure code).
+
+Below is one possible patched version of the snippet:
+
+-----------------------------------------------------
+    if (s->ctx->app_verify_callback != NULL) {
+        i = s->ctx->app_verify_callback(ctx, s->ctx->app_verify_arg);
+    } else {
+        i = X509_verify_cert(ctx);
+        if (i < 0) {
+            /* An internal error occurred during certificate verification.
+             * Since no application callback is set, we must not let a negative
+             * value propagate (which would later produce an unexpected
+             * SSL_ERROR_WANT_RETRY_VERIFY).
+             */
+            ERR_put_error(ERR_LIB_SSL, SSL_F_SSL3_GET_CERT_VERIFY,
+                          SSL_R_CERTIFICATE_VERIFY_ERROR, __FILE__, __LINE__);
+            return 0;  /* Return failure to abort the handshake */
+        }
+    }
+-----------------------------------------------------
+
+Explanation of the fix:
+1. After calling X509_verify_cert(ctx) we check whether the returned value i is negative.
+2. If i is negative, we log an appropriate error with ERR_put_error() and return a failure (here 0), ensuring that we do not let OpenSSL later misinterpret a negative value as SSL_ERROR_WANT_RETRY_VERIFY.
+3. If i is non-negative (i.e. a valid result from certificate verification), we continue as before.
+
+This patch ensures that an internal error (indicated by a negative value) is handled immediately and does not confuse the application with an unexpected error code.

@@ -1,0 +1,17 @@
+The repair ensures that if a packet triggers the SRTP replay error (and the probation_count is positive), the media transport will not accidentally fall back to plain RTP in the event that SRTP restart fails, which is the root cause of the vulnerability described.
+
+Key changes include:
+
+1. Stopping SRTP Securely:
+   • The call to pjmedia_transport_srtp_stop() stops the active SRTP session before trying to restart it. This prevents the roll-over counter from being maintained when the sequence numbers change.
+   • Doing so is essential to avoid the state inconsistency between the old session and the new one.
+
+2. Attempting a Clean Restart:
+   • The code then attempts to restart SRTP with pjmedia_transport_srtp_start() using the previously saved tx and rx security policies.
+   • The outcome of this operation is checked immediately. If the restart fails (status != PJ_SUCCESS), an error is logged and the packet is explicitly dropped (by returning an error code). This prevents falling back to a basic RTP session, which would send media insecurely.
+
+3. Enforcing Secure Mode:
+   • If the restart is successful, the code explicitly sets the bypass_srtp flag to PJ_FALSE. This ensures that even if there was an earlier configuration that might allow bypassing SRTP, it is now overridden—thereby enforcing that all subsequent packets must be processed via the SRTP context.
+   • With bypass turned off, the code reattempts to process the packet securely via the srtp_unprotect() call.
+
+By not allowing the packet to continue processing in the event of a failure to restart SRTP, and by enforcing that secure SRTP is used (with bypass_srtp explicitly disabled), the fix prevents the fallback scenario where media would be inadvertently sent using plain RTP. This guarantees that even under conditions where packet replay issues or sequence discrepancies occur, media security is maintained and exploits targeting the vulnerable transition are mitigated.

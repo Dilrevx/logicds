@@ -1,0 +1,64 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags. Do not provide any extra text explanation.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+As an example, here is a vulnerability description of a buggy source code:
+<example_vulnerability_description>
+ChaCha20-Poly1305 is an AEAD cipher, and requires a unique nonce input for every encryption operation. RFC 7539 specifies that the nonce value (IV) should be 96 bits (12 bytes). OpenSSL allows a variable nonce length and front pads the nonce with 0 bytes if it is less than 12 bytes. However it also incorrectly allows a nonce to be set of up to 16 bytes. In this case only the last 12 bytes are significant and any additional leading bytes are ignored. It is a requirement of using this cipher that nonce values are unique. Messages encrypted using a reused nonce value are susceptible to serious confidentiality and integrity attacks. If an application changes the default nonce length to be longer than 12 bytes and then makes a change to the leading bytes of the nonce expecting the new value to be a new unique nonce then such an application could inadvertently encrypt messages with a reused nonce. 
+</example_vulnerability_description>
+Here is the buggy source code of the example:
+<example_buggy_code>
+    case EVP_CTRL_AEAD_SET_IVLEN:
+        if (arg <= 0 || arg > CHACHA_CTR_SIZE)
+            return 0;
+        actx->nonce_len = arg;
+        return 1;
+
+</example_buggy_code>
+Here is the fixed code of the example:
+<example_answer>
+<repair>
+    case EVP_CTRL_AEAD_SET_IVLEN:
+        if (arg <= 0 || arg > CHACHA20_POLY1305_MAX_IVLEN)
+            return 0;
+        actx->nonce_len = arg;
+        return 1;
+
+</repair>
+</example_answer>
+Here is the vulnerability description of the buggy source code we want to fix:
+<vulnerability_description>
+The ssl3_get_cert_verify function accepts client authentication with a Diffie-Hellman (DH) certificate without requiring a CertificateVerify message, which allows remote attackers to obtain access without knowledge of a private key via crafted TLS Handshake Protocol traffic to a server that recognizes a Certification Authority with DH support.
+</vulnerability_description>
+Here is the buggy source code we want to fix:
+<buggy_code>
+        if (s.s3.tmp.message_type != Constants.SSL3_MT_CERTIFICATE_VERIFY) {
+            s.s3.tmp.reuse_message = 1;
+            if (peer != null && (type & Constants.EVP_PKT_SIGN) != 0) {
+                al = Constants.SSL_AD_UNEXPECTED_MESSAGE;
+                Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+                        Constants.SSL_R_MISSING_VERIFY_MESSAGE);
+                Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);
+                return ret;
+            }
+            return 1;
+        }
+
+</buggy_code>
+Here is a repair description to fix the buggy source code we want to fix
+<repair_description>
+The repair addresses a logic flaw in how the function handles incoming handshake messages that are not of type CertificateVerify in a client authentication scenario. Originally, if the incoming message did not carry a CertificateVerify, the code would first mark the message as reusable. Then, it would check if a peer certificate exists and if the certificate type indicated signing capability. Only in that case, it would treat the missing CertificateVerify as an error, send an alert, and terminate with an error return value. This means that if the peer did not have the signing flag even though a certificate was present, the function would not trigger an error, inadvertently allowing some clients to bypass the requirement for the CertificateVerify message.
+
+The patch simplifies the security check by modifying the conditional that determines whether the absence of a CertificateVerify message should be treated as a security violation. The revised logic now mandates that if there is any peer certificate present, regardless of any additional flags or properties, the absence of a CertificateVerify message should immediately be considered an error. In this new flow, after detecting that the incoming message type is not CertificateVerify and reusing the message, the code checks solely whether a peer certificate exists. If one does, it sets the appropriate alert level, logs an error indicating that the CertificateVerify message is missing, and sends a fatal alert to the peer before returning an error code.
+
+This change is significant because it removes the previous reliance on the certificate’s signing capability flag. By doing so, any client that presents a certificate but omits the required CertificateVerify message cannot bypass the authentication process, regardless of whether the certificate is a Diffie-Hellman certificate or not. Hence, the vulnerability—where an attacker might craft a handshake that omits the CertificateVerify message and obtain access without proving possession of the private key—is mitigated.
+
+To summarize the repair steps:
+1. The function first checks whether the incoming handshake message is of the expected CertificateVerify type.
+2. The code then marks the message as reusable regardless of further conditions.
+3. Instead of conditionally checking both the presence of a peer certificate and whether the certificate indicates signing support, the modified version checks only if a peer certificate exists.
+4. If a peer certificate is present but the message type is not CertificateVerify, the function immediately flags the situation as an error by setting an alert and logging a specific error message related to the missing CertificateVerify.
+5. Finally, it sends an alert to the client and returns an error code without proceeding with the handshake further.
+
+By enforcing the requirement for the CertificateVerify message whenever a certificate is involved, the repair tightens the authentication process and prevents potential attackers from utilizing certificates (especially those with Diffie-Hellman support) to bypass security checks during the TLS handshake.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability we want to fix.

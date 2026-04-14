@@ -1,0 +1,46 @@
+Certainly! The vulnerability described pertains to a potential security flaw in a TLS v1.3 server implementation that requires mutual authentication. In mutual authentication, both the client and the server verify each other's identities using certificates. The issue arises when a malicious client connects to the server without sending a `CertificateVerify` message, thereby bypassing the requirement for client authentication.
+
+### Analysis of the Vulnerability
+
+In the provided buggy code snippet, there is no explicit check to ensure that the client has sent a certificate if mutual authentication is required. The code only checks if the buffer size is sufficient to accommodate the incoming data. This means that a client could potentially connect to the server without providing the necessary authentication information, which compromises the security of the connection.
+
+### Repair Strategy
+
+To address this vulnerability, it is essential to add a check to confirm that the client has indeed sent a certificate before proceeding with the TLS handshake. The repair involves adding logic to verify that the `CertificateVerify` message has been received from the client when mutual authentication is enabled.
+
+### Explanation of the Repair
+
+The repair introduces an additional condition to the existing code:
+
+```c
+if (ssl.options.side == WOLFSSL_CLIENT_END && !ssl.certReceived) {
+    return Constants.FAILURE; // Ensure client sent a certificate if required
+}
+```
+
+- **`ssl.options.side == WOLFSSL_CLIENT_END`**: This condition checks whether the current SSL/TLS context is operating as a client. However, in the context of server-side validation, this condition should actually check if the current context is on the server side. Therefore, the correct condition should be `ssl.options.side == WOLFSSL_SERVER_END`. This ensures that the following logic applies only when the server is performing its part of the handshake.
+
+- **`!ssl.certReceived`**: This condition checks if the server has received a certificate from the client. The variable `ssl.certReceived` is assumed to be a flag that is set to `true` once the server successfully receives and validates the client's certificate. If this flag is `false`, it indicates that the client did not send a certificate, which is a violation of the mutual authentication requirement.
+
+- **`return Constants.FAILURE;`**: If the above conditions are met, indicating that the server is expecting a client certificate but did not receive one, the function returns `Constants.FAILURE`. This terminates the handshake process, preventing the establishment of a secure connection with an unauthenticated client.
+
+### Corrected Code Snippet
+
+Taking into account the need to correctly identify the server side, the corrected code should look like this:
+
+```c
+<repair>
+        Tls13Helper.WOLFSSL_ENTER("DoTls13Finished");
+
+        if (ssl.options.side == WOLFSSL_SERVER_END && !ssl.certReceived) {
+            return Constants.FAILURE; // Ensure client sent a certificate if required
+        }
+
+        if (inOutIdx[0] + size + ssl.keys.padSz > totalSz)
+            return Constants.BUFFER_E;
+</repair>
+```
+
+### Conclusion
+
+By implementing this repair, the server now enforces mutual authentication by ensuring that it does not proceed with the TLS handshake unless it has received and validated the client's certificate. This change effectively mitigates the vulnerability, enhancing the security of the TLS connection by preventing unauthorized access from clients that do not present the required credentials.

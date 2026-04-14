@@ -1,0 +1,16 @@
+The vulnerability existed because in the DTLS path the code sometimes skipped generating a proper random client value if the session was using DTLS and there were no hello verify requests. This essentially meant that instead of using a random 32-byte value, the client would provide 32 null-bytes, which severely weakens the security guarantees of DTLS by removing the necessary source of randomness.
+
+In the original buggy code, the check combined two conditions:
+  1. The handshake flag HSK_HRR_RECEIVED was not set.
+  2. For DTLS sessions, if the count of hello verify requests was zero.
+
+Due to the logical AND condition, if the session was DTLS and had no hello verify requests, the overall condition evaluated to false, and _gnutls_gen_client_random (which properly randomizes the client handshake secret) was not called. As a result, the client random was not generated properly and was left as a known static value (all zeros).
+
+The repair resolves this issue by simplifying the condition. Now, the function always generates a fresh, random client value whenever the HSK_HRR_RECEIVED flag is not set, regardless of whether the session is DTLS or not. By eliminating the additional DTLS-specific check (which previously prevented random number generation in the absence of hello verify requests), the repaired code ensures that even DTLS sessions will generate a full random client value during the handshake.
+
+This change guarantees that:
+1. The client random value always provides the necessary unpredictability needed for secure handshakes.
+2. The DTLS protocol benefits from proper randomness, upholding its security assumptions and protocols.
+3. The vulnerability is closed because there is no longer an option to use a predictable, non-random (null) value during the critical client random generation step.
+
+In summary, by always calling _gnutls_gen_client_random when the handshake hasn't yet received a Hello Retry Request, the repair ensures that every DTLS session includes adequate random input, thus preserving the security properties of the DTLS handshake process.

@@ -1,0 +1,17 @@
+The repair starts by adding an extra validation step comparing both the outer certificate’s signature algorithm with the inner, tbsCertificate’s signature algorithm. In the original code, the certificate’s fields are parsed, but there was no check ensuring that the algorithm used to sign the certificate (outer signature) matches the one specified in the TBS (to-be-signed) portion, which could allow a mismatch that might be exploited.
+
+Step by step, here’s what the repair does:
+
+1. After checking that the previous ASN.1 parsing of the certificate succeeded, the repair code allocates two new GnutlsDatum objects. These objects (outerSigAlg and innerSigAlg) are used to store the raw bytes representing the signature algorithms from two different parts of the certificate.
+
+2. The code calls a helper function to extract the outer signature algorithm from the certificate structure. This is done by parsing the "signatureAlgorithm.algorithm" field from the certificate. If this parsing fails, the error is converted, and the function returns immediately with the appropriate error code. This ensures that the subsequent comparison isn’t done with invalid data.
+
+3. A matching extraction is done for the inner signature algorithm from the "tbsCertificate.signature.algorithm" field. Again, if this extraction encounters an error, the error is reported and the function exits.
+
+4. Once both signature algorithm fields are successfully retrieved, the two are compared using a helper function (datum_equals). This function is assumed to perform a proper binary comparison of the raw signature algorithm data. If the algorithms do not match, an assertion is raised, and the function returns a specific error code (SIGNATURE_ALGORITHM_MISMATCH). This check directly addresses the vulnerability by ensuring that the certificate has not been tampered with in a way that could cause the signature algorithm in the outer certificate to differ from that in the tbsCertificate.
+
+5. Finally, if the algorithms match, the code continues with its original flow by retrieving the issuer field ("tbsCertificate.issuer.rdnSequence") from the certificate. This ensures that further processing only proceeds when there is consistency in the signature algorithms.
+
+By implementing this additional comparison, the repair mitigates the risk of accepting a certificate where the signature algorithms might be manipulated. An attacker might otherwise craft a certificate that appears valid on one level (with one signature algorithm) but diverges in the TBS portion, potentially bypassing security checks or causing cryptographic weaknesses. The repair ensures both fields are consistent, maintaining the integrity and trustworthiness of the certificate.
+
+Thus, the vulnerability is fixed by validating that the two signature algorithms are identical before proceeding. This extra verification step fortifies the certificate import process against mismatches that could lead to further exploitation.

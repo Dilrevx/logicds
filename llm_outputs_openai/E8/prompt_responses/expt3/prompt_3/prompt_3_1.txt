@@ -1,0 +1,36 @@
+Below is one example of a repair. In this example we assume that our processing functions can check whether the current radio bearer (given by lcid) has an established security (e.g. integrity protection) context. When handling the Service Reject message (which—for historical reasons—is allowed in plaintext only for a very narrow case), we now first verify that if the message’s emm_cause equals 25 then it must not be processed if the connection is “plain‐text” (i.e. missing integrity protection). If the check fails, we log the incident and ignore the message.
+
+For example, suppose we have a helper function called connection_has_integrity(lcid) that returns true if the connection has integrity protection. The patched code snippet might be modified like this:
+
+---------------------------------------------------------------
+case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT: {
+    // Extract the EMM cause value from the PDU.
+    // (Assuming extract_emm_cause() parses the pdu and returns the emm_cause value.)
+    int emm_cause = extract_emm_cause(pdu);
+    
+    // If there is no integrity protection and emm_cause is 25 (i.e. attach/service reject)
+    // then reject the message to avoid processing sensitive messages in plaintext.
+    if (!connection_has_integrity(lcid) && emm_cause == 25) {
+        log_error("Received plaintext Service Reject message with emm_cause=25; discarding message.");
+        break;
+    }
+    
+    // Otherwise, process the message as usual.
+    parse_service_reject(lcid, std::move(pdu));
+    break;
+}
+
+case LIBLTE_MME_MSG_TYPE_ESM_INFORMATION_REQUEST:
+    // ... rest of switch code ...
+---------------------------------------------------------------
+
+Step by step, what this patch does:
+
+1. It extracts the emm_cause value from the incoming PDU. (You may have an existing function or need to write one.)
+2. It calls connection_has_integrity(lcid) to verify if the current message is coming over an integrity-protected channel.
+3. If the channel is not secure (i.e. plaintext) and the emm_cause equals 25 (the case that is vulnerable), then the message is rejected (logged and no further processing occurs).
+4. In all other cases that meet the security requirements, the message is passed on to parse_service_reject() for normal processing.
+
+This repair ensures that sensitive messages (in particular, Attach/Service Reject with emm_cause 25) are not accepted unless the connection is properly protected.
+
+You should adjust the helper functions (connection_has_integrity and extract_emm_cause) and logging as needed for your complete code base.

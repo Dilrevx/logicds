@@ -1,0 +1,22 @@
+The repair modifies the condition that checks for the CertificateVerify message during client authentication. In the original code, the logic only flagged an error if both a client certificate was present (peer != NULL) and a specific signing flag (EVP_PKT_SIGN) was set. This allowed certain clients, particularly those using Diffie-Hellman (DH) certificates, to bypass the check by not having the signing flag, even when a certificate was provided.
+
+In the revised code, the check is simplified. Here’s a walkthrough:
+
+1. The code first checks if the received message type is not SSL3_MT_CERTIFICATE_VERIFY:
+  if (s->s3->tmp.message_type != SSL3_MT_CERTIFICATE_VERIFY)
+
+2. Previously, if the message type wasn’t CertificateVerify, it would check an additional condition based on both the existence of a certificate (peer != NULL) and a signing flag (using type & EVP_PKT_SIGN). This combination meant that if the certificate existed but the flag wasn’t set (which could occur with DH certificates), the error would not be triggered, allowing the session to proceed insecurely.
+
+3. The revised code removes the dependency on the signing flag. Instead, it only checks whether a client certificate is provided (peer != NULL). Thus, it enforces that whenever a certificate is present, the CertificateVerify message is mandatory:
+  if (peer != NULL)
+
+4. If a certificate exists but the CertificateVerify message is missing, the code sets an alert (SSL_AD_UNEXPECTED_MESSAGE) and logs an error (SSL_R_MISSING_VERIFY_MESSAGE), then jumps to error handling:
+  al = SSL_AD_UNEXPECTED_MESSAGE;
+  SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_MISSING_VERIFY_MESSAGE);
+  goto f_err;
+
+5. By removing the condition involving a signing flag, the new logic ensures that no valid client certificate can be used to authenticate without the essential CertificateVerify message. This prevents an attacker using DH certificates from bypassing authentication, as the protocol now strictly requires the CertificateVerify message for all client certificates.
+
+6. The remaining part of the code maintains the original behavior for cases where no client certificate is provided. If peer is NULL, it simply marks the message for reuse and continues, ensuring that the handshake process is not unnecessarily aborted in those scenarios.
+
+Overall, the repair strengthens the protocol's security by enforcing the TLS requirement that any client presenting a certificate must also present a CertificateVerify message to prove possession of the corresponding private key. This change effectively closes the gap where attackers could manipulate the authentication flow with DH certificates.

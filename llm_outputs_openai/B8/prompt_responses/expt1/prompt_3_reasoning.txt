@@ -1,0 +1,15 @@
+The repair focuses on ensuring that when processing a TLS 1.3 ServerHello message, the negotiated cipher suite strictly adheres to what is expected for TLS 1.3 and that no invalid or downgraded cipher suite is accepted. Previously, the code always checked the returned cipher suite by comparing it to TLS13_BYTE after handling the null cipher case, and then it separately looked up the suite. This sequence could allow a mismatch or an unsupported cipher suite to slip through if the order of the checks was not solidly enforced.
+
+In the repaired code, the logic is adjusted as follows:
+
+1. First, a conditional block is used for the null cipher suite case. If a null cipher is being used (i.e. when ssl->options.cipherSuite0 is ECC_BYTE and the accompanying cipher value is one of the allowed null ciphers), the check is explicitly allowed and no further version check is made within that block. This ensures that the computed condition for permitted null ciphers is isolated.
+
+2. Else, for the normal case, an explicit check is performed to verify that ssl->options.cipherSuite0 exactly equals TLS13_BYTE. If it does not, a fatal error is reported, and the function returns INVALID_PARAMETER. This guarantees that when not using an allowed null cipher, the protocol always uses a TLS 1.3 cipher suite, as expected.
+
+3. After validating the cipher suite version, the code then calls FindSuiteSSL(ssl, suite) to ensure that the cipher suite negotiated is supported by the client. If it isn’t, an error is returned.
+
+4. Lastly, SetCipherSpecs(ssl) is called to apply the cipher specifications based on the trusted suite values. This order of operations ensures that only validated and fully supported ciphers are accepted before proceeding further in the communication handshake.
+
+By separating the null cipher allowance from the general TLS 1.3 cipher suite check and enforcing the version check before looking up the suite and setting the specs, the vulnerability is mitigated. Essentially, the fix prevents an attacker from sending a ServerHello message with an incorrectly negotiated cipher suite type that might be used to downgrade security or bypass proper validation. These extra checks enforce consistency between the expected TLS 1.3 protocol behavior and the negotiated parameters, thereby reducing any potential protocol downgrade or misconfiguration vulnerability.
+
+In summary, the repair changes the sequence and structure of cipher suite verification to ensure a strict match for TLS 1.3 (except in explicitly allowed null cipher cases), prevents any unsupported cipher suite from being used, and ensures that the proper configuration is applied to the SSL context, thereby fixing the vulnerability.

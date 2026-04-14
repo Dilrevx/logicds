@@ -1,0 +1,131 @@
+Based on the provided vulnerability description, buggy source code, and repair description, I will outline the step-by-step repair of the buggy code snippet to fix the vulnerability.
+
+### Step 1: Check for SAN Extension and Call Dedicated Function
+
+Instead of directly iterating over all names in the SAN extension, we will check if the certificate contains a SAN extension and call a dedicated function to check if the expected common name matches any of the names in the SAN extension.
+
+```c
+if( crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME )
+{
+    // Call a function to check the SAN extension
+    if (check_san_extension(crt, cn, cn_len) == 0)
+    {
+        // If a match is found, return immediately
+        return 0;
+    }
+}
+```
+
+### Step 2: Check Subject Field
+
+If the certificate does not contain a SAN extension or no match is found in the SAN extension, we will fall back to the traditional method of checking the subject field of the certificate.
+
+```c
+// Check the subject field
+for( name = &crt->subject; name!= NULL; name = name->next )
+{
+    if( MBEDTLS_OID_CMP( MBEDTLS_OID_AT_CN, &name->oid ) == 0 &&
+        x509_crt_check_cn( &name->val, cn, cn_len ) == 0 )
+    {
+        // If a match is found, return immediately
+        return 0;
+    }
+}
+```
+
+### Step 3: Set Flag for Non-Matching Certificate Name
+
+If no match is found in either the SAN extension or the subject field, we will set a flag to indicate that the certificate name does not match the expected name.
+
+```c
+// Set flag for non-matching certificate name
+*flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+```
+
+### Step 4: Implement the `check_san_extension` Function
+
+We will implement a dedicated function `check_san_extension` to check if the expected common name matches any of the names in the SAN extension. This function will ensure that only the expected name type is matched.
+
+```c
+int check_san_extension(mbedtls_x509_crt *crt, const char *cn, size_t cn_len)
+{
+    mbedtls_x509_sequence *cur;
+
+    for( cur = &crt->subject_alt_names; cur!= NULL; cur = cur->next )
+    {
+        // Check if the current name is a DNS name (type 2)
+        if (cur->type == 2)
+        {
+            // Compare the expected common name with the current DNS name
+            if (x509_crt_check_cn(&cur->buf, cn, cn_len) == 0)
+            {
+                // If a match is found, return 0
+                return 0;
+            }
+        }
+    }
+
+    // If no match is found, return -1
+    return -1;
+}
+```
+
+### Complete Repaired Code
+
+Here is the complete repaired code:
+
+```c
+int verify_certificate(mbedtls_x509_crt *crt, const char *cn, size_t cn_len, int *flags)
+{
+    if( crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME )
+    {
+        // Call a function to check the SAN extension
+        if (check_san_extension(crt, cn, cn_len) == 0)
+        {
+            // If a match is found, return immediately
+            return 0;
+        }
+    }
+
+    // Check the subject field
+    mbedtls_x509_name *name;
+    for( name = &crt->subject; name!= NULL; name = name->next )
+    {
+        if( MBEDTLS_OID_CMP( MBEDTLS_OID_AT_CN, &name->oid ) == 0 &&
+            x509_crt_check_cn( &name->val, cn, cn_len ) == 0 )
+        {
+            // If a match is found, return immediately
+            return 0;
+        }
+    }
+
+    // Set flag for non-matching certificate name
+    *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+
+    return -1;
+}
+
+int check_san_extension(mbedtls_x509_crt *crt, const char *cn, size_t cn_len)
+{
+    mbedtls_x509_sequence *cur;
+
+    for( cur = &crt->subject_alt_names; cur!= NULL; cur = cur->next )
+    {
+        // Check if the current name is a DNS name (type 2)
+        if (cur->type == 2)
+        {
+            // Compare the expected common name with the current DNS name
+            if (x509_crt_check_cn(&cur->buf, cn, cn_len) == 0)
+            {
+                // If a match is found, return 0
+                return 0;
+            }
+        }
+    }
+
+    // If no match is found, return -1
+    return -1;
+}
+```
+
+This repaired code ensures that only the expected name type is matched when verifying the common name in X.509 certificates, preventing potential impersonation attacks.

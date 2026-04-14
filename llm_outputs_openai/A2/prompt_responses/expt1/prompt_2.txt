@@ -1,0 +1,48 @@
+<repair>
+static int check_policy(X509_STORE_CTX *ctx)
+{
+    int ret;
+    int pushed = 0;  /* Track whether a NULL cert was pushed onto the chain */
+
+    if (ctx->parent)
+        return 1;
+    /*
+     * With DANE, the trust anchor might be a bare public key, not a
+     * certificate!  In that case our chain does not have the trust anchor
+     * certificate as a top-most element.  This comports well with RFC5280
+     * chain verification, since there too, the trust anchor is not part of the
+     * chain to be verified.  In particular, X509_policy_check() does not look
+     * at the TA cert, but assumes that it is present as the top-most chain
+     * element.  We therefore temporarily push a NULL cert onto the chain if it
+     * was verified via a bare public key, and pop it off right after the
+     * X509_policy_check() call.
+     */
+    if (ctx->bare_ta_signed) {
+        if (!sk_X509_push(ctx->chain, NULL)) {
+            ERR_raise(ERR_LIB_X509, ERR_R_CRYPTO_LIB);
+            goto memerr;
+        }
+        pushed = 1;
+    }
+
+    ret = X509_policy_check(&ctx->tree, &ctx->explicit_policy, ctx->chain,
+                            ctx->param->policies, ctx->param->flags);
+    /* Ensure we undo the temporary change regardless of the result */
+    if (pushed) {
+        (void)sk_X509_pop(ctx->chain);
+        pushed = 0;
+    }
+
+    if (ret == X509_PCY_TREE_INTERNAL) {
+        ERR_raise(ERR_LIB_X509, ERR_R_X509_LIB);
+        goto memerr;
+    }
+    /* Invalid or inconsistent extensions */
+    return ret;
+
+memerr:
+    if (pushed)
+        (void)sk_X509_pop(ctx->chain);
+    return 0;
+}
+</repair>

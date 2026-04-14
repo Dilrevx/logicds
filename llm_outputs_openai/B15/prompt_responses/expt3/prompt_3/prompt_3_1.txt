@@ -1,0 +1,51 @@
+Below is one acceptable repair. In the original code the cases for DNS_R_PARTIALMATCH/ISC_R_NOTFOUND silently “succeed” (by resetting result to ISC_R_SUCCESS) even though the trusted key wasn’t found. That lets mirror‐zone data be accepted even though it did not come from a valid trust anchor. In the repair we instead make sure that if a full match isn’t found then we do not mark the data (the DNSKEY RRset) as “secure” but instead leave it untrusted (or trigger fallback resolution). For example, a fixed patch might look like this:
+
+  result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+          dst_key_alg(key), dst_key_id(key),
+          &keynode);
+  switch (result) {
+  case ISC_R_SUCCESS:
+    /*
+     * The supplied key is a trust anchor.
+     */
+    dns_keytable_detachkeynode(vctx->secroots, &keynode);
+    dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+    dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+    *goodkey = true;
+    break;
+  case DNS_R_PARTIALMATCH:
+  case ISC_R_NOTFOUND:
+    /*
+     * The supplied key is not present as a trust anchor;
+     * do not unconditionally accept mirror zone data.
+     * By leaving *goodkey false (or explicitly setting it to false)
+     * the caller will know that there is no trusted key and can
+     * fall back to traditional recursion.
+     */
+    *goodkey = false;
+    /***** Optionally, depending on the wider design, you might return an error
+     ***** here instead of returning ISC_R_SUCCESS so that the mirror zone
+     ***** is not used at all. ******/
+    break;
+  default:
+    /*
+     * An error occurred while searching the trust anchor table.
+     * Return that error to the caller.
+     */
+    break;
+  }
+
+/*
+ * Clean up.
+ */
+dst_key_free(&key);
+return (result);
+
+Explanation:
+
+• In the fixed code the DNS_R_PARTIALMATCH and ISC_R_NOTFOUND cases no longer force a “successful” result;
+ instead we clearly mark *goodkey as false. This makes it explicit that there is no validated trust anchor key.
+• With this change the caller will not mistakenly believe that mirror zone data is secure when the incoming data wasn’t properly validated.
+• Optionally, instead of simply “succeeding” in these cases you might want to return an explicit error so that the mirror zone data is rejected rather than falling back to recursion automatically.
+
+This repair improves the validity checks so that an on-path attacker cannot substitute forged mirror zone data when the trust anchor isn’t validated.

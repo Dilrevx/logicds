@@ -1,0 +1,12 @@
+The repair changes the error handling when no matching trust anchor is found. In the original code, if the key wasn’t found (or only partially matched), the code simply reset the result to ISC_R_SUCCESS. This could lead to a situation where later code assumes that the received data (which was signed with a key that wasn’t in the trust anchor table) is secure. An attacker on the network path might exploit this and inject forged data, making the recursive server believe that it has received a properly signed and validated copy.
+
+In the repaired code, when the key is not found (i.e. when dns_keytable_findkeynode does not return ISC_R_SUCCESS), the repair:
+ 
+1. Explicitly sets the *goodkey flag to false so that the calling code knows that the key was not validated against a trusted anchor.
+2. Instead of converting the error to ISC_R_SUCCESS, it returns DNS_R_PARTIALMATCH. This non-success result prevents the caller from misinterpreting the absence of a trust anchor as a successful key validation.
+
+By doing so, if the key is not recognized as a trust anchor, the system does not fall back to using data that might have been subject to an attacker’s interference. This effectively forces the DNS resolver to avoid using untrusted mirror zone data and thereby thwarts an attacker’s ability to substitute forged zone data.
+
+Additionally, the repair continues to clean up (i.e., releasing the key by calling dst_key_free) ensuring that no leak or unexpected behavior occurs regardless of the branch taken.
+
+Overall, the fix explicitly treats a missing or partially matching key as an error rather than a success, in turn maintaining the integrity of the security check. This preserves the DNSSEC trust model by not allowing fallback on possibly unvalidated or forged zone data, thereby mitigating the vulnerability described.

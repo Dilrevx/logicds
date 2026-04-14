@@ -1,0 +1,36 @@
+Below is the updated code snippet that implements the repair. The key change is to capture the current SRTP transmit and receive policies before stopping the SRTP transport. This ensures that the correct crypto parameters (including the roll-over counters) are preserved, so that upon restarting SRTP the media remains protected.
+
+Repaired Code:
+
+--------------------------------------------------
+    if (srtp->probation_cnt > 0 &&
+	(err == srtp_err_status_replay_old ||
+	 err == srtp_err_status_replay_fail))
+    {
+	/* Save the current crypto policies before stopping SRTP. */
+	pjmedia_srtp_crypto tx = srtp->tx_policy;
+	pjmedia_srtp_crypto rx = srtp->rx_policy;
+	pj_status_t status;
+	
+	/* Now stop the SRTP transport, which might otherwise alter internal state. */
+	pjmedia_transport_srtp_stop((pjmedia_transport*)srtp);
+	
+	/* Restart SRTP using the preserved crypto policies. */
+	status = pjmedia_transport_srtp_start((pjmedia_transport*)srtp,
+					      &tx, &rx);
+	if (status != PJ_SUCCESS) {
+	    PJ_LOG(5, (srtp->pool->obj_name, "Failed to restart SRTP, err=%s",
+		       get_libsrtp_errstr(err)));
+	} else if (!srtp->bypass_srtp) {
+	    err = srtp_unprotect(srtp->srtp_rx_ctx, (pj_uint8_t*)pkt, &len);
+	}
+    }
+--------------------------------------------------
+
+Step-by-Step Explanation of the Repair:
+1. Before stopping the SRTP transport, we immediately capture and store the current transmit (tx) and receive (rx) policies from the SRTP context.
+2. We then stop the SRTP transport. This step might reset or modify internal state in a way that would otherwise lose the policy data if fetched afterward.
+3. With the correct crypto policies preserved in local variables, we safely restart the SRTP transport by passing these policies back.
+4. Finally, if the restart is successful (and SRTP is in effect), the incoming packet is processed using the secure context via srtp_unprotect(). Any errors during the restart attempt are logged for further troubleshooting.
+
+By reordering the operations in this way, we ensure that SRTP remains properly configured and secure for all media transmissions even during a restart scenario.

@@ -1,0 +1,18 @@
+The repair starts by modifying the overall condition that determines whether the DLZ-specific permission check (i.e., the call to dns_dlzallowzonexfr) should take place. In the original code, the DLZ check was only triggered when the lookup in the normal zone table failed (result != ISC_R_SUCCESS). However, if the zone was found in the normal table but was actually a writable DLZ zone, the allowzonexfr method was not called. This meant that a legitimate DLZ zone could bypass the DLZ-specific access control check if it was already present in the normal zone table.
+
+In the repaired version, the condition is broadened. It now checks whether:
+1. The lookup in the normal zone table failed (result != ISC_R_SUCCESS), or
+2. The lookup succeeded (result == ISC_R_SUCCESS) but the zone is identified as a DLZ zone (using a hypothetical function dns_zone_is_dlz(db)).
+
+When either part of this combined condition is true, the code continues to perform the DLZ lookup by checking if there are any DLZ databases available (ISC_LIST_EMPTY(client->view->dlz_searched) is false) and then calling dns_dlzallowzonexfr.
+
+The repair ensures that even if the normal zone lookup was successful, the program doesn’t immediately conclude that the zone is fully authorized. Instead, it performs an extra check if the matched zone is actually a DLZ zone. Therefore, even for zones found in the normal table, if they are marked as DLZ zones, the program carries out the DLZ permission verification.
+
+Once the dns_dlzallowzonexfr function is called, the rest of the code handles the outcome:
+• If the DLZ check fails with ISC_R_NOPERM, the code logs a detailed error message (after formatting the zone name and class) and sets the result to DNS_R_REFUSED before proceeding to a failure cleanup path.
+• For any other non-successful result, it interprets the situation as a non-authoritative zone and responds accordingly.
+• If the DLZ lookup returns success, the flag is_dlz is set to true, ensuring that subsequent processing recognizes that the zone transfer is being managed under DLZ-specific semantics.
+
+By adding the zone type check (dns_zone_is_dlz(db)), the repair guarantees that every DLZ zone undergoes the proper authorization check—even when the normal zone table might have a valid entry. This extra step prevents the vulnerability where DLZ zones could bypass critical security checks if they were mistakenly assumed to be authorized from the normal table lookup.
+
+Overall, the fix improves security for writable DLZ zones by ensuring that zone transfers are only allowed after both the normal lookup and the DLZ-specific permission checks pass. This comprehensive approach fortifies the system against potential exploit scenarios where the DLZ-specific access control could otherwise be bypassed inadvertently.

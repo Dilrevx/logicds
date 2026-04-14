@@ -1,0 +1,24 @@
+The repair adds an extra condition to validate that when the signature parameters length is zero, both parameter pointers must be NULL. Here's a detailed breakdown of the modification:
+
+1. Original Checks:  
+   The code first ensures that both the signature OIDs (object identifiers) match in length and content using the functions equalOids. Then, it checks that the lengths of the signature parameters from both sources match. If the lengths are nonzero, it compares their byte content with equalBytes. These checks were designed to catch mismatches.
+
+2. Vulnerability Identified:  
+   The vulnerability describes that a certificate with a NULL algorithm parameters entry is treated the same as one with an empty (size zero) array. In some protocols, a certificate with parameters explicitly represented as NULL is only valid if *both* entries are encoded as NULL. Treating them as identical to an empty value can let invalid certificates pass the check.
+
+3. Added Check:  
+   The repair introduces an additional condition:
+   "|| (sig_params1.len == 0 && (sig_params1.p != NULL || sig_params2.p != NULL))"
+   This condition is evaluated only when the length is zero. It then ensures that for a zero-length parameter, both pointers must be NULL. If either pointer is non-NULL when the length is zero, it indicates that the encoding does not conform to the expectation that a NULL value should be represented strictly as a NULL pointer. Thus, the certificate will be flagged as invalid.
+
+4. How It Fixes the Vulnerability:  
+   By explicitly requiring that an algorithm parameters entry of zero length must have its pointer set to NULL, this repair prevents certificates with mismatched encodings (i.e., one certificate might encode parameters as an empty array while another explicitly uses NULL) from being considered equivalent. This aligns with the security requirement that if the underlying parameter representations differ, then they must be rejected. In effect, it tightens the matching criteria to catch subtle differences in encoding, which might otherwise be exploited to accept invalid certificates.
+
+5. Impact of the Repair:  
+   This addition ensures that both representation—NULL pointer for a truly NULL entry and a non-NULL pointer for an empty array—are differentiated, enforcing protocol compliance. By making the validation stricter, the repair stops any certificate from being wrongly validated when there’s a discrepancy in the parameter encoding. Consequently, the certificate is now considered invalid if:
+   - The signature OIDs do not match.
+   - The lengths of the signature parameters differ.
+   - The parameter contents differ when nonzero.
+   - **Or when both lengths are zero but one or both pointers are non-NULL.**
+
+This careful check prevents an attacker from exploiting the ambiguity between a NULL algorithm parameters entry and an empty array, reinforcing the overall integrity of the certificate validation process.

@@ -1,0 +1,52 @@
+Below is an example of a patched version of the function that fixes the vulnerability by checking early whether a client certificate was correctly provided when required. In this example, the new code block performs an early verification if the handler is running on a server that demands a client certificate for mutual authentication. If the expected certificate‐verify message was not received (indicated by a flag such as ssl->receivedCertVerify being false), the function immediately raises a fatal alert and returns an error. Only if this check passes does the code continue with the bounds check and secret derivation.
+
+──────────────────────────── PATCHED CODE ────────────────────────────
+    WOLFSSL_START(WC_FUNC_FINISHED_DO);
+    WOLFSSL_ENTER("DoTls13Finished");
+    
+    /* New early check: if the server requires a client certificate then verify that
+       the client did send the certificate_verify message.  The conditional below checks
+       that we are in server mode, that the policy has been set to require mutual authentication,
+       and that the certificate_verify flag is true. For a resumed session the certificate may be
+       omitted, so that case is excluded. */
+    if (ssl->options.isServer &&
+        (ssl->options.requirePeerCert || ssl->options.failOnNoCert) &&
+        !ssl->resume &&
+        !ssl->receivedCertVerify) {
+        
+        /* Log the certificate failure */
+        WOLFSSL_MSG("Missing certificate_verify message: peer certificate not provided");
+        
+        /* Optionally, send a fatal alert corresponding to a bad certificate */
+        SendFatalAlert(ssl, SSL_AD_BAD_CERTIFICATE);
+        
+        return BAD_CERTIFICATE_E;
+    }
+    
+    /* check against totalSz */
+    if (*inOutIdx + size + ssl->keys.padSz > totalSz)
+        return BUFFER_E;
+    
+    if (ssl->options.handShakeDone) {
+        ret = DeriveFinishedSecret(ssl, ssl->clientSecret,
+                                   ssl->keys.client_write_MAC_secret);
+        if (ret != 0)
+            return ret;
+    
+        secret = ssl->keys.client_write_MAC_secret;
+    }
+──────────────────────────── END PATCHED CODE ─────────────────────────
+
+Explanation of the changes:
+
+1. The new early block verifies that:
+   - The code is executing on the server side (via ssl->options.isServer).
+   - Mutual authentication is required (either ssl->options.requirePeerCert or ssl->options.failOnNoCert is set).
+   - The session is not being resumed (ssl->resume is false).
+   - The client has sent the certificate_verify message (indicated by ssl->receivedCertVerify being true).
+
+2. If the check fails (i.e. if no certificate_verify message was processed), the code logs the error, sends a fatal alert using SendFatalAlert(), and returns an error code (BAD_CERTIFICATE_E).
+
+3. Only when the required client authentication is confirmed does the function proceed to check the buffer size and subsequently derive the finished secret.
+
+This repair ensures that a malicious client cannot bypass the mutual authentication requirement by omitting the certificate_verify message, thus reinforcing the TLS v1.3 security guarantees.

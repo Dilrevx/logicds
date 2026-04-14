@@ -1,0 +1,37 @@
+<repair>
+    if (srtp->probation_cnt > 0 &&
+	(err == srtp_err_status_replay_old ||
+	 err == srtp_err_status_replay_fail))
+    {
+	/* When a restart is needed, first stop SRTP so that srtp_start()
+	 * reinitializes the roll-over counters.
+	 */
+	pjmedia_srtp_crypto tx, rx;
+	pj_status_t status;
+
+	pjmedia_transport_srtp_stop((pjmedia_transport*)srtp);
+
+	tx = srtp->tx_policy;
+	rx = srtp->rx_policy;
+	status = pjmedia_transport_srtp_start((pjmedia_transport*)srtp,
+					      &tx, &rx);
+	if (status != PJ_SUCCESS) {
+	    PJ_LOG(5,(srtp->pool->obj_name, "Failed to restart SRTP, err=%s",
+		      get_libsrtp_errstr(err)));
+            /* If SRTP restart fails, do not fall back to basic RTP.
+             * Drop the packet to ensure that media is not sent insecurely.
+             */
+	    return;
+	}
+
+        /* Enforce that we remain in SRTP mode regardless of the prior bypass setting.
+         * This prevents an unintended switch to insecure basic RTP.
+         */
+	srtp->bypass_srtp = PJ_FALSE;
+
+	/* Now that SRTP has been restarted successfully, attempt to unprotect the packet.
+	 * If unprotection still fails the packet will be dropped downstream.
+	 */
+	err = srtp_unprotect(srtp->srtp_rx_ctx, (pj_uint8_t*)pkt, &len);
+    }
+</repair>

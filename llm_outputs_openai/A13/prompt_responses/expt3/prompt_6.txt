@@ -1,0 +1,55 @@
+<repair>
+	if (result != ISC_R_SUCCESS) {
+		/*
+		 * Normal zone table did not have a match.
+		 * Try the DLZ databases (not just the first one).
+		 */
+		if (! ISC_LIST_EMPTY(client->view->dlz_searched)) {
+			isc_result_t dlz_result = ISC_R_NOTFOUND;
+			dns_dlz_t *dlz;
+			/* Iterate through all DLZ databases */
+			ISC_LIST_FOREACH(dlz, client->view->dlz_searched, link) {
+				result = dns_dlzallowzonexfr(dlz,
+							     question_name,
+							     &client->peeraddr,
+							     &db);
+				if (result == ISC_R_NOPERM) {
+					/* Denied by this DLZ database; log and refuse */
+					char zonebuf[DNS_NAME_FORMATSIZE];
+					char classbuf[DNS_RDATACLASS_FORMATSIZE];
+	
+					dns_name_format(question_name, zonebuf,
+							  sizeof(zonebuf));
+					dns_rdataclass_format(question_class,
+								classbuf, sizeof(classbuf));
+					ns_client_log(client, DNS_LOGCATEGORY_SECURITY,
+						NS_LOGMODULE_XFER_OUT, ISC_LOG_ERROR,
+						"zone transfer '%s/%s' denied",
+						zonebuf, classbuf);
+					result = DNS_R_REFUSED;
+					goto failure;
+				}
+				if (result == ISC_R_SUCCESS) {
+					is_dlz = true;
+					break;
+				}
+				/* Otherwise, try the next DLZ database */
+				dlz_result = result;
+			}
+	
+			if (!is_dlz) {
+				if (db != NULL)
+					dns_db_detach(&db);
+				FAILQ(DNS_R_NOTAUTH, "non-authoritative zone",
+					question_name, question_class);
+			}
+		} else {
+			/*
+			 * Neither the normal zone table nor any DLZ database provided a match;
+			 * therefore, the zone is not authoritative.
+			 */
+			FAILQ(DNS_R_NOTAUTH, "non-authoritative zone",
+				question_name, question_class);
+		}
+	} else {
+</repair>

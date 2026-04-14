@@ -1,0 +1,59 @@
+<repair>
+    if (*extMsgType == server_hello) {
+#if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
+        PreSharedKey* psk = NULL;
+        TLSX* extPSK = TLSX_Find(ssl->extensions, TLSX_PRE_SHARED_KEY);
+        if (extPSK != NULL)
+            psk = (PreSharedKey*)extPSK->data;
+        while (psk != NULL && !psk->chosen)
+            psk = psk->next;
+
+        /* Check for Key Share extension as well. In TLS 1.3 at least one of
+         * PSK or Key Share MUST be present. Otherwise a predictable default
+         * IKM would be used – which is a vulnerability. */
+        TLSX* extKSE = TLSX_Find(ssl->extensions, TLSX_KEY_SHARE);
+
+        if ((psk == NULL) && (extKSE == NULL)) {
+            /* Neither PSK nor key share extension received – abort the handshake
+             * to avoid using a default predictable IKM value. */
+            return WS_FATAL_ERROR_MISSING_EXTENSION;
+        }
+
+        if (psk == NULL) {
+            /* When no PSK is provided but a Key Share is available, do not use the
+             * vulnerable default predictable buffer. Instead, set the session as
+             * a non-resumed one and generate a random value for the IKM. */
+            ssl->options.resuming = 0;
+            ssl->arrays->psk_keySz = 0;
+            if (wolfSSL_RAND(ssl->arrays->psk_key, MAX_PSK_KEY_LEN) != WS_SUCCESS) {
+                return WS_FATAL_RANDOM_ERROR;
+            }
+        }
+        else {
+            if ((ret = SetupPskKey(ssl, psk, 0)) != 0)
+                return ret;
+            ssl->options.pskNegotiated = 1;
+        }
+#endif
+
+        ssl->keys.encryptionOn = 1;
+        ssl->options.serverState = SERVER_HELLO_COMPLETE;
+    }
+    else {
+        ssl->options.tls1_3 = 1;
+        ssl->options.serverState = SERVER_HELLO_RETRY_REQUEST_COMPLETE;
+
+        ret = RestartHandshakeHash(ssl);
+    }
+</repair>
+
+Explanation:
+To address the vulnerability described in the original snippet, the patched code explicitly checks for the presence of either a Pre-Shared Key (PSK) extension or a Key Share extension (KSE) when processing a server hello message in the TLS 1.3 handshake. In previous versions, if a TLS 1.3 client did not receive either extension, the code defaulted to using a predictable and potentially known IKM value for generating the session master secret. This predictable value could be exploited by an attacker to reconstruct cryptographic keys, which compromises the confidentiality and integrity of the secure communication.
+
+The repair introduces a critical check by explicitly detecting whether a Key Share extension exists using the TLSX_Find method in addition to the PSK extension check. Here, the code obtains the key share extension by calling TLSX_Find with a constant that identifies the key share type. If both PSK and key share extensions are missing, the handshake procedure immediately aborts the process and returns an error, WS_FATAL_ERROR_MISSING_EXTENSION. This prevents the client from generating a master secret from a predictable IKM, thereby mitigating the risk of an insecure session being established.
+
+Moreover, when only the key share exists and no PSK data is provided, the code takes extra steps by marking the session as non-resumed (setting ssl->options.resuming to 0) and securely generating random data for the PSK buffer using the wolfSSL_RAND function. This avoids the fallback to a static, default buffer that was previously used in TLS 1.3 sessions. The introduction of cryptographically secure randomness in place of predictable defaults reinforces security, ensuring that session keys have sufficient entropy and are not vulnerable to key reconstruction by adversaries.
+
+Another important aspect in the patch is the clear separation of actions within the different conditions of the handshake. When a valid PSK is available, the original PSK handling remains, where the SetupPskKey function is called and a flag is set, indicating that the PSK has been negotiated. This ensures that in cases where there is legitimate PSK support, standard procedure is followed. If neither extension is found, the repair halts further processing rather than silently proceeding with a compromised state. In addition, the repaired code preserves the rest of the handshake procedure, such as enabling encryption and setting the server state, allowing backward compatibility and correct session resumption when security conditions are met.
+
+In summary, the primary reasoning behind the repair is to enforce that no TLS 1.3 session is created without the requisite extension data to securely generate a master secret. By explicitly checking for both PSK and key share extensions and using secure random functions to fill any necessary buffers, the patch prevents the use of a predictable IKM. This improvement addresses the inherent vulnerability present in the original code, thereby ensuring that even in scenarios where one side of the session could be untrusted, the client does not fall back on insecure defaults that could compromise the session keys. The patch thereby significantly improves the robustness of the TLS 1.3 handshake process for security.

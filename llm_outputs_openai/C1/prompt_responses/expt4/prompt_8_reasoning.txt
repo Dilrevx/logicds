@@ -1,0 +1,10 @@
+The repair adds a safety check immediately after calling X509_verify_cert() when no application-specific verification callback is provided. In the original code, if X509_verify_cert() returned a negative value (which signals an internal error like out-of-memory), that negative value was propagated. This could later confuse SSL_get_error(), leading it to return SSL_ERROR_WANT_RETRY_VERIFY—an error code intended only for cases where an application-provided cert verify callback is used.
+
+Here’s how the repair works:
+
+1. After calling X509_verify_cert(ctx) in the else branch (when no app callback is set), the code immediately tests the returned value stored in the variable i.
+2. The new check “if (i < 0) i = 0;” ensures that any negative result from the verification function is normalized to 0. In effect, this treats internal errors as a simple verification failure rather than an exceptional state.
+3. This normalization is important because higher-level functions and error handlers expect negative return values only when a user-provided callback is defined. Without this check, a negative return could lead to unexpected behavior as SSL_get_error() would misinterpret it, potentially disrupting the normal SSL connection setup.
+4. For cases where an application callback is used, the code leaves the processing unchanged. The application gets full control to handle any errors, including negative returns, following its own logic.
+
+In summary, this repair ensures that internal errors reported by X509_verify_cert(), which are indicated by negative values, do not unintentionally propagate up the call chain. Instead, they are converted into a simple failure (return value 0) in the absence of an application-specific callback. This prevents the SSL session from mistakenly reporting SSL_ERROR_WANT_RETRY_VERIFY and avoids unpredictable behavior at higher layers of the SSL connection process.

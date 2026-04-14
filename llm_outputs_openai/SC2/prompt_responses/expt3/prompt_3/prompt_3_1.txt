@@ -1,0 +1,29 @@
+Below is one acceptable repair. The problem was that after calling CheckCurve.checkCurve( ), its error status (set via ctx.error) was later overwritten unconditionally by the CA certificate check. In effect, if checkCurve( ) already detected an error (for example, EC explicit parameters), that error was lost if the certificate also failed the “CA” test. To fix the vulnerability you need to avoid overwriting an error that was already set. One way to do this is to run the CA check only if the previous check did not signal an error. For example, you can change the code as follows:
+
+-------------------------------------------------
+            if (strict && num > 1) {
+                ret = CheckCurve.checkCurve(x);
+                if (ret < 0) {
+                    ctx.error = X509StoreCtx.X509_V_ERR_UNSPECIFIED;
+                    ret = 0;
+                } else if (ret == 0) {
+                    ctx.error = X509StoreCtx.X509_V_ERR_EC_KEY_EXPLICIT_PARAMS;
+                    ret = 0;
+                }
+            }
+
+            /* Only check non-CA status if no previous error occurred */
+            if (ret == 1 && (x.ex_flags & X509.EXFLAG_CA) == 0
+                    && x.ex_pathlen != -1 && strict) {
+                ctx.error = X509StoreCtx.X509_V_ERR_INVALID_EXTENSION;
+                ret = 0;
+            }
+-------------------------------------------------
+
+Explanation of the changes:
+
+1. The variable ret is used to remember the success of CheckCurve.checkCurve( ). If an error is detected (ret set to 0) then that error is preserved.
+2. The CA certificate check is now only performed if ret indicates that no error was detected in the prior curve parameters check (i.e. ret==1). This prevents the CA check from unconditionally overwriting a previously set error.
+3. With this change, if both security checks were meant to fail the certificate, the stricter (first) error code is preserved. In any case, the application won’t inadvertently “cancel” a failure from the curve check.
+
+This fix closes the vulnerability described by ensuring that the result of a prior check (valid CA certificate status) is not overwritten by subsequent checks, preserving the overall intended certificate-validation security.

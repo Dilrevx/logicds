@@ -1,0 +1,100 @@
+import common.*;
+
+public class SSHKeyExchange{
+    private SSHSession session;
+    private SSHCrypto crypto;
+    private SSHKex server;
+    private SSHKex client;
+
+    public SSHKeyExchange(SSHSession session) {
+        this.session = session;
+        this.crypto = session.getNextCrypto();
+        this.server = crypto.getServerKex();
+        this.client = crypto.getClientKex();
+    }
+
+    public int selectMethods() {
+        String[] clientMethods = client.getMethods();
+        String[] serverMethods = server.getMethods();
+        String extStart;
+
+
+// Safely remove the extension algorithm without truncating the entire list.
+// The Terrapin attack is based on improperly dropping parts of the algorithm list,
+// so instead of truncating the string at the extension's position, we remove just the
+// extension algorithm from the list. This ensures that if extra algorithms follow the
+// extension identifier, they remain available for negotiation.
+//
+// Helper function to remove a specific algorithm from a comma‐separated list.
+function safeRemoveAlgorithm(methodList, algorithm) {
+    var algorithms = methodList.split(",");
+    var filtered = [];
+    for (var i = 0; i < algorithms.length; i++) {
+        // Trim any extra whitespace for safe comparison.
+        if (algorithms[i].trim() !== algorithm) {
+            filtered.push(algorithms[i].trim());
+        }
+    }
+    return filtered.join(",");
+}
+
+// Look for the extension algorithm in the client's key exchange algorithm list.
+var extIndicator = "," + SSHConstants.KEX_EXTENSION_CLIENT;
+var extStart = findSubstring(clientMethods[SSHConstants.SSH_KEX], extIndicator);
+
+if (extStart !== null) {
+    // Remove only the extension algorithm rather than truncating the list.
+    clientMethods[SSHConstants.SSH_KEX] =
+        safeRemoveAlgorithm(clientMethods[SSHConstants.SSH_KEX], SSHConstants.KEX_EXTENSION_CLIENT);
+}
+
+
+        for (int i = 0; i < SSHConstants.SSH_KEX_METHODS; i++) {
+            crypto.setKexMethod(i, findMatching(serverMethods[i], clientMethods[i]));
+
+            if ((i == SSHConstants.SSH_MAC_C_S || i == SSHConstants.SSH_MAC_S_C) && (i - 2 >= 0)) {
+                String aeadHmac = findAeadHmac(crypto.getKexMethod(i - 2));
+                if (aeadHmac != null) {
+                    crypto.setKexMethod(i, aeadHmac);
+                }
+            }
+            if (crypto.getKexMethod(i) == null && i < SSHConstants.SSH_LANG_C_S) {
+                return SSHConstants.SSH_ERROR;
+            } else if (i >= SSHConstants.SSH_LANG_C_S && crypto.getKexMethod(i) == null) {
+                crypto.setKexMethod(i, "");
+            }
+        }
+        return SSHConstants.SSH_OK;
+    }
+
+    private String findSubstring(String source, String target) {
+        int index = source.indexOf(target);
+        return index == -1 ? null : source.substring(index);
+    }
+
+    private String truncateString(String source, String toRemove) {
+        return source.replace(toRemove, "");
+    }
+
+    private String findMatching(String serverMethod, String clientMethod) {
+        String[] serverTokens = serverMethod.split(",");
+        String[] clientTokens = clientMethod.split(",");
+
+        for (String clientToken : clientTokens) {
+            for (String serverToken : serverTokens) {
+                if (serverToken.equals(clientToken)) {
+                    return clientToken;
+                }
+            }
+        }
+        return null;
+    }
+
+    private String findAeadHmac(String method) {
+        return method != null && method.contains("AEAD") ? "HMAC" : null;
+    }
+
+    public SSHCrypto getSSHCrypto() {
+        return crypto;
+    }
+}

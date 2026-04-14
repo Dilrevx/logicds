@@ -1,0 +1,32 @@
+Certainly! The provided repair addresses a critical vulnerability in the TLS 1.3 handshake process within the wolfSSL library. The original code did not properly validate the presence of necessary extensions (`key_share` and `pre_shared_key`) from the server in the `ServerHello` message. This omission could lead to the use of a default, predictable buffer as the Input Key Material (IKM) for generating the session master secret, thereby compromising the security of the TLS session.
+
+### Vulnerability Analysis
+
+The vulnerability arises from the fact that the client must receive either a `key_share` extension or a `pre_shared_key` extension from the server during the TLS 1.3 handshake. If neither is received, the client should not proceed with the handshake using a default, predictable IKM. Instead, the client should terminate the handshake by sending a `missing_extension` alert. This ensures that the session remains secure and prevents potential eavesdropping or tampering.
+
+### Specification Compliance
+
+According to the TLS 1.3 specification, a client attempting to negotiate using TLS 1.3 must receive specific extensions from the server based on the key exchange method being used:
+
+- **For DHE or ECDHE key exchange**, the server must include a `key_share` extension in the `ServerHello` message. The absence of this extension indicates that the server does not support the agreed-upon key exchange method, and thus, the client should terminate the handshake.
+- **For PSK key agreement**, the server must include a `pre_shared_key` extension. If the client initiated the handshake expecting a PSK-based key exchange but did not receive this extension, it should also terminate the handshake.
+
+### Repair Explanation
+
+The repair modifies the existing code to check for the presence of the `key_share` extension in addition to the `pre_shared_key` extension. Here's how the repair works:
+
+1. **Check for `key_share` Extension**: After checking for the `pre_shared_key` extension, the code now checks for the presence of the `key_share` extension using `TLSX.find(ssl.extensions, CommonsConstants.TLSX_KEY_SHARE)`. This determines whether the server has provided a key share, which is essential for DHE or ECDHE key exchanges.
+
+2. **Conditional Handshake Termination**: If neither the `pre_shared_key` nor the `key_share` extension is present, the client sends a `missing_extension` alert to the server and terminates the handshake. This is done using the function `SendAlert(ssl, AlertLevel.Fatal, AlertDescription.MissingExtension);`. The function `SendAlert` is assumed to handle the sending of alerts and the termination of the handshake process. The return value `-1` signifies that the handshake has failed due to a protocol violation.
+
+3. **Handling Absence of `pre_shared_key`**: If only the `key_share` extension is present (and not the `pre_shared_key`), the code proceeds as before, resetting the PSK-related options and keys since no PSK was negotiated. This behavior aligns with the specification, which allows for DHE/ECDHE key exchanges without PSKs.
+
+4. **Successful Handshake**: If a valid `pre_shared_key` extension is found and accepted, the code sets up the PSK key using `SetupPskKey`, marks the PSK as negotiated, and continues with the handshake process.
+
+### Security Implications
+
+By ensuring that the client only proceeds with the handshake when it receives the necessary extensions, the repair prevents the use of a default, predictable IKM. This significantly enhances the security of the TLS session by ensuring that the IKM is derived from a genuinely random and unpredictable source provided by the server. This measure protects against attacks where an attacker might attempt to guess or predict the IKM, leading to unauthorized access to the encrypted session data.
+
+### Conclusion
+
+The repair effectively enforces the TLS 1.3 specification requirements by validating the presence of critical extensions in the `ServerHello` message. It ensures that the client only establishes a secure session when it can verify that the server supports the agreed-upon key exchange methods, thereby mitigating the risk of using a predictable IKM and maintaining the integrity and confidentiality of the TLS session.

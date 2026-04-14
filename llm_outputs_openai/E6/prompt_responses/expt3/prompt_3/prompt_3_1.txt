@@ -1,0 +1,49 @@
+Below is one way to patch the code. The vulnerability arises because the case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT is accepted without performing an integrity check. In the repair below, an integrity check is performed and, if successful, the ciphertext is decrypted. Otherwise, an error is logged and the function returns.
+
+Repaired code:
+
+--------------------------------------------------
+switch (sec_hdr_type) {
+  case LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS:
+  case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT:
+  case LIBLTE_MME_SECURITY_HDR_TYPE_SERVICE_REQUEST:
+    // These types are either plain or handled elsewhere.
+    break;
+    
+  case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY:
+  case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED:
+    if (integrity_check(pdu.get())) {
+      if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED) {
+        cipher_decrypt(pdu.get());
+      }
+      break;
+    } else {
+      logger.error("Not handling NAS message with integrity check error");
+      return;
+    }
+    
+  case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT:
+    // New EPS security context must also pass the integrity check.
+    if (integrity_check(pdu.get())) {
+      cipher_decrypt(pdu.get());
+      break;
+    } else {
+      logger.error("Not handling NAS message with integrity check error (new EPS security context)");
+      return;
+    }
+    
+  default:
+    logger.error("Not handling NAS message with SEC_HDR_TYPE=%02X", sec_hdr_type);
+    return;
+}
+--------------------------------------------------
+
+Step-by-step explanation:
+
+1. In the original code, the LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT branch did nothing (just a break), which meant the integrity check was skipped.
+
+2. In the fixed version, we perform an integrity_check for that security header type. If the check fails, an error message is logged and the function returns early.
+
+3. If the check succeeds, we proceed to decrypt the ciphered payload by calling cipher_decrypt.
+
+This change ensures that NAS messages using the "integrity and ciphered with new EPS security context" header are properly validated before decryption and further processing.

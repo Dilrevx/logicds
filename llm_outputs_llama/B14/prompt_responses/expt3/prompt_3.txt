@@ -1,0 +1,32 @@
+<repair>
+sock = handle->sock;
+if (sock->tid == isc_nm_tid()) {
+    nmhandle_detach_cb(&handle FLARG_PASS);
+} else {
+    isc__netievent_detach_t *event =
+        isc__nm_get_netievent_detach(sock->mgr, sock);
+    /*
+     * we are using implicit "attach" as the last reference
+     * need to be destroyed explicitly in the async callback
+     */
+    event->handle = handle;
+    FLARG_IEVENT_PASS(event);
+    isc__nm_enqueue_ievent(&sock->mgr->workers[sock->tid],
+                           (isc__netievent_t *)event);
+
+    // Set a timeout for the CLOSE_WAIT state
+    struct timeval timeout;
+    timeout.tv_sec = 30; // 30-second timeout
+    timeout.tv_usec = 0;
+
+    // Set the timeout for the socket
+    setsockopt(sock->fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    // Check if the client has terminated the connection
+    if (sock->state == CLOSE_WAIT) {
+        // Close the connection if the timeout expires
+        close(sock->fd);
+        sock->state = CLOSED;
+    }
+}
+</repair>

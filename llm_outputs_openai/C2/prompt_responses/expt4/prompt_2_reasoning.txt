@@ -1,0 +1,15 @@
+The repair adds an extra check—by verifying that the return value (ret) is still positive—before proceeding with each certificate validation step. This ensures that if any earlier validation fails, the subsequent validations won’t run and override the initially detected error.
+
+Here’s a step-by-step explanation of the repair:
+
+1. For the elliptic curve parameters check, the original code ran the check unconditionally when the X509_V_FLAG_X509_STRICT flag was set and there was more than one certificate present. The repair now wraps this block in a conditional check (if ret > 0 …) to verify that no error has been recorded yet. If the call to check_curve(x) returns a negative value, the error is set to a generic unspecified error (X509_V_ERR_UNSPECIFIED) and ret is explicitly reset to 0. If the check returns 0—signaling that explicit elliptic curve parameters were detected—the error is set to X509_V_ERR_EC_KEY_EXPLICIT_PARAMS. This prevents any subsequent logic from running and potentially clearing this error.
+
+2. For the CA certificate validation, the original code attempt to check if a non-CA certificate was improperly issuing other certificates even after the curve check. However, if the curve check had already set an error code, this second check, as originally written, would have overwritten it. In the repaired version, this section is executed only if ret > 0, ensuring that it is skipped if the earlier check already detected a fault. If the certificate fails this CA check (it is not a CA, has a path length setting, and strict checking is enabled), then the error is set to X509_V_ERR_INVALID_EXTENSION, and ret is reset to 0.
+
+Overall, these modifications ensure that:
+
+• Validation stops as soon as an error is detected, preserving the first error encountered.
+• The subsequent certificate validation does not override the error state set during an earlier check.
+• The intended protection of the X509_V_FLAG_X509_STRICT flag is enforced, maintaining the security requirements that only valid and properly configured certificates continue the chain.
+
+With these changes, if the explicit elliptic curve parameter check fails, the error remains intact, and the CA-specific check is skipped. This eliminates the risk of a later check inadvertently nullifying an error set by the earlier check, effectively preserving the intended security behavior.

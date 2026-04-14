@@ -1,0 +1,13 @@
+The repair addresses a mismatch between the error reporting and expected behavior for certificate verification failures in OCSP_basic_verify. Here’s a step-by-step explanation:
+
+1. In the buggy code, if the certificate verification fails, the error code is retrieved from the X509_STORE_CTX and an error message is logged using ERR_raise_data. The problem is that the function then maintains a negative value (ret remains ≤ 0), which indicates a fatal error. However, when certificate verification fails under normal (non-flagged) conditions, the expected behavior is to return 0—not a fatal error—which then allows the caller (or command line tool) to interpret the failure correctly.
+
+2. In our repaired code, after detecting that ret (the result of the verification process) is ≤ 0, we still fetch the error code from the X509_STORE_CTX and log the error message. This ensures that the internal error details are not lost and are available for debugging or logging purposes.
+
+3. The key change is that instead of leaving ret as it is (a negative value), we explicitly set ret to 0. This adjustment changes the function’s output to 0 for verification failures that are not considered fatal according to the specification. Returning 0 properly reflects “non-fatal” verification failure instead of a system-level error.
+
+4. In doing so, the repair prevents misleading conditions: Previously, a negative return value would constitute a contradictory result—a failure would be internally logged as an error but externally reported as a “success” (in the OCSP basic verification sense). With the fix, both signaling and response are consistent, ensuring that certificate verification failures result in a return value of 0.
+
+5. This change also aligns the function’s return behavior with the command line usage, where a verification failure should not lead to a success message accompanied by error logs. By returning 0, the application can distinguish between a genuine error (described by a fatal error) and an expected certificate verification failure.
+
+Overall, the repair removes the discrepancy by mapping the detected negative verification error to a benign return value (0) while preserving the error log for diagnosis. This fix prevents the use of the OCSP_NOCHECKS flag from inadvertently leading to behavior that misleads administrators and users, addressing the identified vulnerability in the OCSP response verification process.

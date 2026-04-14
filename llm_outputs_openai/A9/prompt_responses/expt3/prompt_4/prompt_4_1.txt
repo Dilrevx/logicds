@@ -1,0 +1,33 @@
+Below is one way to fix the vulnerability. The issue arises because the code skips generating a proper random client value in DTLS when no HelloVerifyRequest has been received. This means that DTLS clients end up using a fixed (zeroed) value rather than a truly random one. The fix is to always generate the client random (i.e. always call _gnutls_gen_client_random()) regardless of the DTLS state.
+
+For example, you can change the original code:
+
+-----------------------------------------------------------
+	if (!(session->internals.hsk_flags & HSK_HRR_RECEIVED) &&
+	    !(IS_DTLS(session) && session->internals.dtls.hsk_hello_verify_requests == 0)) {
+		ret = _gnutls_gen_client_random(session);
+		if (ret < 0) {
+			gnutls_assert();
+			goto cleanup;
+		}
+	}
+-----------------------------------------------------------
+
+Into this corrected version:
+
+-----------------------------------------------------------
+	/* Always generate the client random value regardless of DTLS state */
+	if (!(session->internals.hsk_flags & HSK_HRR_RECEIVED)) {
+		ret = _gnutls_gen_client_random(session);
+		if (ret < 0) {
+			gnutls_assert();
+			goto cleanup;
+		}
+	}
+-----------------------------------------------------------
+
+Explanation:
+• Previously, when the session was DTLS and no HelloVerifyRequest was received (i.e. when session->internals.dtls.hsk_hello_verify_requests == 0), the condition would evaluate false and skip random generation. This resulted in 32 zero bytes being used, breaking the randomness requirement.
+• By removing the extra condition that checked for DTLS and hello-verify status, the code now always calls _gnutls_gen_client_random() (unless a HelloRetryRequest was already received), ensuring that the client random value is correctly generated and the security guarantees of DTLS are preserved.
+
+This patch repairs the vulnerability by fixing the cryptographic randomness used during DTLS negotiation.

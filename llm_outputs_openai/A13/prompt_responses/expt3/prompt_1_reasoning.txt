@@ -1,0 +1,13 @@
+The core of the issue was that if a zone was found in the normal zone table, then for a writable DLZ zone the permission check via allowzonexfr was skipped. As a result, even if the DLZ zone had zone-transfer controls, they weren’t enforced because the check was not invoked.
+
+In the repair, the code now handles two cases:
+
+1. When there’s no matching zone in the normal zone table, it checks the DLZ databases. This part remains largely the same. If the DLZ lookup (dns_dlzallowzonexfr) returns ISC_R_NOPERM, the code logs the transfer denial and aborts the process, ensuring that a DLZ zone refusing a transfer will cause the transfer to fail.
+
+2. More importantly, in the “else” branch—when the zone was found in the normal zone table—the repair adds an additional check. It now looks for two conditions: whether the zone is a DLZ zone (using a helper function like zone_is_dlz) and whether it is writable (using zone_is_writable). If both conditions are met, the repaired code calls dns_dlzallowzonexfr to ensure that even though the zone exists in the zone table, the DLZ-specific permission callback is executed. This ensures that the defined transfer controls for writable DLZ zones are applied. If the callback denies the transfer (returning ISC_R_NOPERM), the code logs an error and aborts the transaction by jumping to a failure label.
+
+By invoking dns_dlzallowzonexfr in both scenarios (i.e., when looking up in a DLZ database and when handling a zone found from the normal table but identified as writable DLZ), the vulnerability is fixed. This ensures that no zone transfer request, even for zones that appear valid in the normal table, bypasses the DLZ callback when it is required.
+
+The adjustments made here protect against unauthorized zone transfers specifically for writable DLZ zones. Attackers were previously able to bypass the intended access controls by relying on the fact that the DLZ callback wasn’t called when a writable DLZ zone was detected in the normal table. With the repair, every writable DLZ zone undergoes proper authorization through the callback, enforcing the expected permissions and securing the transfer process.
+
+Thus, by adding an extra permission check in the "else" clause for zones found in the regular table, the repair ensures that the zone-transfer controls are uniformly enforced regardless of whether the zone was initially discovered in the DLZ database or the normal zone table.

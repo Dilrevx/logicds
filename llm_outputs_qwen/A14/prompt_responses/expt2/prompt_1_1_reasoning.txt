@@ -1,0 +1,33 @@
+The provided repair addresses the CCS Injection vulnerability, which is a critical security flaw in the implementation of the Transport Layer Security (TLS) protocol, particularly affecting OpenSSL versions prior to 1.0.1f and 1.0.2-beta1. This vulnerability arises from the improper handling of ChangeCipherSpec (CCS) messages during the TLS handshake process, allowing an attacker to inject a CCS message that can lead to the use of a zero-length master key, thereby compromising the security of the session.
+
+### Understanding the Vulnerability
+
+In a typical TLS handshake, the ChangeCipherSpec message is used to signal the transition from using unencrypted data to encrypted data. This message is sent by both the client and the server after they have agreed on the encryption parameters and keys. The CCS message must be received and processed correctly to ensure that the subsequent data is encrypted and secure.
+
+However, in the vulnerable versions of OpenSSL, the handling of the CCS message was not properly synchronized with the rest of the handshake process. An attacker could exploit this by injecting a CCS message at an unexpected time, causing the server to prematurely change its cipher state. This premature change could result in the use of a zero-length master key, effectively nullifying the encryption and allowing the attacker to intercept and manipulate the data.
+
+### The Repair
+
+The repair introduced in the code snippet ensures that the ChangeCipherSpec message is received and processed only at the appropriate stage of the handshake. Specifically, it checks whether the CCS message has been received before proceeding to the next step in the handshake process. Here’s how the repair works:
+
+1. **State Transition Check**: In the `SSL3_ST_SW_CHANGE_A` and `SSL3_ST_SW_CHANGE_B` states, the code now includes a check to verify that the `change_cipher_spec` flag is set to 1. This flag indicates that a valid ChangeCipherSpec message has been received from the client.
+
+   ```c
+   if (s->s3->change_cipher_spec != 1) {
+       SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_UNEXPECTED_MESSAGE);
+       ret = -1;
+       goto end;
+   }
+   ```
+
+   If the `change_cipher_spec` flag is not set, the function logs an error (`SSL_R_UNEXPECTED_MESSAGE`) and terminates the handshake process by setting `ret` to -1 and jumping to the `end` label. This prevents the server from proceeding with the handshake if the CCS message has not been received as expected.
+
+2. **Ensuring Proper Sequence**: By adding this check, the code ensures that the ChangeCipherSpec message is received in the correct sequence during the handshake. This is crucial because the CCS message must be received before the Finished message, which confirms the successful establishment of the secure connection. If the CCS message is not received before the Finished message, the handshake should fail to prevent any potential misuse of the connection.
+
+3. **Preventing Premature Cipher State Change**: The repair prevents the server from changing its cipher state prematurely. Changing the cipher state without receiving the CCS message can lead to the use of a zero-length master key, which is the core issue addressed by this patch. By ensuring that the CCS message is received and verified, the server can safely proceed with the cipher state change, maintaining the integrity and confidentiality of the session.
+
+4. **Error Handling**: The introduction of error handling for unexpected messages enhances the robustness of the TLS implementation. It ensures that any deviation from the expected handshake sequence is caught and handled appropriately, reducing the risk of exploitation by malicious actors.
+
+### Conclusion
+
+The repair effectively mitigates the CCS Injection vulnerability by enforcing strict adherence to the TLS handshake protocol. It ensures that the ChangeCipherSpec message is received and processed at the correct stage, preventing any premature changes in the cipher state that could compromise the security of the session. This patch is a critical update for maintaining the integrity and security of TLS connections, especially in environments where data privacy and security are paramount.

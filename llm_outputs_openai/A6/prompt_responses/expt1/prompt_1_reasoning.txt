@@ -1,0 +1,13 @@
+The original issue stems from the use of a shallow memory copy (via OPENSSL_memdup) for duplicating the AEAD context. When an object like EVP_CHACHA_AEAD_CTX contains internal pointers (such as "aad" in this case) that reference parts of its own allocated memory, a simple memory copy duplicates the raw bytes but leaves those internal pointers pointing to the memory location in the original block. As a result, after copying, these pointers in the new context (“dup_ctx”) still reference the old memory location, which can lead to incorrect behavior or even exploitable vulnerabilities if that memory is modified or freed.
+
+In the repair, after duplicating the memory block, a pointer fix-up is added. Here’s a breakdown of the repair steps:
+
+1. After duplicating the entire context memory (with both the main structure and the extra allocated space for the Poly1305 context), we obtain a duplicate context pointer (dup_ctx).
+
+2. The repair checks if the “aad” pointer in the original context (actx) is non-NULL. If it is, we compute the offset from the beginning of the original structure to where “aad” is pointing: (unsigned char *)actx->aad - (unsigned char *)actx.
+
+3. We then adjust the “aad” pointer in the duplicate context to point to the corresponding location in the new memory block. This is done by taking the duplicate context's base address (dup_ctx) and adding the same offset.
+
+By doing this, the new context’s “aad” pointer now correctly points within its own memory allocation rather than the original allocation. This avoids potential memory corruption, use-after-free, or other vulnerabilities that could be exploited if the stale pointer were used.
+
+This fix ensures that not only is the data copied, but also all pointers internal to the data structure are valid in their new context. This is critical when dealing with structures that contain self–references or pointers into their own memory area. Such care guarantees that the encryption context remains consistent and secure, eliminating unintended side effects or security flaws linked to improper memory management.

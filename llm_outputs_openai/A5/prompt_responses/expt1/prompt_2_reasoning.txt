@@ -1,0 +1,11 @@
+The repair addresses a vulnerability where the function would return a successful verification (i.e., ret > 0) without properly managing the validated certificate chain when one is requested via the chain pointer. Here’s a walkthrough of the changes:
+
+1. After calling X509_verify_cert(ctx), the code now checks if ret is less than or equal to 0. This ensures that only a truly verified certificate can proceed. If the verification failed, the function jumps to cleanup ("goto end"). This prevents the possibility of using a certificate chain from an unverified or partially verified context.
+
+2. The added code checks if the caller has provided a non-NULL chain pointer. If so, it uses X509_STORE_CTX_get1_chain(ctx) to extract the full certificate chain that was verified by the context. The function X509_STORE_CTX_get1_chain() internally increments the reference count for each certificate in the obtained chain, meaning that the caller then needs to handle freeing the chain properly. This step is crucial because it packages the validated chain, giving the caller a copy of the trusted certificate chain.
+
+3. An error check is added: if X509_STORE_CTX_get1_chain(ctx) returns NULL, it sets ret to -1, indicating a failure in chain extraction, and then it jumps to cleanup. This helps prevent any null pointer dereference or subsequent misuse of an invalid chain pointer.
+
+4. Finally, after these operations, the function cleans up by freeing the context with X509_STORE_CTX_free(ctx) and returns the result code. This cleanup guarantees that there is no memory leakage.
+
+By ensuring that only a properly verified certificate chain is copied to the provided pointer and by adding proper error checks, the code repair mitigates the vulnerability that could otherwise allow an attacker to exploit an improperly handled or partially processed certificate chain. The fix not only preserves correct behavior in the successful verification scenario but also handles error conditions gracefully, ensuring that no verified chain is accidentally shared if the verification process failed.

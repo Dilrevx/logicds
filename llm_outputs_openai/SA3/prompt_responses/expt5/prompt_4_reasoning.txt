@@ -1,0 +1,15 @@
+The repair adds an extra check to determine whether the incoming cipher—or the one already in the context—is a legacy (custom) implementation. It does this by computing a new boolean variable, useLegacy, that combines the original conditions with additional checks on the cipher’s origin.
+
+Here’s how it works step-by-step:
+
+1. The code first evaluates existing conditions that were used to decide legacy handling. These include whether an engine context is present, specific engine-related flags are set (e.g., ensuring that we are not in FIPS mode or that a temporary engine implementation is in use), or a non-null implementation is provided.
+
+2. In addition to these conditions, the repair introduces two new checks:
+   - If an explicit cipher is passed (cipher != null) and that cipher is marked as coming from a legacy method (cipher.isLegacy() returns true), then useLegacy becomes true.
+   - If no explicit cipher is passed (cipher == null) but the cipher currently set in the context (ctx.getCipher()) is identified as legacy, then useLegacy is set to true.
+
+3. These added conditions ensure that when a legacy (custom) cipher is involved—even if its unique identifier (e.g., NID) might be undefined—the system will route the handling to the legacy-handling routine. This prevents the scenario where OpenSSL might mistakenly substitute an insecure provider-based cipher, such as the NULL cipher. The vulnerability occurred because, without proper checks, a custom cipher with an undefined identifier could be misinterpreted, leading to dangerous behavior (like emitting plaintext as ciphertext).
+
+4. When useLegacy evaluates to true, the code clears the context’s cipher if it matches the fetched provider-based cipher, releases any fetched cipher resources by calling EvpCipher.free, clears the fetched cipher from the context, and then calls the legacyHandling function. This careful cleanup ensures that no unintended cipher (for example, the insecure NULL cipher) stays in use due to a fallback.
+
+In summary, by enhancing the condition to specifically check for the legacy origin of the cipher (either explicitly passed or already bound to the context), the repair effectively blocks the insecure behavior. It ensures that if a legacy cipher (potentially with an undefined NID) is intended, it doesn’t fall into the path where OpenSSL might mistakenly pick the wrong provider-based cipher, thus mitigating the vulnerability of transforming plaintext into ciphertext directly by using the NULL cipher.

@@ -1,0 +1,42 @@
+The repair implemented addresses a critical vulnerability in the initialization process of symmetric ciphers, specifically focusing on how key and initialization vector (IV) lengths are handled. This vulnerability can lead to truncation or overruns, which can compromise the security of encryption operations, particularly in modes requiring unique IVs for maintaining confidentiality.
+
+### Understanding the Vulnerability
+
+In the original buggy code, the key and IV lengths are directly passed to the cipher initialization function (`einit`). However, the way these lengths are determined and used can lead to issues. For instance, if the lengths are not correctly interpreted or if there are discrepancies between the expected and actual lengths, it can result in truncation (where data is cut off) or overruns (where data extends beyond the allocated buffer), leading to potential security breaches.
+
+### The Role of `OSSL_PARAM`
+
+The `OSSL_PARAM` structure is used in OpenSSL to pass various parameters to cryptographic functions in a flexible and secure manner. These parameters can include key lengths, IV lengths, and other configuration options. In the context of this vulnerability, the key and IV lengths are critical because they determine how much of the provided key and IV data is actually used by the cipher.
+
+### The Repair Strategy
+
+The repair strategy involves preprocessing the key and IV lengths from the `OSSL_PARAM` array before they are used in the cipher initialization. This preprocessing ensures that the lengths are correctly interpreted and applied, thereby preventing truncation or overruns.
+
+#### Step-by-Step Explanation of the Repair
+
+1. **Contextual Setup Check**:
+   - The first part of the code checks if the cipher context (`ctx`) has been configured to operate without padding (`EVP_CIPH_NO_PADDING`). If this flag is set, the code ensures that the new cipher algorithm being initialized is also configured to operate without padding by calling `EVP_CIPHER_CTX_set_padding(ctx, 0)`. If setting the padding mode fails, the function returns an error immediately.
+
+2. **Conditional Block for Preprocessing**:
+   - The repair introduces a conditional block that only executes outside the FIPS module (`#ifndef FIPS_MODULE`). This exclusion is important because the FIPS module handles these parameters differently internally, and applying the same preprocessing could lead to conflicts or errors.
+   
+3. **Locating Key and IV Length Parameters**:
+   - An array of `OSSL_PARAM` structures (`param_lens`) is created to temporarily hold the parameters related to key and IV lengths. This array is designed to accommodate up to three parameters, although typically only one or two will be relevant.
+   - The code searches for parameters named `OSSL_CIPHER_PARAM_KEYLEN` (key length) and `OSSL_CIPHER_PARAM_IVLEN` (IV length) within the provided `params` array using `OSSL_PARAM_locate_const()`.
+   - If either parameter is found, it is copied into the `param_lens` array. This copying process ensures that the lengths are extracted and stored separately for further processing.
+
+4. **Setting Processed Parameters**:
+   - After locating and copying the relevant parameters, the code checks if any valid parameters were found (`if (q != param_lens)`). If so, it calls `EVP_CIPHER_CTX_set_params(ctx, param_lens)` to apply these parameters to the cipher context. This step is crucial because it sets the correct lengths for the key and IV before the main initialization function (`einit`) is called.
+   - If setting the parameters fails, an error is raised using `ERR_raise()` with the error code `EVP_R_INVALID_LENGTH`, and the function returns an error status to indicate the failure.
+
+5. **Cipher Initialization**:
+   - Once the key and IV lengths have been correctly set through the preprocessed parameters, the code proceeds to initialize the cipher context using the `einit` function. This function is responsible for setting up the cipher with the provided key, IV, and other parameters.
+   - The initialization process includes passing the algorithm context (`ctx->algctx`), key, key length, IV, IV length, and the original `params` array. By this point, the critical lengths have already been processed and set, mitigating the risk of truncation or overrun vulnerabilities.
+
+### Benefits of the Repair
+
+- **Security**: By ensuring that key and IV lengths are correctly interpreted and applied, the repair significantly reduces the risk of truncation or overruns, which can lead to security vulnerabilities.
+- **Flexibility**: The use of `OSSL_PARAM` for parameter passing provides a flexible and secure method for configuring cryptographic operations, allowing for easy extension and modification as needed.
+- **Compatibility**: The conditional exclusion of the repair for the FIPS module ensures compatibility and avoids conflicts with the internal handling of parameters in the FIPS module.
+
+In conclusion, the repair ensures that the key and IV lengths are correctly processed before any encryption or decryption operations, maintaining the integrity and security of the cryptographic operations. This approach is essential in environments where strict compliance with cryptographic standards is necessary.

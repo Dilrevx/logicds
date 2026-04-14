@@ -1,0 +1,84 @@
+<repair>
+        do {
+            i = ctx.chain.size();
+            x = ctx.chain.get(i - 1);
+
+            if (Helper.cert_self_signed(x)) {
+                if (ctx.chain.size() == 1) {
+                    ok = ctx.get_issuer(x);
+                    if (ok <= 0 || !Helper.equals(x, Helper.lastIssuer)) {
+                        ctx.error = Constants.X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT;
+                        ctx.current_cert = x;
+                        ctx.error_depth = i - 1;
+                        if (ok == 1) {
+                            Helper.free(Helper.lastIssuer);
+                        }
+                        bad_chain = 1;
+                        ok = cb.call(0, ctx);
+                        if (!Helper.booleanOk(ok))
+                            return ok;
+                    } else {
+                        /* Replace the self-signed cert with its issuer */
+                        Helper.free(x);
+                        x = Helper.lastIssuer;
+                        ctx.chain.set(i - 1, x);
+                        ctx.last_untrusted = 0;
+                    }
+                } else {
+                    /* For non-leaf self-signed certificates, remove the problematic cert and update the state */
+                    X509 chain_ss = ctx.chain.remove(ctx.chain.size() - 1);
+                    Helper.free(chain_ss);
+                    num--;
+                    j--;
+                    ctx.last_untrusted = ctx.chain.size() - 1;
+                    x = ctx.chain.get(num - 1);
+                }
+            }
+
+            /* Build alternative chain: append issuer certs if needed */
+            while (true) {
+                if (depth < num)
+                    break;
+                if (Helper.cert_self_signed(x))
+                    break;
+                ok = ctx.get_issuer(x);
+                if (ok < 0)
+                    return ok;
+                if (ok == 0)
+                    break;
+                x = Helper.lastIssuer;
+                ctx.chain.add(x);
+                num++;
+            }
+
+            /* Check the accumulated chain trust */
+            i = Helper.check_trust(ctx);
+            if (i == Constants.X509_TRUST_REJECTED)
+                break;
+
+            retry = 0;
+            if (i != Constants.X509_TRUST_TRUSTED
+                    && (param.flags & Constants.X509_V_FLAG_TRUSTED_FIRST) == 0
+                    && (param.flags & Constants.X509_V_FLAG_NO_ALT_CHAINS) == 0) {
+                /* Instead of reassigning the chain container, iterate over the chain in-place */
+                for (; j > 1; j--) {
+                    X509 xtmp2 = ctx.chain.get(j - 1);
+                    ok = ctx.get_issuer(xtmp2);
+                    if (ok < 0)
+                        return ok;
+                    if (ok > 0) {
+                        Helper.free(Helper.lastIssuer);
+                        while (num > j) {
+                            X509 removed = ctx.chain.remove(ctx.chain.size() - 1);
+                            Helper.free(removed);
+                            num--;
+                        }
+                        /* Make sure last_untrusted properly reflects the new chain state */
+                        ctx.last_untrusted = ctx.chain.size() - 1;
+                        retry = 1;
+                        break;
+                    }
+                }
+            }
+        } while (retry != 0);
+</repair>

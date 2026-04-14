@@ -1,0 +1,38 @@
+<repair>
+    if (srtp->probation_cnt > 0 &&
+        (err == srtp_err_status_replay_old ||
+         err == srtp_err_status_replay_fail))
+    {
+        /* We have detected replay errors during SRTP protection,
+         * which may be caused by a SRTP restart while old packets are
+         * in flight. Restarting SRTP in this situation is potentially unsafe
+         * if we try to reprocess the same packet – it may cause PJSIP to fall back
+         * to basic RTP transport. Instead, we first reinitialize SRTP so that
+         * subsequent packets are correctly processed, but we drop the current packet.
+         */
+        pjmedia_srtp_crypto tx, rx;
+        pj_status_t status;
+
+        /* Stop SRTP to clear the current state */
+        pjmedia_transport_srtp_stop((pjmedia_transport*)srtp);
+
+        tx = srtp->tx_policy;
+        rx = srtp->rx_policy;
+        status = pjmedia_transport_srtp_start((pjmedia_transport*)srtp,
+                                              &tx, &rx);
+        if (status != PJ_SUCCESS) {
+            PJ_LOG(5,(srtp->pool->obj_name, "Failed to restart SRTP, err=%s",
+                      get_libsrtp_errstr(err)));
+            /* If we cannot restart SRTP, force a failure so that packet is dropped */
+            return status;
+        }
+        else {
+            PJ_LOG(3,(srtp->pool->obj_name,
+                      "SRTP restarted successfully; dropping current packet to avoid insecure fallback"));
+            /* Drop the current (possibly stale) packet rather than reapplying srtp_unprotect.
+             * This prevents a dangerous fallback to basic RTP.
+             */
+            return PJ_EIGNORE;
+        }
+    }
+</repair>

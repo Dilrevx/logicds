@@ -1,0 +1,59 @@
+The provided repair addresses a logical vulnerability within the `BuildMessage` function, which is critical for constructing messages in the WolfSSL library, particularly in the context of TLS/DTLS protocols. The original code snippet was incomplete and left a gap after calculating the message size but before actually building the message content, hashing it, and encrypting it. This gap could lead to undefined behavior or security issues if the message construction process were to continue without these essential steps.
+
+### Step-by-Step Explanation of the Repair:
+
+1. **State Transition: BUILD_MSG_CONTENT**
+   - **Purpose**: After calculating the message size (`BUILD_MSG_SIZE`), the next step is to copy the actual input data into the output buffer. This ensures that the message contains the intended payload.
+   - **Implementation**: 
+     ```c
+     XMEMCPY(output + args->idx, input, inSz);
+     args->idx += inSz;
+     ```
+     - `XMEMCPY` copies the `inSz` bytes from `input` to the `output` buffer starting at the position indicated by `args->idx`.
+     - `args->idx` is incremented by `inSz` to reflect the new position in the output buffer where the next piece of data will be written.
+   - **State Update**: After copying the content, the state is updated to `BUILD_MSG_HASH`.
+
+2. **State Transition: BUILD_MSG_HASH**
+   - **Purpose**: Once the content is copied into the output buffer, the next step is to compute a hash of the message. This is crucial for integrity verification in the TLS/DTLS protocol.
+   - **Implementation**:
+     ```c
+     ret = HashMessage(ssl, output, args->sz, hashOutput);
+     if (ret != 0)
+         ERROR_OUT(ret, exit_buildmsg);
+     ```
+     - `HashMessage` computes the hash of the message stored in `output` up to the size `args->sz`. The result is stored in the location indicated by `hashOutput`.
+     - If `HashMessage` returns a non-zero value, indicating an error, the function exits with an error code.
+   - **State Update**: After hashing, the state is updated to `BUILD_MSG_ENCRYPT`.
+
+3. **State Transition: BUILD_MSG_ENCRYPT**
+   - **Purpose**: After hashing the message, it needs to be encrypted to ensure confidentiality. This step is fundamental to secure communication in TLS/DTLS.
+   - **Implementation**:
+     ```c
+     ret = EncryptMessage(ssl, output, args->sz);
+     if (ret != 0)
+         ERROR_OUT(ret, exit_buildmsg);
+     ```
+     - `EncryptMessage` encrypts the message stored in `output` up to the size `args->sz`.
+     - If `EncryptMessage` returns a non-zero value, indicating an error, the function exits with an error code.
+   - **State Update**: After encryption, the state is updated to `BUILD_MSG_DONE`.
+
+4. **State Transition: BUILD_MSG_DONE**
+   - **Purpose**: This state indicates that the message has been fully constructed, hashed, and encrypted. The function can now return the size of the constructed message.
+   - **Implementation**:
+     ```c
+     ret = args->sz;
+     goto exit_buildmsg;
+     ```
+     - The variable `ret` is set to `args->sz`, which represents the total size of the constructed message.
+     - The function then jumps to the `exit_buildmsg` label to perform cleanup and return the result.
+
+5. **Error Handling and State Management**
+   - **Purpose**: Proper error handling and state management are crucial to prevent the function from entering an inconsistent state or proceeding with an incomplete message.
+   - **Implementation**:
+     - The `ERROR_OUT` macro is used to handle errors. It sets the return value to the error code and jumps to the `exit_buildmsg` label.
+     - The `WOLFSSL_LEAVE` macro logs the exit of the function with the final return value.
+   - **Default Case**: A default case is included in the switch statement to handle unexpected states, ensuring that the function does not proceed with an invalid state.
+
+### Conclusion
+
+By adding the missing states and transitions (`BUILD_MSG_CONTENT`, `BUILD_MSG_HASH`, `BUILD_MSG_ENCRYPT`, and `BUILD_MSG_DONE`), the repair ensures that the message construction process is complete and secure. Each step in the process—copying content, hashing, and encrypting—is performed in sequence, and proper error handling is in place to manage any issues that arise during the process. This repair enhances the robustness and security of the `BuildMessage` function, making it less susceptible to logical vulnerabilities that could lead to security breaches or system instability.

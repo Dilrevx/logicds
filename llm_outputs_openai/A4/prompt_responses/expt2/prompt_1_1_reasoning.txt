@@ -1,0 +1,16 @@
+The repair works by conditionally bypassing the use of the AAD (Additional Authenticated Data) as the MAC (Message Authentication Code) key if the cipher being used is RC4-MD5. The vulnerability arises because the OpenSSL 3.0 implementation of the RC4-MD5 cipher suite mistakenly uses the AAD as the MAC key. Since the AAD is readily available as part of the data exchange, this design flaw means that an attacker could predict the MAC key. In a man-in-the-middle scenario, an attacker might modify the encrypted data in such a way that even after modification, the MAC check would pass, thereby breaking the integrity safeguard provided by the MAC.
+
+In our repair code, we first check the cipher context to determine if the underlying cipher being used is RC4-MD5. This is done using EVP_CIPHER_CTX_nid(ctx) and comparing it with NID_rc4_md5. If the condition is met (meaning the cipher in use is RC4-MD5), we set the variable p to NULL. By doing so, we are effectively bypassing the call to OSSL_PARAM_locate_const for locating and using the TLS1 AAD as the MAC key. This prevents the flawed behavior because the code no longer inadvertently uses the AAD as the MAC key in the specific scenario where the vulnerability arises.
+
+For ciphers other than RC4-MD5, the repair continues normal operation by calling OSSL_PARAM_locate_const, which locates the AAD parameter. This preserves the functionality of the ciphersuites that are not affected by the vulnerability while isolating and mitigating the insecure behavior in the affected RC4-MD5 cipher suite.
+
+The decision to apply the repair conditionally ensures that the fix is minimally invasive. We don't alter the behavior of unaffected cipher modes, so this targeted approach helps in mitigating risk without impacting the performance or security of other ciphers implemented in the software. Essentially, by restricting this bypass only to RC4-MD5, the repair avoids unnecessary modifications that could potentially introduce new vulnerabilities or disrupt valid operations for other algorithms.
+
+Furthermore, this fix demonstrates the principle of defence-in-depth by ensuring that even if an attacker can supply or modify AAD data, the MAC key used for RC4-MD5 is not derived from publicly accessible data. This decoupling of the MAC key from the AAD eliminates a significant attack vector that previously could have allowed modifications to be made while still passing integrity checks.
+
+To summarize, our repair:
+1. Checks whether the cipher in use matches the one known to have the vulnerability (RC4-MD5).
+2. If it does, the repair deliberately avoids using the TLS1 AAD as the MAC key by setting p to NULL.
+3. For all other ciphers, it preserves standard behavior by finding the AAD parameter normally.
+
+This selective bypass not only mitigates the immediate vulnerability but also serves as an example of how cryptographic operations must be carefully reviewed and corrected when auxiliary data, such as AAD, is mistakenly used in insecure ways.

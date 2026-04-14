@@ -1,0 +1,35 @@
+Below is one way to repair the vulnerability. In the original code the absence of a CertificateVerify message is allowed for a client certificate that is not “signed” (as indicated by EVP_PKT_SIGN). This logic inadvertently permits clients using Diffie‐Hellman (DH) certificates—which naturally do not sign—to authenticate without proving possession of the private key. One way to fix this is to explicitly check if the client’s certificate uses DH (by inspecting its public key type) and, if so, require that a CertificateVerify message be present. For example, you might modify the code as follows:
+
+--------------------------------------------------
+/* Example patch */
+if (s->s3->tmp.message_type != SSL3_MT_CERTIFICATE_VERIFY) {
+    int key_type = 0;
+    /* If a peer certificate exists, obtain its public key type */
+    if (peer != NULL) {
+        /* X509_get0_pubkey() returns the internal EVP_PKEY pointer; 
+         * then EVP_PKEY_id() tells the public key algorithm. */
+        key_type = EVP_PKEY_id(X509_get0_pubkey(peer));
+    }
+    
+    /* If this is a certificate that normally requires a CertificateVerify message –
+     * either because it is marked as using signing (EVP_PKT_SIGN) or because it uses DH –
+     * then an absent CertificateVerify message is an error. */
+    if ((peer != NULL) && ((type & EVP_PKT_SIGN) || (key_type == EVP_PKEY_DH))) {
+        al = SSL_AD_UNEXPECTED_MESSAGE;
+        SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_MISSING_VERIFY_MESSAGE);
+        goto f_err;
+    }
+    ret = 1;
+    goto end;
+}
+--------------------------------------------------
+
+Explanation:
+
+1. We first retrieve the public key type from the peer’s certificate (if any) using X509_get0_pubkey() and EVP_PKEY_id(). If the key type is EVP_PKEY_DH, then this is a DH certificate.
+
+2. The condition is updated so that if the certificate is marked for signing (type has EVP_PKT_SIGN set) OR if the certificate’s key type is DH, then an absent CertificateVerify message triggers an error.
+
+3. This forces the client to prove possession of the corresponding private key (by sending the CertificateVerify message) even if the certificate type is DH.
+
+This patch ensures that Diffie-Hellman certificates cannot be used to bypass the authentication check by omitting CertificateVerify, thereby repairing the vulnerability described.

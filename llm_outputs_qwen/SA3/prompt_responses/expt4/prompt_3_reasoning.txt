@@ -1,0 +1,27 @@
+The vulnerability described pertains to the improper handling of custom ciphers in OpenSSL versions 3.0.0 to 3.0.5, specifically when using the `EVP_CIPHER_meth_new()` function. The issue arises when applications mistakenly pass `NID_undef` (an undefined or invalid NID) to `EVP_CIPHER_meth_new()`. This leads OpenSSL to incorrectly identify and use the NULL cipher instead of the intended custom cipher. The NULL cipher outputs plaintext as ciphertext, effectively bypassing any encryption process.
+
+In the provided buggy code snippet, the problem could potentially manifest if the cipher's NID is not properly validated before proceeding with encryption or decryption operations. To address this vulnerability, the repair introduces a critical check to ensure that the NID of the cipher is not `NID_undef` before proceeding further with the cipher initialization process.
+
+Here's a detailed breakdown of the repair:
+
+1. **Check for Invalid NID**: The repair adds a condition within the existing `if` block to explicitly check whether the NID of the cipher is `NID_undef`. This is done by adding the following lines:
+   ```java
+   if (ctx.getCipher() != null && ctx.getCipher().getNid() == NID_undef) {
+       Err.raise("EVP", "Invalid cipher NID: NID_undef is not allowed");
+       return 0;
+   }
+   ```
+   This check ensures that if the cipher's NID is `NID_undef`, the function raises an error indicating an invalid cipher NID and immediately returns 0, halting further execution. This prevents the use of the NULL cipher and any potential data leakage due to unencrypted data being processed.
+
+2. **Preserve Existing Logic**: The rest of the logic within the `if` block remains unchanged. This includes:
+   - Checking if the current context (`ctx`) has an engine set.
+   - Checking if OpenSSL engines are enabled and not running in FIPS mode, and if a temporary implementation (`tmpImpl`) is available.
+   - Checking if an explicit implementation (`impl`) is provided.
+   
+   If any of these conditions are met, the function proceeds to free any previously fetched cipher and sets the fetched cipher to null. It then calls `legacyHandling()` to handle the cipher initialization in a legacy manner.
+
+3. **Error Handling**: The repair uses `Err.raise()` to report the error. This function is assumed to log or otherwise handle the error appropriately, ensuring that the application can respond to the issue, possibly by falling back to a default cipher or terminating gracefully.
+
+4. **Return Value**: By returning 0 when an invalid NID is detected, the function signals failure to the calling code. This allows the caller to handle the error condition, such as retrying with a valid cipher or notifying the user.
+
+In summary, the repair addresses the vulnerability by ensuring that the cipher's NID is always checked for validity before proceeding with any cryptographic operations. This prevents the use of the NULL cipher, which could lead to data being exposed in plaintext. The repair maintains the integrity of the existing logic while adding a crucial safety check to prevent misuse of the OpenSSL API that could result in security vulnerabilities.

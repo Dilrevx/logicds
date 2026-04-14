@@ -1,0 +1,18 @@
+The repair changes the CRL lookup for revocation checking. Originally, the code mistakenly used the subject name (the certificate’s own identity) instead of the issuer name when retrieving CRLs for the revocation check. This meant that even if a CRL existed for the issuer (which is the proper source for revoked certificates) it was never used. As a result, revoked certificates could bypass the check.
+
+Here’s what the repair does:
+
+1. It changes the CRL retrieval call from using the certificate’s subject name to using its issuer name. For OpenSSL versions 1.1.0 and later (and similar logic for OpenSSL 1.0.x), this is achieved by calling X509_STORE_CTX_get1_crls (or X509_STORE_get1_crls) with the issuer name. This correctly directs the CRL lookup to the issuer’s CRL, which contains the list of revoked certificates.
+
+2. Once the CRL list is retrieved using the issuer’s certificate (which can be different from the subject in many cases such as intermediate certificates), the code iterates over each CRL in the list.
+
+3. For each CRL, it then iterates over the list of revoked certificates included within that CRL (retrieved via X509_CRL_get0_revoke). It compares the serial number of the current certificate (xs) with the serial numbers of the revoked certificates.
+
+4. If there’s a match, the code logs that the certificate has been revoked, sets an error in the X509_STORE_CTX, frees the CRL and context resources, and returns FALSE. This effectively blocks a connection if the certificate is on the revocation list.
+
+By making these changes, the repair ensures that:
+
+• The CRL associated with the issuer is used to check for revocation rather than mistakenly reusing the subject.
+• Revoked certificates are correctly detected by searching the issuer’s CRL for a matching serial number, preventing an attacker or a misconfigured system from allowing clients with revoked certificates to connect.
+
+In summary, the fix corrects the logic by ensuring that the appropriate CRL (the one associated with the issuer) is consulted for revocation status. This closes the vulnerability that allowed revoked certificates to be mistakenly accepted and thus enhances the overall security of the certificate verification process.

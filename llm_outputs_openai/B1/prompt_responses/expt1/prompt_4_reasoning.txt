@@ -1,0 +1,13 @@
+The repair makes the logic for handling a missing CertificateVerify message more robust. Here’s what happens step by step:
+
+1. The check now explicitly verifies if the received message type is not SSL3_MT_CERTIFICATE_VERIFY. If that’s the case, it means the expected CertificateVerify message is missing.
+
+2. The repair then checks whether the peer certificate exists and whether the public key (pkey) indicates that the certificate has signing capability (EVP_PKT_SIGN). If both conditions are met, then the absence of a CertificateVerify message is not acceptable because the peer is expected to prove control of the private key. In this case, an error is raised with a proper alert level (SSL_AD_UNEXPECTED_MESSAGE) and error code (SSL_R_MISSING_VERIFY_MESSAGE), and the code jumps to the error-handling section (f_err).
+
+3. If the peer certificate either isn’t present or does not possess signing capability, the absence of a CertificateVerify message is not considered a fatal error. The code then returns success (ret = 1) without unnecessarily marking the message for reuse, ensuring that the protocol does not treat this situation as a vulnerability.
+
+4. If the message type is as expected (SSL3_MT_CERTIFICATE_VERIFY), the code proceeds to further process the CertificateVerify details. Although the additional steps (like actually verifying the signature) are demonstrated only briefly here, this branch is reserved for correctly formatted messages.
+
+5. Finally, cleanup occurs either after normal processing (end label) or following the error (f_err label), ensuring that allocated resources (like the EVP_MD_CTX and EVP_PKEY) are freed to avoid memory/resource leaks.
+
+By making these changes, the repair addresses the vulnerability by enforcing that a missing CertificateVerify message is only acceptable when the peer’s certificate is not expected to sign data. In other words, if a certificate with signing capability is being used, the absence of a corresponding CertificateVerify message is rightly flagged as a protocol violation. This prevents potential abuse by ensuring that a legitimate signer cannot bypass the verification step, thereby maintaining the integrity and security of the SSL handshake process.

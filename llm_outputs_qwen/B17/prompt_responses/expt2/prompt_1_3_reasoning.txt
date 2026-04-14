@@ -1,0 +1,39 @@
+The vulnerability described pertains to the incorrect handling of Certificate Revocation Lists (CRLs) within a TLS verification process, specifically in the function `tls_verify_crl`. The core issue lies in the misuse of the `subject` variable when retrieving CRLs from the X509 store. Instead of using the `issuer` of the certificate, which is the correct field for matching CRL entries, the code incorrectly uses the `subject` field twice—once where it should use the `issuer`. This oversight can lead to a scenario where valid CRLs that correctly identify revoked certificates are not recognized by the system, allowing potentially compromised certificates to pass validation.
+
+To understand why this is a problem, we need to delve into how CRLs function in the context of Public Key Infrastructure (PKI). A CRL is a list of certificates that have been revoked by their respective Certificate Authorities (CAs). When a client presents its certificate during a TLS handshake, the server must verify that this certificate has not been revoked. To do so, the server checks against the CRLs issued by the CA that signed the client's certificate. The critical piece of information here is the `issuer` of the certificate, as the CRL corresponds to the certificates issued by this particular CA.
+
+In the original buggy code snippet:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, subject);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+The functions `X509_STORE_CTX_get1_crls` and `X509_STORE_get1_crls` are used to retrieve CRLs from the X509 store. However, both calls are made with the `subject` parameter, which refers to the subject of the certificate being verified, not the issuer. As a result, the system looks for CRLs that match the subject of the certificate rather than those issued by the CA that signed the certificate, leading to potential security vulnerabilities.
+
+The repair involves changing the `subject` parameter to `issuer` in the calls to `X509_STORE_CTX_get1_crls` and `X509_STORE_get1_crls`. Here’s the corrected code snippet:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, issuer);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+By making this change, the system now correctly retrieves CRLs based on the issuer of the certificate, ensuring that the CRLs corresponding to the correct CA are checked against the certificate being verified. This repair addresses the vulnerability by aligning the CRL retrieval process with the standard PKI practices, thereby preventing revoked certificates from being erroneously accepted during TLS handshakes.
+
+Furthermore, this change maintains compatibility across different versions of OpenSSL (1.1.x and 1.0.x series) while providing a clear message to users of older OpenSSL versions that they should consider upgrading. Upgrading OpenSSL not only resolves this specific issue but also brings other security improvements and bug fixes that are included in newer releases.

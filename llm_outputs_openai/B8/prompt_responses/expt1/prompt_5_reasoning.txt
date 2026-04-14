@@ -1,0 +1,13 @@
+The repair changes the handling of a TLS 1.3 server hello message when no suitable PSK (or key share) extension is present. In previous versions, if neither a PSK nor a key share extension was provided by a malicious server, the library could fall back on a default, predictable IKM (Input Key Material) value. This predictable material weakens the master secret derived during the handshake and potentially exposes the session to attack.
+
+Here’s what the repair does:
+
+1. It first checks whether the message type is a server_hello. For such messages, it looks for a PSK extension by invoking TLSX_Find() with the extension type for PSK. 
+
+2. If the extension is found, the code iterates through the PSK entries until it finds one that has been “chosen” (i.e., a valid, negotiated PSK). If no such valid PSK is found, instead of falling back to a default IKM value as before, the code logs a message and sends a fatal alert (handshake_failure) to abort the handshake. This ensures that the handshake does not proceed with an insecure key derivation.
+
+3. On the other hand, if a valid PSK is discovered, it calls SetupPskKey() to properly establish the PSK key. Once that’s handled (and the PSK negotiation flag is set), the connection can safely move forward by enabling encryption and marking the server state as complete.
+
+4. For messages other than server_hello (which in this branch correspond to hello retry requests), the code switches state appropriately and restarts the handshake hash. This does not involve the PSK path, thus bypassing the risk of a predictable IKM.
+
+By insisting on the presence of a valid PSK (or key share) extension and aborting the handshake when one is missing, the repair removes the vulnerability. It ensures that insecure defaults are not used, effectively forcing the server or client to only negotiate keys through secure means. This eliminates the possibility of an attacker shaping the handshake into an insecure state using a known predictable IKM value.

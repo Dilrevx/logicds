@@ -1,0 +1,19 @@
+The repair begins by introducing two key mechanisms: one for verifying the sequence number and another for rejecting plain NAS messages after registration is complete.
+
+1. Sequence Number Verification:
+   • Immediately after unpacking the outer NAS header, a check compares the received sequence number (nas_msg.hdr.sequence_number) against an expected value (this->expected_sequence). This expected sequence number is assumed to be maintained in the system’s context.
+   • If the sequence number is lower than the expected value, it indicates that the message might be a replayed (or out-of-order) command. In that case, the function logs a warning and returns an error.
+   • If the sequence number passes the check, the expected value is updated (this->expected_sequence is incremented), ensuring subsequent messages are compared against the correct order.
+
+2. Handling of Security Header Types:
+   • A new variable, current_msg_header_flag, initialized to an invalid value (-1), is used to track the security header type for debugging or further logic.
+   • For plain NAS messages (security_header_type_opts::plain_5gs_nas_message), a crucial condition is added: if the security context is already established (the repair checks if this->registration_complete is set), the message is rejected with an error. This is because plain messages, if accepted after registration, could otherwise be replayed.
+   • For integrity protected and ciphered messages, the original integrity check is retained. If the integrity check fails, the function returns an error; if it passes, the decryption function (cipher_decrypt) is called as intended.
+   • Messages that include a new 5G NAS context are handled similarly by setting the flag, and for one specific type (integrity protected and ciphered with new 5G NAS context), the function immediately returns an error, aligning with the secure design decision to not process such messages.
+
+3. Overall Security Improvement:
+   • The combination of a sequence number check and rejection of plain NAS messages after registration helps prevent replay attacks. Even if an attacker retransmits a previously valid command, the system will detect an out-of-order sequence number or an inappropriate plain message after context establishment.
+   • These conditional checks work as layers of security. The sequence number mechanism ensures command order integrity, while the plain message verification ensures that once a secure session is established (after registration), only integrity-checked or properly encrypted messages are processed.
+   • This repair aligns with a defense-in-depth strategy. Even if one check somehow fails or an attacker bypasses one mechanism, the other provides a safeguard against processing replayed or malicious commands.
+
+Through these changes, the vulnerability described—where replayed NAS commands might be accepted after registration completion—is effectively mitigated. The repair enforces that any incoming NAS message not only passes integrity and decryption routines but also adheres to the expected sequence and message type based on the secure session state, significantly enhancing the overall resilience of the code against replay attacks.

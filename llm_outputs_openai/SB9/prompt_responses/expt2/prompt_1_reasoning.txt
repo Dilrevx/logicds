@@ -1,0 +1,21 @@
+The repair changes the approach from simply rejecting cases where an algorithm is used without its corresponding flag set, to actively ensuring that the signature algorithm precisely matches the key type determined from the certificate. Here’s a walkthrough:
+
+1. Rejecting RSA PKCS#1.5 up front:
+ • The first conditional immediately rejects any use of the RSA PKCS#1.5 algorithm. This code ensures that no RSA PKCS#1.5 operations are accepted, blocking an algorithm that may be inconsistent with the certificate details.
+
+2. Matching certificate keys with expected signature algorithms:
+ • The repair first checks if an ED25519 key was extracted from the certificate. If so, it then verifies that the signature algorithm in the CertificateVerify message is exactly ED25519. If it isn’t, it logs an error and returns an error code.
+ • Next, if an ED448 key is present, the code similarly forces the signature algorithm to be ED448.
+ • The pattern continues with ECC DSA, where the presence of an ECC DSA key mandates that the only acceptable signature algorithm is ECC DSA.
+ • For Falcon, the certificate might allow either Falcon Level 1 or Falcon Level 5, so the repair checks that the algorithm is one of these acceptable values. If neither matches, it again returns an error.
+ • Lastly, if the certificate contains an RSA key acceptable for the RSA-PSS method, then the algorithm must explicitly be RSA-PSS to pass the check.
+
+3. Handling missing or unsupported keys:
+ • If none of these key validations pass (i.e., no valid public key is found within the certificate), the repair logs that no valid certificate key is present and returns an error code.
+
+How this fixes the vulnerability:
+ • The original vulnerability was due to a potential mismatch between the signature algorithm stated in the CertificateVerify message and the actual key type in the certificate. By doing separate checks for each key type, the repair ensures the algorithm used can only be considered valid if it exactly matches the certificate’s embedded public key.
+ • Rather than a series of unconditional checks that might be incomplete, the repair uses an if/else if pattern that validates which key type is present and enforces the expected signature algorithm. This prevents an attacker from sending a mismatched algorithm–for instance, using an algorithm pointer that claims a different type–to bypass the certificate verification step.
+ • In essence, the repair tightly couples the signature verification process to the actual credentials provided in the certificate, thereby ensuring the integrity of the authentication process in TLS v1.3.
+
+This methodical and strict matching strategy effectively eliminates the chance for certificate check bypass by ensuring that the signature verification is only accepted if the algorithm is fully consistent with the certificate’s key type.

@@ -1,0 +1,18 @@
+The repair addresses the vulnerability by preserving crucial SRTP security policies before performing any operation that might inadvertently modify or clear them. In the original code, the transport was stopped first with pjmedia_transport_srtp_stop(srtp) before the transmit (tx_policy) and receive (rx_policy) policies were saved. This order presented a risk: if the stop operation affected these parameters (by resetting, altering, or invalidating them), the restart of the SRTP session could end up using incorrect, incomplete, or uninitialized security settings. Such a situation might lead the system to improperly secure the media stream, allowing plain RTP transmission, which would be a serious security breach.
+
+In the repaired code, the sequence has been rearranged. The new steps are:
+
+1. First, the transmit and receive crypto policies are immediately saved into local variables (tx and rx). This ensures that the current secure settings are preserved without any interference from subsequent operations.
+
+2. Next, the SRTP transport is stopped using pjmedia_transport_srtp_stop(srtp). Because the important security policies have been already stored locally, any potential alteration caused by stopping the transport does not affect the information needed for a secure restart. 
+
+3. After the transport is stopped, the SRTP transport is restarted by calling pjmedia_transport_srtp_start, passing the stored tx and rx policies. This ensures that the secure configurations are restored accurately. If the restart is successful and the system is not configured to bypass SRTP, then the session proceeds to decrypt incoming data with srtp_unprotect(srtp.srtp_rx_ctx, pkt, len).
+
+This reordering fixes the vulnerability by guaranteeing that the SRTP session always restarts with the correct security configurations. By capturing the policies first, the code avoids the risk that the stop operation might modify these sensitive parameters. In other words, the media transport is being resecured using trusted, previously stored settings, rather than risking a reinitialization with uncertain or insecure values. This method prevents a scenario where, despite an error condition (like replay old/fail), the media stream would fall back to an unencrypted mode, leaving it open to eavesdropping or other types of attacks.
+
+Overall, the repair is focused on ensuring the integrity and confidentiality of the media session throughout the restart process. It achieves this by:
+• Storing the necessary secure parameters before any state-changing operation.
+• Preventing any accidental loss or corruption of the security context.
+• Guaranteeing that even if the transport needs to be temporarily halted due to error conditions, the SRTP session is reestablished with the exact, intended security attributes.
+
+This systematic approach maintains the security posture of the media transport, ensuring that all data remains protected under the correct SRTP configuration, and eliminates the risk of inadvertently reverting to an insecure transmission protocol.

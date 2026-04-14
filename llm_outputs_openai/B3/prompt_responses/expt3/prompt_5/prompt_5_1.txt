@@ -1,0 +1,49 @@
+Below is one way to fix the issue. The idea is to refuse to complete the login if it turns out that the successful authentication used a “trivial” (less secure) method when the client configuration forbids such logins.
+
+Step 1. Right after receiving the msg_userauth_success, add a conditional block that:
+ • Checks whether trivial authentication is disabled (for example, via a client configuration flag such as disable_trivial_auth).
+ • Checks whether the authentication method that just succeeded qualifies as trivial (via a helper function like is_trivial_authentication(), which can inspect the session’s last authentication method).
+
+Step 2. If both conditions are true, print an error message, clean up the session (or simply disconnect) so that the authentication does not complete.
+
+Step 3. Only if the check passes, continue setting the authentication state (marking authdone, updating the session state, and resetting the last authentication type).
+
+Below is a sample patch illustrating the repair:
+
+--------------------------------------------------
+/* This log message indicates receipt of a success message */
+TRACE(("received msg_userauth_success"));
+
+/* Check if trivial authentication is disallowed and whether
+ * the authentication method in this session is trivial.
+ * These functions and flags (disable_trivial_auth, is_trivial_authentication)
+ * are assumed available in the surrounding code. */
+if (client_options.disable_trivial_auth &&
+    is_trivial_authentication(cli_ses.lastauthtype)) {
+    error("Refusing successful login: trivial authentication is disabled and was used");
+    /* Clean up or terminate the session safely. */
+    cleanup_auth_session(&cli_ses);
+    disconnect("Trivial authentication not accepted");
+    return;  /* Abort further authentication handling */
+}
+
+/* If the check passes, complete the authentication as before */
+/* Note: in delayed-zlib mode, setting authdone here will enable compression in the transport layer */
+ses.authstate.authdone = 1;
+cli_ses.state = USERAUTH_SUCCESS_RCVD;
+cli_ses.lastauthtype = AUTH_TYPE_NONE;
+--------------------------------------------------
+
+Explanation:
+
+1. The TRACE statement remains the same for logging.
+
+2. The new if-block checks:
+  • Whether the client explicitly configured to disable trivial authentication (using a flag such as disable_trivial_auth).
+  • Whether the authentication method employed (tracked in cli_ses.lastauthtype) is one that is considered trivial. For this purpose, a helper function like is_trivial_authentication() can encapsulate the logic to decide if the method is trivial.
+
+3. If both conditions are satisfied, an error message is logged, the session is cleaned-up via cleanup_auth_session(), and the connection is terminated with disconnect(). The function then returns, preventing the marking of authentication as complete.
+
+4. If the check does not block the login, then the authentication state is updated as before.
+
+This repair ensures that if a server attempts to bypass additional security (like FIDO2 tokens or SSH-Askpass) by using trivial methods, the SSH client will reject the authentication if such trivial methods have been disabled by policy.

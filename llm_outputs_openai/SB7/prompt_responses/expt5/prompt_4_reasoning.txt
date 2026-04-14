@@ -1,0 +1,24 @@
+The repair works by reordering and enhancing the verification process to ensure that any errors from the leaf certificate are not lost. Here’s how the changes address the vulnerability:
+
+1. Early Leaf Certificate Validation:  
+   The first step is to validate the leaf certificate and its hostname immediately before duplicating the certificate chain. This reordering is crucial because it makes sure that any errors stemming from the certificate or hostname verification are caught right away, rather than being masked by later operations like duplicating the chain.
+
+2. Error Recording for Depth Zero:  
+   When the leaf certificate (which is at depth 0) fails validation or hostname verification, the code checks if the error isn’t the specific issuer-not-found error (X509_V_ERR_CERT_ISSUER_NOT_FOUND). If it’s not that error, and if there’s space to record it (i.e., the current chain has an errors array and the chain limit hasn’t been exceeded), the error is explicitly stored at index 0 of the chain’s error array. This ensures that even if a callback later instructs the verifier to continue despite the error, the original issue that led to the failure is preserved for diagnostics.
+
+3. Delaying Chain Duplication:  
+   Only after the certificate validations pass, the code duplicates the chain. In the original implementation, the chain was duplicated before checking certificate validity or hostname correctness, which risked losing the error context if duplicating changed the state. By moving the duplication after validation, any errors raised during validation remain intact, ensuring that they’re accurately passed along.
+
+4. Handling Duplication Failure:  
+   The duplication function is checked immediately after it is called. If it fails (returns null due to memory issues), the code returns an out-of-memory error immediately, maintaining proper error propagation. This prevents the scenario where a chain duplication failure could overwrite or obscure earlier validation errors.
+
+5. Recording Post-Duplication Error State:  
+   After successfully duplicating the chain, the code optionally records the current error (which should be X509_V_OK, indicating no error) at the depth corresponding to the certificate being processed. This careful recording of the error state at every level allows later handlers or diagnostics to see a complete error map. Finally, the chain is added to the context, the chain counter is incremented, and the overall context error is reset, signifying a clean state post-verification.
+
+In summary, the repair fixes the vulnerability by:
+• Reordering operations to check certificate validity and hostname first, preserving the error context.
+• Capturing and storing the original error from the leaf certificate before any modifications could override it.
+• Handling chain duplication only after ensuring the integrity of the error state.
+• Providing robust error recording throughout the verification process.
+
+These changes ensure that even when a verification callback instructs the process to continue in the presence of an error, the critical error information isn’t lost and remains available for accurate diagnostics later on.

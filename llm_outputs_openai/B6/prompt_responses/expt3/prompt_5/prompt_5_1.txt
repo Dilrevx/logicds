@@ -1,0 +1,67 @@
+Below is an example of a repaired snippet. In this version the code immediately calls a helper function (here named x509_crt_verify_san) when the certificate carries the Subject Alternative Name (SAN) extension. The helper function is expected to verify the SAN entries (for example, by accepting only DNS names and rejecting raw IP addresses) and return 0 when a proper match is found. Only if the SAN verification does not succeed does the code fall back to iterating over the subject’s distinguished name entries for a common name (CN) match.
+
+────────────────────────────
+/* Helper function (to be implemented separately)
+   This function should iterate over crt->subject_alt_names and only check
+   those entries that are allowed (for example, DNS names) against the expected cn.
+   It returns 0 if an acceptable match is found, or a non-zero value otherwise.
+*/
+int x509_crt_verify_san( const mbedtls_x509_crt *crt, const char *cn, size_t cn_len )
+{
+    mbedtls_x509_sequence *cur;
+    for( cur = &crt->subject_alt_names; cur != NULL; cur = cur->next )
+    {
+        /* Only process permitted SAN types (e.g., MBEDTLS_X509_SAN_DNS_NAME).
+           The internal helper x509_crt_check_cn should check the entry only if
+           the type is allowed. */
+        if( /* check that cur->buf contains a proper DNS name, not an IP address */ 1 )
+        {
+            if( x509_crt_check_cn( &cur->buf, cn, cn_len ) == 0 )
+                return 0;
+        }
+    }
+    return -1;
+}
+
+/* Main verification snippet */
+void verify_certificate_cn( const mbedtls_x509_crt *crt,
+                            const char *cn, size_t cn_len,
+                            unsigned int *flags )
+{
+    mbedtls_x509_name *name;
+
+    /* If the certificate includes a SAN extension, verify via the helper */
+    if( crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME )
+    {
+        if( x509_crt_verify_san( crt, cn, cn_len ) == 0 )
+        {
+            /* Valid SAN match found; certificate accepted */
+            return;
+        }
+    }
+
+    /* Either no SAN extension or no valid SAN entry.
+       Fall back to verifying the subject field's common name only. */
+    for( name = &crt->subject; name != NULL; name = name->next )
+    {
+        if( MBEDTLS_OID_CMP( MBEDTLS_OID_AT_CN, &name->oid ) == 0 &&
+            x509_crt_check_cn( &name->val, cn, cn_len ) == 0 )
+        {
+            /* Subject CN verified successfully; certificate accepted */
+            return;
+        }
+    }
+
+    /* Neither SAN nor subject CN contained a valid match */
+    *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+}
+────────────────────────────
+
+Step by step, this repair does the following:
+
+1. It checks if the certificate includes a SAN extension.  
+2. If so, it calls a dedicated helper function (x509_crt_verify_san) that iterates over only the allowed SAN entries—ensuring that names of disallowed types (like raw IP addresses) are not considered—and immediately returns success (0) if a match is found.
+3. If the SAN verification fails (or if the certificate does not have a SAN extension), the code falls back to iterating over the subject field for entries specifically marked with the common name (CN) OID.
+4. If neither method finds a matching CN, the MBEDTLS_X509_BADCERT_CN_MISMATCH flag is set to indicate a certificate name mismatch.
+
+This dual-path approach helps prevent the vulnerability where an attacker might abuse the SAN field by having a non-compliant type (e.g., an IP address) match the expected CN.

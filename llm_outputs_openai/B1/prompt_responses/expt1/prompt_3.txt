@@ -1,0 +1,105 @@
+<repair>
+int ssl3_get_cert_verify(SSL *s)
+{
+    EVP_PKEY *pkey = NULL;
+    unsigned char *p;
+    int al, ok, ret = 0;
+    long n;
+    int type = 0, i, j;
+    X509 *peer;
+    const EVP_MD *md = NULL;
+    EVP_MD_CTX mctx;
+    EVP_MD_CTX_init(&mctx);
+
+    n = s->method->ssl_get_message(s,
+               SSL3_ST_SR_CERT_VRFY_A,
+               SSL3_ST_SR_CERT_VRFY_B,
+               -1,
+               SSL3_RT_MAX_PLAIN_LENGTH,
+               &ok);
+
+    if (!ok)
+        return ((int)n);
+
+    if (s->session->peer != NULL)
+    {
+        peer = s->session->peer;
+        pkey = X509_get_pubkey(peer);
+        type = X509_certificate_type(peer, pkey);
+    }
+    else
+    {
+        /* No peer certificate is present.
+         * Processing a CertificateVerify message without an associated certificate
+         * is a logical vulnerability.
+         */
+        peer = NULL;
+        pkey = NULL;
+    }
+
+    /* FIXED: If there is no certificate (i.e. no public key), the CertificateVerify message
+       must not be accepted. We now explicitly check for a missing public key and abort. */
+    if (pkey == NULL)
+    {
+        al = SSL_AD_HANDSHAKE_FAILURE;
+        SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_NO_CERTIFICATE_PRESENT);
+        ret = -1;
+        goto err;
+    }
+
+    /*
+     * At this point, we know that we have a certificate and its corresponding
+     * public key. The remainder of the function performs the digest/signature verification.
+     */
+
+    /* 'p' points to the received signature within the handshake message */
+    p = s->init_msg;
+
+    /* The digest used (md) is chosen based on the public key’s type.
+     * In a real implementation, the signature algorithm details carried in the message
+     * would determine the proper digest. For illustration, we choose one based on the key type.
+     */
+    md = EVP_get_digestbynid(EVP_PKEY_type(pkey->type));
+    if (md == NULL)
+    {
+        al = SSL_AD_HANDSHAKE_FAILURE;
+        SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_UNKNOWN_DIGEST);
+        ret = -1;
+        goto err;
+    }
+
+    /* Initialize the digest context for verifying the signature. */
+    if (!EVP_VerifyInit_ex(&mctx, md, NULL))
+    {
+        al = SSL_AD_INTERNAL_ERROR;
+        SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_VERIFY_INIT_FAILED);
+        ret = -1;
+        goto err;
+    }
+
+    /*
+     * In a full implementation the handshake data would be fed into the digest via
+     * EVP_VerifyUpdate() calls to include all data over which the signature is computed.
+     * This has been omitted for brevity.
+     */
+
+    /* Verify the signature. 'n' is the length of the signature and 'p' is the signature itself.
+     * A return value <= 0 indicates a verification failure.
+     */
+    if (EVP_VerifyFinal(&mctx, p, n, pkey) <= 0)
+    {
+        al = SSL_AD_DECRYPT_ERROR;
+        SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_BAD_SIGNATURE);
+        ret = -1;
+        goto err;
+    }
+
+    ret = 1; /* Verification succeeded */
+
+err:
+    EVP_MD_CTX_cleanup(&mctx);
+    if (pkey != NULL)
+        EVP_PKEY_free(pkey);
+    return ret;
+}
+</repair>

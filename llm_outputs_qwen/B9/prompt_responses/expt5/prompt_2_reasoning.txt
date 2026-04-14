@@ -1,0 +1,49 @@
+The provided code snippet is part of a larger function responsible for verifying the signature algorithm used by a peer in a TLS handshake against the public key type presented in the peer's certificate. The vulnerability described indicates that if the signature algorithm (`sig_algo`) in the `certificate_verify` message does not match the public key type in the `certificate` message, the verification process might be bypassed, leading to potential security risks.
+
+### Vulnerability Analysis
+
+The original code checks if the signature algorithm matches the expected public key type (e.g., ED25519, ED448, ECC, Falcon, RSA, etc.). However, there are inconsistencies and missing checks that could allow mismatches to go unnoticed:
+
+1. **Inconsistent Error Handling**: For RSA algorithms, if the signature algorithm is `rsa_sa_algo` (PKCS#1.5), it logs an error message but uses `ERROR_OUT`, which is not defined in the snippet and seems to be a macro or function call that exits the function with an error code. This is inconsistent with how other mismatches are handled, which return `SIG_VERIFY_E` and use `goto exit_dcv;`.
+
+2. **Lack of Comprehensive Checks**: For Falcon algorithms, the code checks if the signature algorithm is either `falcon_level1_sa_algo` or `falcon_level5_sa_algo` but only verifies the presence of `ssl->peerFalconKeyPresent`. This means that if a peer sends a Falcon-level signature but the certificate does not contain a Falcon public key, the check would fail, but it doesn't explicitly ensure that the correct Falcon variant is present.
+
+3. **RSA Key Presence Check**: The RSA-PSS check correctly ensures that both `ssl->peerRsaKey` and `ssl->peerRsaKeyPresent` are true before proceeding. However, the RSA-PKCS#1.5 check only verifies `ssl->peerRsaKeyPresent`, potentially allowing a mismatch if `ssl->peerRsaKey` is null.
+
+### Repair Explanation
+
+The repair addresses these issues by ensuring that all signature algorithm checks are consistent in their approach and that they properly verify the presence of the corresponding public key type:
+
+1. **Consistent Error Handling**: For RSA-PKCS#1.5 (`rsa_sa_algo`), the repair changes the handling from using `ERROR_OUT` to returning `SIG_VERIFY_E` and using `goto exit_dcv;`. This aligns with the error handling strategy used for other signature algorithm mismatches.
+
+   ```c
+   if (args->sigAlgo == rsa_sa_algo && !ssl->peerRsaKeyPresent) {
+       WOLFSSL_MSG("Peer sent PKCS#1.5 algo but not RSA cert");
+       ret = SIG_VERIFY_E;
+       goto exit_dcv;
+   }
+   ```
+
+2. **Comprehensive Checks for Falcon Algorithms**: The repair combines the checks for both Falcon levels into a single condition, ensuring that if the signature algorithm is either `falcon_level1_sa_algo` or `falcon_level5_sa_algo`, it verifies the presence of `ssl->peerFalconKeyPresent`. This ensures that any Falcon signature algorithm requires a Falcon public key in the certificate.
+
+   ```c
+   if ((args->sigAlgo == falcon_level1_sa_algo || args->sigAlgo == falcon_level5_sa_algo) && !ssl->peerFalconKeyPresent) {
+       WOLFSSL_MSG("Peer sent Falcon sig but not Falcon cert");
+       ret = SIG_VERIFY_E;
+       goto exit_dcv;
+   }
+   ```
+
+3. **RSA Key Presence Check**: The RSA-PSS check remains unchanged as it already correctly checks both `ssl->peerRsaKey` and `ssl->peerRsaKeyPresent`. The RSA-PKCS#1.5 check now also includes a check for `ssl->peerRsaKey` to ensure that the RSA key is present, not just that it is marked as present.
+
+   ```c
+   if (args->sigAlgo == rsa_pss_sa_algo && (!ssl->peerRsaKey || !ssl->peerRsaKeyPresent)) {
+       WOLFSSL_MSG("Peer sent RSA PSS sig but not RSA cert");
+       ret = SIG_VERIFY_E;
+       goto exit_dcv;
+   }
+   ```
+
+### Conclusion
+
+By making these adjustments, the repair ensures that all signature algorithm checks are consistent and comprehensive. It prevents mismatches between the signature algorithm and the public key type in the certificate, thereby mitigating the risk of bypassing the certificate verification process. This strengthens the security of the TLS handshake by ensuring that the peer's certificate is properly validated against the signature algorithm used.

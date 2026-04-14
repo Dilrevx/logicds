@@ -1,0 +1,43 @@
+The vulnerability described pertains to a potential bypass in the certificate verification process for TLS v1.3 connections. Specifically, it highlights an issue where the signature algorithm (`sig_algo`) in the `certificate_verify` message could differ from the one used in the `certificate` message, leading to a possible bypass of the certificate check. This discrepancy could allow an attacker to present a certificate that does not match the signature algorithm used in the `certificate_verify` message, thereby circumventing proper authentication.
+
+In the provided buggy code snippet, there are checks to ensure that the signature algorithm used in the `certificate_verify` message corresponds to the type of key present in the peer's certificate. However, the checks for Falcon algorithms were not as robust as those for other algorithms. Specifically, the code for Falcon algorithms did not properly verify that the peer had a Falcon key present before accepting the signature algorithm.
+
+The repair addresses this issue by consolidating the checks for Falcon algorithms. Instead of having separate checks for `falcon_level1_sa_algo` and `falcon_level5_sa_algo`, the repair combines these into a single condition that checks if either Falcon algorithm is being used and ensures that a Falcon key is present. This consolidation ensures that any Falcon-based signature algorithm is only accepted if the corresponding Falcon key is available in the peer's certificate, preventing the bypass vulnerability.
+
+Here’s a detailed breakdown of the changes made:
+
+1. **Consolidation of Falcon Algorithm Checks**: 
+   - Original Code:
+     ```c
+     #ifdef HAVE_PQC
+         if (args->sigAlgo == falcon_level1_sa_algo && !ssl->peerFalconKeyPresent) {
+             WOLFSSL_MSG("Peer sent Falcon Level 1 sig but different cert");
+             ret = SIG_VERIFY_E;
+             goto exit_dcv;
+         }
+         if (args->sigAlgo == falcon_level5_sa_algo && !ssl->peerFalconKeyPresent) {
+             WOLFSSL_MSG("Peer sent Falcon Level 5 sig but different cert");
+             ret = SIG_VERIFY_E;
+             goto exit_dcv;
+         }
+     #endif
+     ```
+   - Repaired Code:
+     ```c
+     #ifdef HAVE_PQC
+         if ((args->sigAlgo == falcon_level1_sa_algo || args->sigAlgo == falcon_level5_sa_algo) && !ssl->peerFalconKeyPresent) {
+             WOLFSSL_MSG("Peer sent Falcon sig but not Falcon cert");
+             ret = SIG_VERIFY_E;
+             goto exit_dcv;
+         }
+     #endif
+     ```
+   - **Reasoning**: By combining the conditions for `falcon_level1_sa_algo` and `falcon_level5_sa_algo`, the code ensures that any Falcon-based signature algorithm will only be accepted if a Falcon key is present. This prevents an attacker from using a Falcon-based signature with a non-Falcon certificate.
+
+2. **Ensuring Consistent Error Messages**:
+   - The original code provided slightly different error messages for each Falcon level, indicating "different cert." The repair uses a more generic message "not Falcon cert," which accurately reflects the nature of the error without giving away specific details about the certificate types involved. This can help prevent potential exploitation based on error messages.
+
+3. **Maintaining Other Algorithm Checks**:
+   - The repair maintains the existing checks for other algorithms (ED25519, ED448, ECC, RSA, and RSA-PSS) without modification. These checks are already correctly implemented to ensure that the signature algorithm matches the type of key present in the certificate.
+
+By implementing these changes, the repair ensures that the signature algorithm specified in the `certificate_verify` message consistently matches the type of key present in the peer's certificate. This strengthens the security of the TLS v1.3 connection by preventing potential bypasses of the certificate verification process, thus mitigating the identified vulnerability.

@@ -1,0 +1,50 @@
+Below is an example of C-style pseudocode for the patched TLS handshake function. The added conditional check (placed immediately upon receiving the TLS Finished message) ensures that when running as a server that requires mutual authentication (and when not resuming a session), the client’s certificate must have been properly verified. If not, the function issues a fatal alert and terminates the handshake. You can adapt this example to your code base.
+
+---------------------- Patched Code Snippet ----------------------
+/* This pseudocode represents the TLS v1.3 handshake processing function */
+int tls_handle_finished(SSL_CONNECTION *conn, unsigned char *buffer, size_t buflen) {
+    /*
+     * Early verification check for mutual authentication on a TLS v1.3 server.
+     * If the server requires client authentication (or is set to fail when no
+     * client certificate is presented) and the following conditions are met:
+     *   - This is not a resumed session.
+     *   - The peer certificate has NOT been successfully verified.
+     * then we terminate the handshake by sending a fatal alert.
+     */
+    if (conn->role == SSL_SERVER) {
+        /* Check if mutual authentication is mandatory */
+        if (conn->require_client_auth == 1 || conn->fail_on_no_client_cert == 1) {
+            /* If not a resumed session and the client certificate was not verified */
+            if (!conn->session_resumed && !conn->peer_cert_verified) {
+                /* Log the event */
+                log_error("TLS handshake error: Mandatory client certificate missing or not verified");
+                /* Trigger a fatal TLS alert (e.g., certificate_required alert) */
+                ssl_send_fatal_alert(conn, SSL_AD_CERTIFICATE_REQUIRED,
+                                     "Client did not present a valid certificate");
+                return TLS_HANDSHAKE_FAILURE;
+            }
+        }
+    }
+
+    /* Ensure the buffer has room for the rest of the handshake message processing */
+    if (buflen < EXPECTED_FINISHED_MSG_SIZE) {
+        log_error("Buffer too short for TLS Finished message");
+        ssl_send_fatal_alert(conn, SSL_AD_DECODE_ERROR,
+                             "Buffer size insufficient for Finished message");
+        return TLS_HANDSHAKE_FAILURE;
+    }
+
+    /* Continue with the remaining TLS handshake processing ... */
+    /* ... (rest of original code logic here) ... */
+    
+    return TLS_HANDSHAKE_SUCCESS;
+}
+---------------------- End of Patched Code Snippet ----------------------
+
+Explanation of the Changes:
+1. When the function is invoked in server mode, the code first checks whether mutual authentication is required using the configuration flags (e.g., require_client_auth or fail_on_no_client_cert).
+2. The code then examines if the session is a resumed session. In resumed sessions, it is acceptable to bypass the certificate verification check.
+3. If the session is not resumed and the flag indicating valid peer certificate verification (peer_cert_verified) is not set, the code treats this as a failure to meet the mandatory client authentication. It immediately logs the error, sends a fatal TLS alert (here, using an alert code like SSL_AD_CERTIFICATE_REQUIRED), and aborts further processing.
+4. The rest of the original handshake processing continues only if the new checks pass, with the original buffer length check preserved.
+
+This patch effectively prevents a malicious TLS v1.3 client from bypassing mutual authentication by omitting the certificate_verify message.

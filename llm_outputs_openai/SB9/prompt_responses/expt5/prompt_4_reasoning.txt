@@ -1,0 +1,20 @@
+The repair starts by immediately rejecting the RSA PKCS#1.5 signature algorithm with an early return. In TLS 1.3, RSA PKCS#1.5 is not allowed, so by checking for this algorithm first and returning an INVALID_PARAMETER error, the repair ensures that this improper algorithm isn’t used to try and bypass certificate verification.
+
+Next, a flag called validCertFound is initialized to track whether the peer’s certificate contains the appropriate key for the signature algorithm used by the server. Instead of having isolated checks that each immediately terminate on failure, the repair aggregates these validations into a unified control flow. For each supported signature algorithm, the code:
+1. Logs an informational message indicating which signature algorithm was received.
+2. Sets the validCertFound flag depending on whether the corresponding key is actually present in the peer’s certificate—for example, if ED25519 is used, it checks ssl.peerEd25519KeyPresent.
+3. Logs an additional message if the expected certificate key is missing.
+
+This design ensures that each signature algorithm is explicitly and individually mapped to a requirement about the certificate key, reducing the possibility of an attacker using a mismatched algorithm (i.e., a sig_algo that doesn’t correspond to the certificate) to bypass validation. 
+
+The repair covers various cases:
+• For ED25519, it sets validCertFound based on ssl.peerEd25519KeyPresent.
+• For ED448, it checks ssl.peerEd448KeyPresent.
+• For ECC DSA, it checks ssl.peerEccDsaKeyPresent.
+• For Falcon (both Level 1 and Level 5), it checks ssl.peerFalconKeyPresent.
+• For RSA PSS, it checks both that ssl.peerRsaKey is not null and that ssl.peerRsaKeyPresent is set.
+• Finally, if an unsupported signature algorithm is encountered, it logs an error and returns an INVALID_PARAMETER error immediately.
+
+After the individual signature algorithm checks, a final validation step ensures that if validCertFound remains false (meaning that the certificate did not contain the correct key for the signature algorithm), the code returns a SIG_VERIFY_E error. This uniform final check prevents any inconsistency or misstep from propagating; even if a specific branch were somehow bypassed or incorrectly evaluated, the final aggregated check ensures that only a matching certificate/signature algorithm pair is accepted.
+
+Overall, this repair improves security by consolidating the validation logic, ensuring that every accepted signature in the TLS handshake is strictly backed by the corresponding certificate. By mapping each signature algorithm to its expected certificate data and enforcing a final check on that association, the vulnerability—where a mismatched sig_algo could have been used to bypass certificate verification—is effectively mitigated.

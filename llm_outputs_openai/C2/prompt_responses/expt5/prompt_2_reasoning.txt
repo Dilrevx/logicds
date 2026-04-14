@@ -1,0 +1,20 @@
+The repair introduces checks to ensure that any error previously set by the certificate’s CA verification is preserved, thereby preventing the strict flag’s EC parameter check from inadvertently overwriting it and bypassing CA restrictions.
+
+First, in the block checking explicit elliptic curve parameters:
+• The original code directly sets ctx->error based on the result of check_curve() without verifying if an error had already been flagged.
+• The repair adds a condition "&& ctx->error == X509_V_OK" in the "else if (ret == 0 ..." branch. This change ensures that the EC key error (X509_V_ERR_EC_KEY_EXPLICIT_PARAMS) is only set if no previous error has been recorded. If an earlier verification failure occurred (for example, from a non-CA issuing certificate), that error is not overwritten.
+
+Next, in the validation block for non-CA certificates:
+• The original code unconditionally sets ctx->error to X509_V_ERR_INVALID_EXTENSION if the certificate is not marked as a CA, regardless of any previous checks.
+• The repair adds "&& ctx->error == X509_V_OK" in the conditional, so that the certificate’s error is only updated if it is still in a valid state, preventing an already recorded error from being overwritten.
+
+These changes address the vulnerability by ensuring that once an error has been set—indicating that the certificate has already failed a critical CA check—it is not replaced or masked by subsequent evaluations related to explicit elliptic curve parameters or extension issues. In other words, if a certificate is not a valid CA or has other issues flagged earlier in the verification process, that failure remains the primary reason for rejection instead of being potentially overridden by later checks when the strict flag is enabled.
+
+Moreover, this approach maintains the intended behavior when a “purpose” is set. If a purpose is in use, later checks will still be performed as they rely on the certificate chain being in an acceptable state. With the error-checking guard in place, any violation detected by the purpose-specific code can be reliably reported without interference from the strict mode additional checks.
+
+In summary, the repair:
+1. Adds conditional checks to only update ctx->error if no previous error is present.
+2. Prevents the strict mode additional checks (related to explicit elliptic curve parameters and improper CA designations) from overwriting earlier, potentially more severe errors.
+3. Ensures that certificate chain validation remains robust, particularly when the certificate verification purpose is explicitly set, preventing the vulnerability where non-CA certificates might improperly issue other certificates.
+
+Thus, the repair secures the validation sequence by preserving the integrity of error handling and certificate chain verification logic.

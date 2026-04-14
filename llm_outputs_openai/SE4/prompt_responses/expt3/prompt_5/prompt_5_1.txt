@@ -1,0 +1,41 @@
+Below is one example of how you can repair the code by adding an extra check immediately after computing the ciphering and integrity algorithm values. This extra check ensures that if the integrity algorithm is set to NIA0, the function logs an error and aborts processing before any further security checks or processing occur.
+
+Repaired Code:
+
+-----------------------------------------------------------
+        ctxt_base.cipher_algo = CipheringAlgorithmIdEnum.fromValue(
+                security_mode_command.selected_nas_security_algorithms.ciphering_algorithm.value
+        );
+        ctxt_base.integ_algo = IntegrityAlgorithmIdEnum.fromValue(
+                security_mode_command.selected_nas_security_algorithms.integrity_protection_algorithm.value
+        );
+
+        // New check: Prevent further processing if the integrity algorithm is NIA0 (insecure)
+        if (ctxt_base.integ_algo == IntegrityAlgorithmIdEnum.NIA0) {
+            logger.error("Insecure integrity algorithm NIA0 detected. Security Mode Command rejected.");
+            send_security_mode_reject(Cause5gmmType.Cause.ue_security_capabilities_mismatch);
+            return SRSRAN_ERROR;
+        }
+
+        if (!check_replayed_ue_security_capabilities(
+                security_mode_command.replayed_ue_security_capabilities
+        )) {
+            logger.warning("Sending Security Mode Reject due to security capabilities mismatch");
+            send_security_mode_reject(Cause5gmmType.Cause.ue_security_capabilities_mismatch);
+            return SRSRAN_ERROR;
+        }
+        if (initial_sec_command) {
+            set_k_gnb_count(0);
+            ctxt_base.tx_count = 0;
+            initial_sec_command = false;
+        }
+-----------------------------------------------------------
+
+Explanation of the Repair:
+
+1. Immediately after obtaining the ciphering and integrity algorithms, the new check verifies if the integrity algorithm is NIA0.
+2. If NIA0 is detected, the code logs an error message indicating that this insecure algorithm is prohibited.
+3. It then sends a Security Mode Reject message with a suitable cause (ue_security_capabilities_mismatch) and returns an error code (SRSRAN_ERROR) to terminate further processing.
+4. If the new check passes, the code continues with the original behavior—validating the replayed security capabilities and, if applicable, initializing the transmit count and key management counter.
+
+This modification ensures that any security mode command with an insecure integrity configuration (NIA0) is not processed further, thereby preventing the vulnerability where the UE could otherwise bypass NAS layer security activation.

@@ -1,0 +1,16 @@
+The main issue was that during a DTLS handshake, the client random wasn’t properly generated when a HelloVerifyRequest was involved. In the original code, the random value was only generated if no HelloVerifyRequest had been received (checked by both HSK_HRR_RECEIVED flag and the DTLS-specific hello verify counter). When that condition wasn’t met, the client random remained as 32 zero bytes, compromising the randomness needed for secure DTLS negotiations.
+
+In the repair, we removed the extra DTLS-specific check from the condition that decides when to call generateClientRandom. Now, the code always generates a new client random as long as the HSK_HRR_RECEIVED flag isn’t set. This ensures that even in DTLS handshakes that involve a HelloVerifyRequest, the client random is regenerated and contains truly random bytes instead of being left as zeros.
+
+Here’s a quick walk-through of the key changes:
+
+1. The original code had a condition like this:
+   • If HSK_HRR_RECEIVED flag wasn’t set AND it was DTLS with zero HelloVerifyRequests, then generate client random.
+   
+2. In the fixed version, that block now simply checks if the HSK_HRR_RECEIVED flag isn’t set. We removed the additional DTLS-specific condition. This means that regardless of DTLS or TLS, as long as the client is sending a fresh ClientHello (and no retry via HelloVerifyRequest has been processed), generateClientRandom is called.
+
+3. After generateClientRandom is executed, the generated random bytes are appended to the handshake message. This corrects the behavior where previously a DTLS ClientHello might have used a predictable value (all zeros).
+
+4. This change ensures that the random value used in the ClientHello is unpredictable, which is essential for cryptographic security in DTLS negotiations.
+
+By making sure that generateClientRandom is always invoked correctly (removing the overly restrictive DTLS condition), the repair avoids the weak randomness vulnerability. This fix reinforces the protocol's security guarantees by ensuring that the client random contributes sufficient entropy to the handshake, thus preventing potential attacks that could exploit predictable randomness.

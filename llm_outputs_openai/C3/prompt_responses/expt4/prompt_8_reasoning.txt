@@ -1,0 +1,23 @@
+The repair adds a crucial check to differentiate between a configuration that does not define any ACL mechanism and one where an ACL file is explicitly provided—even if that file is empty or only contains comments.
+
+Originally, the function checked whether there were any ACL lists (security_opts->acl_list) or ACL patterns (security_opts->acl_patterns). If both were absent, it interpreted this as “no ACL file has been defined” and returned MOSQ_ERR_PLUGIN_DEFER, which would later default to a permissive policy. In some cases, an administrator might specify an ACL file that, in practice, has no rules (empty, comments, or whitespace). Under the old behavior, such a file would be misinterpreted as if no ACL file was provided, leading to an unintended allow-all policy.
+
+The repair adds an additional condition within the if-clause:
+
+  if(!security_opts->acl_list && !security_opts->acl_patterns){
+   if(security_opts->acl_file && security_opts->acl_file[0] != '\0'){
+    return MOSQ_ERR_ACL_DENIED;
+   }
+   return MOSQ_ERR_PLUGIN_DEFER;
+  }
+
+Here’s how this fixes the vulnerability:
+
+1. The code now first checks if neither an ACL list nor ACL patterns are configured. This was the base condition in the original code.
+2. Then, it assesses whether an ACL file was specified using security_opts->acl_file. Even if the ACL file is empty (i.e., contains no rules other than comments or whitespace), the fact that it’s been specified signals an intentional configuration choice by the administrator.
+3. When an ACL file exists (even if empty), the function returns MOSQ_ERR_ACL_DENIED, meaning all access is explicitly denied. This enforces the new, more strict security stance: an ACL file with no active rules should not revert to a default allow policy.
+4. If no ACL file exists at all in addition to no ACL lists or patterns, then the function falls back to returning MOSQ_ERR_PLUGIN_DEFER. This fallback might be used for external plugin handling, preserving the original intended behavior in the absence of any ACL configuration.
+
+By incorporating the ACL file check, the patch eliminates the risk that an intentionally provided ACL file (even an empty one) is mishandled as if no ACL were configured. This way, the administrator’s explicit configuration is honored, and the system does not inadvertently allow access when it should be locked down.
+
+In summary, the repair explicitly distinguishes between “no ACL file provided” and “ACL file provided, but empty” by checking if the ACL file string exists and is non-empty. If an ACL file is provided, but it turns out to have no effective rules, the security default is to deny access rather than deferring to potentially lenient plugin behavior. This change directly addresses the vulnerability by preventing a situation where an empty ACL file would inadvertently result in an insecure, overly permissive access control policy.

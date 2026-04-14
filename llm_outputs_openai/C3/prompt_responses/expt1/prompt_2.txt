@@ -1,0 +1,50 @@
+<repair>
+int mosquitto_acl_check_default(struct mosquitto_db *db, struct mosquitto *context, const char *topic, int access)
+{
+	char *local_acl;
+	struct mosquitto__acl *acl;
+	bool result = false;
+	int i;
+	struct mosquitto__security_options *security_opts = NULL;
+
+	if(!db || !context || !topic) return MOSQ_ERR_INVAL;
+
+	/* 
+	 * Removed insecure ACL bypass for bridge connections.
+	 * Previously, bridge connections were allowed unconditionally:
+	 *   if(context->bridge) return MOSQ_ERR_SUCCESS;
+	 * Now, even bridge connections must pass through proper ACL checks.
+	 */
+
+	if(db->config->per_listener_settings){
+		if(!context->listener) return MOSQ_ERR_ACL_DENIED;
+		security_opts = &context->listener->security_options;
+	}else{
+		security_opts = &db->config->security_options;
+	}
+
+	/* 
+	 * Ensure that an ACL file or rules are defined.
+	 * If no ACL rules exist, deny access by default.
+	 */
+	if(security_opts->acl_lines == 0){
+		return MOSQ_ERR_ACL_DENIED;
+	}
+
+	/* 
+	 * Iterate through the defined ACL rules and check for a match.
+	 * For each rule we check if the topic provided matches the ACL topic pattern
+	 * and if the required access is granted.
+	 * (Note: the function check_topic_match() is assumed to perform pattern matching.)
+	 */
+	for(i=0; i<security_opts->acl_lines; i++){
+		acl = &security_opts->acl_list[i];
+		if(check_topic_match(acl->topic, topic) && (acl->access & access)){
+			result = true;
+			break;
+		}
+	}
+
+	return result ? MOSQ_ERR_SUCCESS : MOSQ_ERR_ACL_DENIED;
+}
+</repair>

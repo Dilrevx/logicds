@@ -1,0 +1,13 @@
+The repair adds a crucial check right after the default certificate verification call. Here’s what happens step by step:
+
+1. The code first checks if an application-supplied verify callback exists. If it does, that function is used, and any custom logic inside it is preserved. This means that if the application wants to handle certificate verification in its own way, nothing changes.
+
+2. If no custom callback is provided (the common case), the code calls the internal verification function (X509_STORE_CTX.verify_cert(ctxStore)). This function is where negative return values might be produced, for instance when an internal error like an out-of-memory condition occurs.
+
+3. Immediately following the call to verify_cert, the repair inspects the result. If the function returned a negative value (i.e., i < 0), the code explicitly resets i to 0. This is key: it means that any internal error signaled by a negative value will be neutralized. 
+
+4. Why is it important to neutralize negative errors? Without this fix, a negative result would propagate upwards and might lead SSL_get_error to report SSL_ERROR_WANT_RETRY_VERIFY. Such an error code is not expected in the default verification case (it’s meant only for scenarios when an application has a custom callback using SSL_CTX_set_cert_verify_callback). If the error went unhandled, higher-level functions like SSL_connect or SSL_do_handshake would behave unpredictably, and the application might react to an error it wasn’t designed to handle.
+
+5. Following this check, the rest of the code continues as before: it sets the verification result, clears the verified chain, and adds any available certificate chain to the verified_chain list. If the chain is null due to a malloc failure, it raises the relevant error.
+
+This repair effectively ensures that a negative error code—a sign of an internal error during the verification process—is not mistakenly forwarded to the SSL/TLS handshake process. The handshake then continues under the assumption that the verification was successful, thereby preventing any unexpected behavior from falsely reporting SSL_ERROR_WANT_RETRY_VERIFY. This results in more robust and predictable behavior for most applications that do not use a custom certificate verification callback.

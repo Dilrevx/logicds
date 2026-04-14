@@ -1,0 +1,22 @@
+The repair introduces a two-step verification process for matching the expected DER common name (CN) with the names in the certificate, and it does so in a way that prevents the vulnerability.
+
+Step 1: SAN Verification with Type Filtering  
+------------------------------------------------  
+Instead of iterating through all entries in the Subject Alternative Name (SAN) extension and comparing the CN with any SAN entry regardless of its type, the code now calls a helper function—x509_crt_verify_san. This function is specifically designed to:
+ • Iterate through the SAN entries.
+ • Examine the type of each entry (for example, filtering out entries representing raw IP addresses).
+ • Compare only the SAN entries of the expected and permitted types (like DNS names) against the provided expected CN.
+
+If the helper function finds a valid match (i.e., returns 0) then verification is complete, and the function exits immediately without further checks. This prevents any alternative name of an unsupported or insecure type from being mistakenly accepted, thereby closing the loophole an attacker might exploit.
+
+Step 2: Fallback to Subject Name Verification  
+------------------------------------------------  
+The original behavior is retained as a fallback if the SAN verification does not produce a match. The code iterates through the names in the certificate’s subject field and searches for an entry with the Common Name Object Identifier (OID). For each matching entry, it uses the same comparison function (x509_crt_check_cn) to check if it matches the expected CN. If a valid match is found, the function again exits early, meaning the certificate is considered valid regarding the CN.
+
+If neither the filtered SAN check nor the subject CN check produces a valid match, the function marks the certificate with the MBEDTLS_X509_BADCERT_CN_MISMATCH flag. This indicates that the certificate must be rejected due to a mismatch between the expected and provided common name.
+
+How the Repair Fixes the Vulnerability  
+-------------------------------------------  
+The vulnerability was due to the less restrictive handling of SAN entries where any alternative name (including types not intended for CNs) was compared directly to the expected CN. An attacker could potentially use an alternative name of a different type (such as an IP address) to impersonate a domain. By delegating the SAN check to a helper function that explicitly enforces type restrictions, the repair prevents mismatches from being accepted based on erroneous SAN type comparisons. Only SAN entries of approved types (e.g., DNS names) are examined, closing the loophole that would let an attacker bypass intended checks. 
+
+Thus, the repair simplifies the control flow by immediately exiting if a valid match is found and only falling back to subject name verification if necessary. This two-tiered approach ensures robust and secure verification of the common name while directly addressing the overly permissive behavior of the original implementation.

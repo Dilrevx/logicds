@@ -1,0 +1,17 @@
+The original vulnerability was that a zero-length algorithm parameters field (which should represent an explicit ASN.1 NULL) was being accepted as valid, even if it had a different encoded structure from a properly encoded NULL. In some cases, especially with REAL encoding that results in a zero-length array, the certificate might have been incorrectly validated.
+
+In the repaired code, the first step is to ensure that the signature OIDs of both the certificate (crt) and the expected value (sig_oid2) match. This block is left unchanged because it correctly compares the lengths and the actual content of the OID.
+
+The key change occurs in the section where algorithm parameters (sig_params1 and sig_params2) are compared. Instead of allowing a zero-length parameter from either side to be considered equivalent to an ASN.1 NULL (which should have a specific encoding), the repair first checks that neither of the parameters is empty:
+  if( sig_params1.len == 0 || sig_params2.len == 0 … )
+This enforces that both parameters must be nonempty. In other words, both the certificate’s algorithm parameters and the expected signature algorithm parameters must be present. If either one is missing (i.e., length zero), the function now returns an error.
+
+Then the code continues to ensure that the lengths of the two parameters exactly match and that their contents do too via a memcmp. This ensures that even if the arrays are nonempty, they have to match exactly. No room is left for a scenario where a non-standard or mis-encoded algorithm parameter is interpreted as valid.
+
+In summary, the fix prevents subtly different representations (like an empty REAL array versus an ASN.1 NULL) from being accepted as equivalent. By enforcing non-empty parameters on both sides and accurate byte-for-byte matching, the certificate validation becomes strict and aligns with the intended standards where the algorithm parameters need to be represented exactly as specified.
+
+Thus, this repair addresses the vulnerability by:
+1. Rejecting cases where either parameter is represented with zero length (ensuring that a proper ASN.1 NULL isn’t mistaken for a zero-length array).
+2. Ensuring exact matching in both length and content between the certificate’s parameters and the expected parameters.
+
+This repair thereby ensures that any mismatch or improper representation of algorithm parameters will lead to a verification failure, maintaining the integrity of the certificate validation process.

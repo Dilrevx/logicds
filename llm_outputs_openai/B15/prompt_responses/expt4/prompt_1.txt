@@ -1,0 +1,55 @@
+<repair>
+	result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+	                                   dst_key_alg(key), dst_key_id(key),
+	                                   &keynode);
+	switch (result) {
+	case ISC_R_SUCCESS:
+		/*
+		 * The supplied key is supposedly a trust anchor.
+		 * Verify that the trusted key exactly matches the key received.
+		 * (Assuming dns_key_equals() returns true if the two keys are identical.)
+		 */
+		if (!dns_key_equals(key, keynode->key)) {
+			/* The key found in the trust anchor table does not match
+			 * the provided key.  Do not treat it as a trust anchor.
+			 */
+			dns_keytable_detachkeynode(vctx->secroots, &keynode);
+			dst_key_free(&key);
+			return DNS_R_BADKEY;  /* Or another appropriate error code */
+		}
+
+		/*
+		 * The key is confirmed as a trust anchor.
+		 * Do not remove (detach) the key from the trust anchor table.
+		 * Removing it would risk later re-use of forged mirror zone data.
+		 */
+		dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+		dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+		*goodkey = true;
+		break;
+
+	case DNS_R_PARTIALMATCH:
+	case ISC_R_NOTFOUND:
+		/*
+		 * The supplied key is not present in the trust anchor table.
+		 * Other keys signing the DNSKEY RRset might still be trusted,
+		 * so we continue without flagging an error.
+		 */
+		result = ISC_R_SUCCESS;
+		break;
+
+	default:
+		/*
+		 * An error occurred while searching the trust anchor table;
+		 * pass the error up to the caller.
+		 */
+		break;
+	}
+
+	/*
+	 * Clean up.
+	 */
+	dst_key_free(&key);
+
+	return (result);
+</repair>

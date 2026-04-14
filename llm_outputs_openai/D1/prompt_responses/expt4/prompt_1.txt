@@ -1,0 +1,41 @@
+<repair>
+    if (srtp->probation_cnt > 0 &&
+        (err == srtp_err_status_replay_old ||
+         err == srtp_err_status_replay_fail))
+    {
+        /* Handle the case where the stream was updated (RTP sequence reinitialized
+         * & SRTP restarted), but some old packets are still arriving.
+         * In such a scenario, SRTP may mistakenly treat a valid packet as a replay.
+         * Restarting SRTP is attempted to regain correct sequence handling.
+         *
+         * IMPORTANT SECURITY FIX:
+         * Do not allow a fallback to basic RTP (insecure) by skipping SRTP unprotect.
+         * Regardless of any bypass flag settings, always attempt to process the packet
+         * through SRTP unprotect after a successful restart. If the restart fails,
+         * the packet must be dropped rather than processed as basic RTP.
+         */
+        pjmedia_srtp_crypto tx, rx;
+        pj_status_t status;
+
+        /* Stop SRTP first, so that pjmedia_transport_srtp_start()
+         * reinitializes all context (including the rollover counter).
+         */
+        pjmedia_transport_srtp_stop((pjmedia_transport*)srtp);
+
+        tx = srtp->tx_policy;
+        rx = srtp->rx_policy;
+        status = pjmedia_transport_srtp_start((pjmedia_transport*)srtp,
+                                              &tx, &rx);
+        if (status != PJ_SUCCESS) {
+            PJ_LOG(5, (srtp->pool->obj_name, "Failed to restart SRTP, err=%s",
+                       get_libsrtp_errstr(err)));
+            /* Security measure: drop the packet rather than sending it as insecure RTP */
+            return PJ_EINVALIDOP;
+        }
+        /* ALWAYS call srtp_unprotect() after a successful restart --
+         * do not bypass SRTP unprotect even if srtp->bypass_srtp is set.
+         * This prevents falling back to basic RTP, ensuring media is processed securely.
+         */
+        err = srtp_unprotect(srtp->srtp_rx_ctx, (pj_uint8_t*)pkt, &len);
+    }
+</repair>

@@ -1,0 +1,66 @@
+The original code snippet was missing a critical check for the existence of the peer's public key before attempting to verify the signature. This omission could lead to a logical vulnerability where the code might attempt to access a null pointer, resulting in undefined behavior or crashes. The repair addresses this issue by adding a check to ensure that `ssl->peerCert` and `ssl->peerCert->publicKey` are not null before proceeding with the signature verification process.
+
+Here’s a detailed breakdown of the repair:
+
+### 1. **Null Pointer Check for Public Key**
+Before performing any operations that rely on the presence of the peer's public key, the code now includes a check to confirm that both `ssl->peerCert` and `ssl->peerCert->publicKey` are valid pointers. This prevents the program from dereferencing a null pointer, which is a common source of security vulnerabilities such as crashes or potential exploitation points.
+
+```c
+if (!ssl->peerCert || !ssl->peerCert->publicKey) {
+    ERROR_OUT(NO_PUBLIC_KEY, exit_dcv);
+}
+```
+
+### 2. **Dynamic Memory Management for Signature Buffer**
+The repair also includes dynamic memory management for the signature buffer. It checks if the allocated size of the buffer (`sig->size`) is sufficient to hold the incoming signature data (`args->sz`). If not, it frees the existing buffer (if any), allocates a new one of the appropriate size, and updates the size attribute. This ensures that the program can handle signatures of varying lengths without causing buffer overflows or underflows.
+
+```c
+if (args->sz > sig->size) {
+    if (sig->buffer) {
+        XFREE(sig->buffer, ssl->heap, DYNAMIC_TYPE_BUFFER);
+    }
+    sig->buffer = (byte*)XMALLOC(args->sz, ssl->heap, DYNAMIC_TYPE_BUFFER);
+    if (sig->buffer == NULL) {
+        ERROR_OUT(MEMORY_E, exit_dcv);
+    }
+    sig->size = args->sz;
+}
+```
+
+This dynamic allocation approach is crucial in maintaining the integrity and security of the application, especially when dealing with potentially untrusted input data like network packets.
+
+### 3. **Copying Signature Data Safely**
+After ensuring that there is enough space in the buffer, the repair safely copies the signature data from the input buffer to the newly allocated signature buffer using `XMEMCPY`. This operation is essential for preparing the signature data for verification.
+
+```c
+XMEMCPY(sig->buffer, input + args->idx, args->sz);
+args->idx += args->sz;
+```
+
+### 4. **Advancing State and Proceeding with Verification**
+The repair advances the asynchronous state to `TLS_ASYNC_VERIFY` after successfully copying the signature data. This transition allows the function to move to the next step, which involves verifying the signature using the peer's public key and the specified hash and signature algorithms.
+
+```c
+ssl->options.asyncState = TLS_ASYNC_VERIFY;
+```
+
+### 5. **Signature Verification**
+In the `TLS_ASYNC_VERIFY` case, the repair calls `VerifyTls13Signature`, passing in the necessary parameters such as the hash algorithm, signature algorithm, and the signature data. This function is responsible for checking the validity of the signature against the provided public key.
+
+```c
+ret = VerifyTls13Signature(ssl, args->hashAlgo, args->sigAlgo, sig->buffer, args->sz);
+if (ret < 0)
+    goto exit_dcv;
+```
+
+### 6. **Finalizing the Process**
+If the signature verification is successful, the repair advances the state to `TLS_ASYNC_END`, indicating that the certificate verification process is complete. It then sets the return value to 0, signifying success, and exits the function.
+
+```c
+ssl->options.asyncState = TLS_ASYNC_END;
+ret = 0; /* Success */
+goto exit_dcv;
+```
+
+### Conclusion
+The repair not only fixes the logical vulnerability related to the absence of a public key check but also enhances the robustness of the code by implementing proper memory management practices. These changes ensure that the function can handle various edge cases and malicious inputs securely, thereby contributing to the overall security and reliability of the application.

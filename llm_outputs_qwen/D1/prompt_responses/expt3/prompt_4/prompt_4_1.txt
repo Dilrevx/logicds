@@ -1,0 +1,54 @@
+To address the vulnerability described, we need to ensure that when SRTP restart occurs due to replay errors, the media transport does not inadvertently switch back to plain RTP. This requires a careful handling of the state transitions and error conditions.
+
+The provided code attempts to restart SRTP upon encountering replay errors, which is correct, but it lacks checks to ensure that SRTP remains active after the restart. If `srtp_unprotect()` fails or any other issue arises, the code should handle these cases to prevent falling back to plain RTP.
+
+Here's an improved version of the code snippet:
+
+```c
+if (srtp->probation_cnt > 0 &&
+    (err == srtp_err_status_replay_old ||
+     err == srtp_err_status_replay_fail))
+{
+    /* Handle such condition that stream is updated (RTP seq is reinited
+     * & SRTP is restarted), but some old packets are still coming
+     * so SRTP is learning wrong RTP seq. While the newly inited RTP seq
+     * comes, SRTP thinks the RTP seq is replayed, so srtp_unprotect()
+     * will return err_status_replay_*. Restarting SRTP can resolve this.
+     */
+    pjmedia_srtp_crypto tx, rx;
+    pj_status_t status;
+
+    // Stop SRTP first, otherwise srtp_start() will maintain current
+    // roll-over counter.
+    pjmedia_transport_srtp_stop((pjmedia_transport*)srtp);
+
+    tx = srtp->tx_policy;
+    rx = srtp->rx_policy;
+    status = pjmedia_transport_srtp_start((pjmedia_transport*)srtp,
+                                          &tx, &rx);
+    if (status != PJ_SUCCESS) {
+        PJ_LOG(5,(srtp->pool->obj_name, "Failed to restart SRTP, err=%s",
+                  get_libsrtp_errstr(status))); // Use 'status' instead of 'err'
+        // Handle failure to restart SRTP appropriately
+        // For example, you might want to drop the packet or retry starting SRTP
+        // Here, we choose to drop the packet and log the error
+        return PJMEDIA_CODEC_EFAILED; // Or another appropriate error code
+    } else if (!srtp->bypass_srtp) {
+        err = srtp_unprotect(srtp->srtp_rx_ctx, (pj_uint8_t*)pkt, &len);
+        if (err != srtp_err_status_ok) {
+            PJ_LOG(5,(srtp->pool->obj_name, "Failed to unprotect SRTP packet, err=%s",
+                      get_libsrtp_errstr(err)));
+            // Handle failure to unprotect the packet
+            // Again, dropping the packet might be a good choice
+            return PJMEDIA_CODEC_EFAILED; // Or another appropriate error code
+        }
+    }
+}
+```
+
+### Key Changes:
+1. **Error Logging**: When restarting SRTP fails, log the correct error (`status` instead of `err`).
+2. **Error Handling**: After attempting to restart SRTP, check if the operation was successful. If not, handle the failure by logging and returning an error code, ensuring that the media transport does not proceed with plain RTP.
+3. **Unprotect Check**: After restarting SRTP, verify that `srtp_unprotect()` succeeds. If it doesn't, handle the failure similarly to the SRTP restart failure.
+
+These changes ensure that the media transport remains secure by preventing any fallback to plain RTP in case of SRTP restart failures or unprotect errors.

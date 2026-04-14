@@ -1,0 +1,20 @@
+The repair adds a critical check to ensure that a ChangeCipherSpec (CCS) message is processed only when it’s appropriate for the handshake state.
+
+1. Verification of Basics:  
+   The code first checks that the record is exactly one byte long, starts from offset zero, and contains the expected CCS value (SSL3_MT_CCS). This protects against malformed or tampered messages that do not follow the strict CCS format.
+
+2. Ensuring a Negotiated Cipher:  
+   Next, the repair confirms that a new cipher has already been negotiated by checking that s->s3->tmp.new_cipher is not NULL. This step ensures that the CCS isn’t processed too early in the handshake, which might otherwise allow an invalid state transition.
+
+3. Checking CCS Validity via a State Flag:  
+   The key change is the introduction of the handshake state flag s->s3->expect_ccs. This flag is intended to be set only when the protocol anticipates a CCS message. Before processing the CCS, the code now verifies that this flag is true. If it isn’t, the code raises an unexpected message alert. This check directly addresses the vulnerability where an attacker might inject a CCS message out-of-turn, potentially leading to the use of a zero-length master key.
+
+4. Clearing the Flag:  
+   Once the CCS message is confirmed as expected, the flag is cleared (set to zero) to ensure that no further CCS messages will be erroneously processed. This prevents replay or additional out-of-turn CCS messages from being accepted later in the handshake, thereby tightening the protocol’s state consistency.
+
+5. Standard Processing Continues:  
+   After these verifications, the record length is set to zero, and, if a message callback is registered, it is invoked, preserving the original functionality. The code then marks that the change cipher spec has been received and proceeds with the cipher change via the ssl3_do_change_cipher_spec function.
+
+By tying the acceptance of the CCS message directly to the protocol’s state – represented by the expect_ccs flag – the repair ensures that a CCS is only processed when it is truly expected and valid. This prevents any premature or malicious injection of a CCS message from altering the handshake state unexpectedly, which was the root cause of the vulnerability.
+
+In summary, the added state check fortifies the protocol’s security by enforcing a strict sequence in which handshake messages must be processed. This change mitigates the risk of man-in-the-middle attackers triggering the use of an invalid master key, thereby safeguarding the confidentiality and integrity of the TLS session.

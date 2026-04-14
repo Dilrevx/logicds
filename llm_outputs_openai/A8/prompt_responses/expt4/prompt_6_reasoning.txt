@@ -1,0 +1,20 @@
+The repair adds an extra step during the key exchange initialization to enforce “strict key exchange” requirements. This extra block mitigates attacks that exploit weaknesses during the handshake by omitting or tampering with parts of the negotiation, which could otherwise lead to downgraded security settings.
+
+Here’s what the repair does and how it addresses the vulnerability:
+
+1. Identification of the Negotiating Party:  
+   The code first distinguishes whether it is running on the server side (server_kex is true) or client side. Based on this, it selects the appropriate array of key exchange methods offered by the peer (for example, client_kex.methods on the server side or server_kex.methods on the client side).
+
+2. Extra Verification Step:  
+   Immediately after copying the key exchange algorithms into the session’s crypto structure, the repair introduces a new check. This check leverages the ssh_match_group function to examine if the negotiated primary key exchange method (located at the SSH_KEX index) belongs to a predefined “strict-kex” group. This group should include only those algorithms that enforce additional security measures like verifying sequence numbers and integrity checks more rigorously.
+
+3. Flag Enrichment:  
+   If the ssh_match_group check confirms that the selected key exchange method supports strict security, the session flag SSH_SESSION_FLAG_STRICT_KEX is set. This flag acts as a signal that in all subsequent exchanges, the code should employ stricter integrity validation measures. The repair also logs a debug message indicating that strict key exchange mode has been enabled, which helps in tracking and troubleshooting.
+
+4. Integrating with Existing Logic:  
+   Apart from this new verification block, the remaining parts of the function remain intact. The additional strict-check step does not interfere with existing functionality such as processing the final KEXINIT fields (first_kex_packet_follows and reserved uint32). Instead, it simply ensures that if the strict feature is supported, the session state is enhanced accordingly. Thus, any later part of the handshake (or subsequent data transmissions) that use the session flag will perform the extra validations, preventing attackers from bypassing integrity checks.
+
+5. Protection Against Downgrade Attacks:  
+   In the original vulnerability, malicious packets could be omitted or manipulated, causing a downgrade in security levels. With the strict key exchange flag enabled, any attempt by an attacker to tamper with the handshake (for example, by removing or modifying packet content) will be detected via rigorous sequence number and integrity validations required by the strict methods. This stops any potential downgrade in the encryption or MAC algorithms used.
+
+In summary, the repair strengthens the key exchange mechanism by enforcing a strict validation process for negotiated algorithms. It distinguishes between the client and server sides, checks if the offered key exchange uniquely supports strict mode, marks the session with an appropriate flag, and logs this event for traceability. This extra layer of security ensures that if an attacker tries to exploit the handshake process (as in a Terrapin attack), the anomalous behavior will be caught, thereby preserving the intended security level throughout the SSH session.

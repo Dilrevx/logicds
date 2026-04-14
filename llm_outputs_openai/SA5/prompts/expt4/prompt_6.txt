@@ -1,0 +1,76 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+The function `OCSP_basic_verify` verifies the signer certificate on an OCSP response. In the case where the (non-default) flag OCSP_NOCHECKS is used then the response will be positive (meaning a successful verification) even in the case where the response signing certificate fails to verify. It is anticipated that most users of `OCSP_basic_verify` will not use the OCSP_NOCHECKS flag. In this case the `OCSP_basic_verify` function will return a negative value (indicating a fatal error) in the case of a certificate verification failure. The normal expected return value in this case would be 0. This issue also impacts the command line OpenSSL "ocsp" application. When verifying an ocsp response with the "-no_cert_checks" option the command line application will report that the verification is successful even though it has in fact failed. In this case the incorrect successful response will also be accompanied by error messages showing the failure and contradicting the apparently successful result.
+</vulnerability_description>
+Here is the buggy source code:
+<buggy_code>
+    public static int ocsp_verify_signer(X509 signer, int response,
+                                         X509Store store, long flags,
+                                         X509Stack untrusted, X509Stack[] chain) {
+        X509StoreContext ctx = X509StoreContext.newContext();
+        X509VerifyParam vp;
+        int ret = -1;
+
+        if (ctx == null) {
+            ERR.raise("ERR_R_MALLOC_FAILURE");
+            return ret;
+        }
+
+        if (!ctx.init(store, signer, untrusted)) {
+            ERR.raise("ERR_R_X509_LIB");
+            ctx.free();
+            return ret;
+        }
+
+        vp = ctx.getParam();
+        if (vp == null) {
+            ctx.free();
+            return ret;
+        }
+
+        if ((flags & OCSPFlags.OCSP_PARTIAL_CHAIN) != 0) {
+            vp.setFlags(X509Flags.V_FLAG_PARTIAL_CHAIN);
+        }
+
+        if (response == 1 && signer.hasNoCheckExtension()) {
+            vp.clearFlags(X509Flags.V_FLAG_CRL_CHECK);
+        }
+
+        ctx.setPurpose(X509Purpose.OCSP_HELPER);
+        ctx.setTrust(X509Trust.OCSP_REQUEST);
+
+        ret = ctx.verify();
+
+        if (ret <= 0) {
+            ret = ctx.getError();
+            ERR.raiseData(
+                    "OCSP_R_CERTIFICATE_VERIFY",
+                    String.format("Verify returned (%d): %s", ret, ctx.getErrorString())
+            );            return ret;
+        }
+
+        if (chain != null) {
+            chain[0] = ctx.getVerifiedChain();
+        }
+
+        ctx.free();
+        return ret;
+    }
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair makes several important adjustments when the verification process indicates a failure. First, instead of repurposing the same variable that held the initial verification result, the repair stores the error code retrieved from the context in a separate variable. This change prevents overwriting information about the outcome of the verification process by keeping the original return value intact, which is crucial for correct error reporting later.
+
+Next, the repair enhances the error reporting mechanism. The error message and identifier have been updated to provide clearer context for the failure. By changing the error identifier to a more descriptive one and formatting the error message to explicitly refer to a verification error, the code now more accurately communicates that the certificate verification process has encountered a problem. This alleviates any potential confusion that might arise from ambiguous error messaging, which is particularly significant given the sensitive nature of security-related feedback.
+
+Another key improvement introduced in the repair is the explicit deallocation of resources after a failure is detected. The function now calls a method to free the context, ensuring that any allocated memory or associated resources are properly released when an error occurs. This addition is important because it prevents resource leaks, which in turn minimizes the risk of subsequent failures or more severe vulnerabilities arising from lingering, improperly managed resources.
+
+Together, these modifications lead to a more robust handling of negative verification outcomes. Instead of mistakenly indicating a successful verification—especially in scenarios where the OCSP_NOCHECKS flag might alter expected results—the code now decisively interprets a non-positive return value as a certificate verification error. It logs the correct error summary, cleans up by freeing the context, and finally returns the original error status. This sequence of steps ensures that callers of the function receive an accurate representation of the verification result and that the system maintains integrity even in the face of verification issues.
+
+In essence, the repair improves the function by clearly separating error handling from the normal execution pathway, enhancing the clarity of error messages, and ensuring proper cleanup of resources. These changes are pivotal in ensuring that when certificate verification fails—whether due to misconfiguration or an attack—the function behaves in a predictable and secure manner. This not only curbs the risk of inadvertently accepting a faulty verification as successful but also prevents potentially dangerous side effects linked with resource mismanagement. Overall, the repair aligns the behavior of the certificate verification function with the intended security model, fostering more reliable and secure operations in applications relying on these cryptographic checks.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

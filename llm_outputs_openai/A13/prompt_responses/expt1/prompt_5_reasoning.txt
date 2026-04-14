@@ -1,0 +1,13 @@
+The repair ensures that even when a DLZ zone is found in the normal zone table, additional permission checks are applied by calling dns_dlzallowzonexfr. Previously, if a DLZ zone was matched in the zone table, the extra check that verifies whether the peer is allowed to perform a zone transfer (using allowzonexfr) was omitted. This allowed potentially unauthorized transfers for writable DLZ zones.
+
+Here’s what the repair does step by step:
+
+1. It first attempts to find the zone in the normal zone table with dns_zt_find. If this fails (the zone isn’t in the table), it falls back to checking the DLZ databases. In the DLZ branch, it uses dns_dlzallowzonexfr to not only locate but also verify if the transfer is permitted. If the call returns ISC_R_NOPERM, it logs and aborts the transfer. This branch covers non-zone table cases.
+
+2. If the zone was found in the zone table, the repair then checks if the zone is of type dns_zone_dlz. If it is, even though the zone was found in the table, it still calls dns_dlzallowzonexfr. This step is crucial because writable DLZ zones must enforce transfer permissions just like DLZ zones discovered directly from the DLZ database. The function dns_dlzallowzonexfr performs extra checks to confirm the transfer is allowed (e.g., ACLs or other security policies). If the check fails, the transfer is denied with an appropriate log message.
+
+3. In both cases (zone table or DLZ fallback), if the permission check fails with ISC_R_NOPERM, the code logs an error message indicating that the particular zone transfer was denied, then gracefully jumps to the failure handling label.
+
+By inserting the call to dns_dlzallowzonexfr in the branch where a DLZ zone is found in the zone table, the repair prevents an attacker from bypassing zone transfer controls. This unified approach ensures that regardless of where the DLZ is discovered (zone table or DLZ database), the same security policy is enforced.
+
+Overall, the repair closes the vulnerability by enforcing that all DLZ zones—even those initially discovered in the zone table—are subject to the additional transfer permission check, thereby preventing unauthorized zone transfers for writable DLZ zones.

@@ -1,0 +1,12 @@
+The repair adds a check after calling X509_verify_cert(ctx) to determine if its result is negative. In the original buggy code, a negative return value—which indicates an internal error like an out-of-memory condition—was passed up the call chain without modification. OpenSSL’s design intended for such negative values to be used only when a user-installed certificate verification callback (via SSL_CTX_set_cert_verify_callback()) is in use. Since most applications do not set a custom callback, a negative value causes subsequent calls to SSL_get_error() to return SSL_ERROR_WANT_RETRY_VERIFY, an error which is unexpected and may lead to inappropriate handling by the application.
+
+In the repaired code, the following steps are implemented:
+
+1. The application verification callback is still given the first priority. If it is set, its value is used.
+2. If no custom callback is present, the code calls X509_verify_cert(ctx) to perform the certificate verification. 
+3. Immediately after, the repair checks if the value returned (stored in i) is negative. A negative number indicates an internal error.
+4. Instead of leaving this negative value, the code converts it to 0. By doing so, the negative value (and thus the internal error indication) is not mistakenly propagated up. The verification result is thus interpreted as a failure, not triggering the unexpected SSL_ERROR_WANT_RETRY_VERIFY behavior on later calls.
+
+This change ensures that any internal error reported by X509_verify_cert is treated uniformly as a verification failure rather than as a special retry condition. Applications that rely on certificate verification will correctly see the failure (or error) without misinterpreting the internal error code, which maintains consistency with the expected flow when no user callback is present. 
+
+Ultimately, this repair prevents the vulnerable behavior by eliminating the unintended propagation of negative error codes to the IO functions like SSL_connect() or SSL_do_handshake(). Any negative return value from X509_verify_cert, now changed to 0, ensures the error handling remains within the anticipated contract, thereby maintaining robust operation across OpenSSL’s API and avoiding potential misbehavior in applications that use it.

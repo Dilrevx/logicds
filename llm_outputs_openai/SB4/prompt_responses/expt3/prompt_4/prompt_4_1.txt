@@ -1,0 +1,46 @@
+Below is one correct way of “fixing” the vulnerability. In the original code the OCSP‐response serial buffer (“rserial.data”) is allocated with gnutls_malloc – which does not zero‐initialize memory – so if the OCSP parser writes only the “real” serial number bytes into the buffer, any “leftover” trailing bytes (from previous uses of that memory) might accidentally match parts of the expected certificate serial. An attacker could use this to bypass the intended serial comparison.
+
+One safe repair is to ensure that the buffer is zeroed before the OCSP parser writes into it. (Alternatively, the code that parses the serial must compute the “real” length from the DER encoding and ignore any leftover bytes in the allocated buffer.) For example, if the code previously used
+
+  rserial.data = gnutls_malloc(alloc_size);
+
+we can change it to use a zero‐initializing allocator. For instance:
+
+-------------------------------------------------
+/* Allocate zero‐inited memory so that any trailing bytes are set to 0 */
+rserial.data = _gnutls_calloc(1, alloc_size);
+if (rserial.data == NULL)
+    return ErrorCodes.GNUTLS_E_MEMORY_ERROR;
+
+/* Now parse the OCSP response (this will write rserial.size bytes
+ * into the previously zeroed buffer). */
+ret = parse_ocsp_response(&rserial, …);
+if (ret < 0) {
+    gnutls_free(rserial.data);
+    return ret;
+}
+
+/* Now compare the serial number with the certificate serial number.
+ * (The zeroed trailing bytes guarantee that any “garbage” in the tail
+ * does not make the comparison succeed.) */
+if (rserial.size != cserial.size ||
+        Helper.memcmp(cserial.data, rserial.data, rserial.size) != 0) {
+    gnutls_free(rserial.data);
+    return ErrorCodes.GNUTLS_E_OCSP_RESPONSE_ERROR;
+}
+-------------------------------------------------
+
+Alternatively, if changing the allocator is not possible, you can explicitly zero any portions of the allocated buffer that are not overwritten by parsing. For example, assume alloc_size is the total size of the allocation and rserial.size is the number of bytes written by the parser:
+
+-------------------------------------------------
+if (rserial.size < alloc_size)
+    memset((uint8_t *)rserial.data + rserial.size, 0, alloc_size - rserial.size);
+-------------------------------------------------
+
+Then continue with the memcmp check.
+
+Either approach ensures that no “garbage” trailing bytes can make a malicious OCSP response have a serial number that compares equal to that of the certificate, thereby repairing the vulnerability.
+
+Remember to free any allocated memory as appropriate.
+
+This patch makes sure that the OCSP‐serial number buffer contains only the bytes written by the parser (or zeros in the trailing area) so that the length and content comparison against the expected certificate serial number is done safely.

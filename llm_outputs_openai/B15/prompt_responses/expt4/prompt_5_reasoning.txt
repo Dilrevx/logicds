@@ -1,0 +1,18 @@
+The repair modifies the function so that when a trust anchor table (secroots) is configured, the DNSKEY entry must be explicitly found there and validated before the mirror zone data is accepted. Here’s how the changes help prevent the vulnerability:
+
+1. Trust Anchor Verification:  
+   In the original code, even if the DNSKEY RRset doesn’t validate correctly against any configured trust anchor, the function might still mark the key as “good” (or continue processing) simply because some other self-signature condition was met. The revised code now directly checks for the key’s presence in the trust anchor table when one is provided. If the key isn’t found, it explicitly sets *goodkey to false and returns ISC_R_FAILURE. This change ensures that forged mirror zone data that doesn’t match the trust anchor cannot be accepted.
+
+2. Consolidated Signature Checks:  
+   The code still increments the active or standby counters based on whether the DNSKEY RRset is self-signed or signed by the SOA. However, regardless of the signature type, when a trust anchor table is configured (vctx->secroots is non-NULL), the function now explicitly requires a lookup in that table. This means that even if upstream self-signatures appear valid, they won’t be trusted unless the key is validated against a secure, preconfigured trust anchor.
+
+3. Error Propagation:  
+   In the repair, if the function dns_dnssec_keyfromrdata (which converts the rdata into a key) fails, it immediately returns the error. Likewise, if the subsequent lookup in the trust anchor table (dns_keytable_findkeynode) fails (i.e., result isn’t ISC_R_SUCCESS), the key is rejected by setting *goodkey to false and returning ISC_R_FAILURE. This prevents any forged data—especially data coming from a man-in-the-middle attack—from being inadvertently trusted.
+
+4. Strengthened Logic Flow:  
+   The code flow now clearly distinguishes between cases when there is no trust anchor configured (allowing straightforward acceptance) and when there is a trust anchor present (requiring verified matching). This separation ensures that mirror zone data is only used if it can be validated against the trusted source—a critical mitigation for the potential on-path attacks described.
+
+5. Prevention of Fallback Misuse:  
+   Previously, if the data didn’t meet one signature check, the code simply fell back to using standby keys without an explicit check against the trust anchor table, potentially allowing an attacker-controlled data set to be used. The repaired version removes that ambiguity by enforcing trust anchor validation regardless of which signing method was used.
+
+Overall, these modifications tighten the certificate validation process. They ensure that, in environments where DNSSEC validation is supposed to be reinforced by a trusted anchor (such as mirror zones for the root zone), any data that doesn’t match the configured trust anchor is rejected. This effectively fixes the vulnerability where an attacker might otherwise inject forged DNS data by manipulating mirror zone data that is not properly validated.

@@ -1,0 +1,67 @@
+Below is an example of a repaired version of the code. In this version, we add a check in the branch handling plain NAS messages to verify whether a security context is already active. We also introduce a local variable (here named current_msg_hdr) that is updated in each branch for clarity and tracking of the message’s security header type. (Note that the function is_security_context_active() is assumed to be implemented elsewhere to return whether the UE already has an active security context.) This ensures that plain messages—such as identity requests—are rejected if security activation has taken place.
+
+–––––––––––––––––––––––
+/* Repaired code */
+switch (nas_msg.hdr.security_header_type) {
+    case commons.Nas5gsHdr.security_header_type_opts.plain_5gs_nas_message:
+    {
+        // Update the current message header for downstream processing or logging.
+        current_msg_hdr = commons.Nas5gsHdr.security_header_type_opts.plain_5gs_nas_message;
+        // Reject plain NAS messages if a security context is already established.
+        if (is_security_context_active()) {
+            logger.error("Rejecting plain NAS message after security activation");
+            return SRSRAN_ERROR;
+        }
+        break;
+    }
+    case commons.Nas5gsHdr.security_header_type_opts.integrity_protected:
+    {
+        current_msg_hdr = commons.Nas5gsHdr.security_header_type_opts.integrity_protected;
+        if (!integrity_check(pdu.get())) {
+            logger.error("Not handling NAS message with integrity check error");
+            return SRSRAN_ERROR;
+        }
+        break;
+    }
+    case commons.Nas5gsHdr.security_header_type_opts.integrity_protected_and_ciphered:
+    {
+        current_msg_hdr = commons.Nas5gsHdr.security_header_type_opts.integrity_protected_and_ciphered;
+        if (!integrity_check(pdu.get())) {
+            logger.error("Not handling NAS message with integrity check error");
+            return SRSRAN_ERROR;
+        } else {
+            cipher_decrypt(pdu.get());
+        }
+        break;
+    }
+    case commons.Nas5gsHdr.security_header_type_opts.integrity_protected_with_new_5G_nas_context:
+    {
+        current_msg_hdr = commons.Nas5gsHdr.security_header_type_opts.integrity_protected_with_new_5G_nas_context;
+        break;
+    }
+    case commons.Nas5gsHdr.security_header_type_opts.integrity_protected_and_ciphered_with_new_5G_nas_context:
+    {
+        current_msg_hdr = commons.Nas5gsHdr.security_header_type_opts.integrity_protected_and_ciphered_with_new_5G_nas_context;
+        // This security mode is immediately rejected based on policy.
+        return SRSRAN_ERROR;
+    }
+    default:
+    {
+        logger.error("Not handling NAS message with unknown security header");
+        break;
+    }
+}
+
+–––––––––––––––––––––––
+Explanation of the repair steps:
+
+1. Plain Message Check:  
+   In the case for plain_5gs_nas_message, before processing the message normally the function is_security_context_active() is called. If it returns true, an error is logged and the function returns an error code (SRSRAN_ERROR) to prevent acceptance of a plain NAS message after the security context is active.
+
+2. Header Tracking:  
+   In every branch we added an assignment to the variable current_msg_hdr. This makes the code clearer by capturing the type of security header being processed, which may help with debugging, logging, and ensuring that later processing is aware of the message’s security state.
+
+3. Consistent Integrity and Ciphering Checks:  
+   For the branches that require integrity checks (with or without cipher decryption), the code continues to enforce these checks. If the integrity validation fails, the error is logged and the error code is returned immediately, ensuring that only genuine messages are processed further.
+
+These modifications collectively ensure that the vulnerability, where a plain NAS message is accepted after security activation, is fixed and that the NAS message processing flow strictly adheres to the expected security protocols.

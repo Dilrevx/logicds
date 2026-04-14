@@ -1,0 +1,11 @@
+The repair addresses the vulnerability by ensuring that the function returns the expected value (0 to indicate failure) rather than a negative error code, which can lead to misinterpretation in certain contexts.
+
+Originally, when certificate verification failed (i.e., when ret <= 0), the code would fetch the underlying error using X509_STORE_CTX_get_error(ctx) and raise an error message. However, instead of normalizing the failure result, it left ret with its negative value. This could lead to an inconsistency: especially when the OCSP_NOCHECKS flag is not used, a negative return value (an indication of a fatal error) may be misinterpreted by some parts of the system or the consumer of the function (for example, the "ocsp" command line application), which expects a 0 to mean a verification failure. In effect, the function sometimes signals both a failure message (with error details) and an incorrect success state, hence leading to conflicting behavior.
+
+The repair makes two important changes:
+
+1. It introduces a new local variable (err) to store the error code provided by X509_STORE_CTX_get_error(ctx) for clarity and to avoid potential confusion with ret. This separation makes it easier to use the error for logging the proper error message through ERR_raise_data.
+
+2. After raising the error message, the repair explicitly sets ret = 0. This step is critical because it ensures that the function returns 0 to indicate that the certificate verification failed, thus meeting the expected behavior for most users of OCSP_basic_verify. By doing so, it avoids the potential misinterpretation where a negative error code might be seen as a fatal success condition (especially in contexts controlled by the -no_cert_checks option on the command line).
+
+To sum up, by explicitly setting ret = 0 after detecting a failure and reporting the error, the repair guarantees that a certificate verification error is correctly communicated as a failure. This eliminates the ambiguity that was present when a negative value was returned, thereby preventing scenarios where the verification process erroneously reports success despite underlying errors.

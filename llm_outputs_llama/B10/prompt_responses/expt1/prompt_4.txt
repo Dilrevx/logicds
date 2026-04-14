@@ -1,0 +1,537 @@
+<repair>
+            if (args->ivSz > 0) {
+                args->iv = (byte*)XMALLOC(args->ivSz, ssl->heap, DYNAMIC_TYPE_SALT);
+                if (args->iv == NULL)
+                    ERROR_OUT(MEMORY_E, exit_buildmsg);
+
+                ret = wc_RNG_GenerateBlock(ssl->rng, args->iv, args->ivSz);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+            }
+#endif
+            ssl->options.buildMsgState = BUILD_MSG_HEADER;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_HEADER:
+        {
+            if (ssl->options.dtls) {
+                ret = BuildDtlsHeader(ssl, output, args->idx, type, args->seq);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+                args->idx += DTLS_RECORD_EXTRA;
+            }
+            else {
+                ret = BuildTlsHeader(ssl, output, args->idx, type);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+                args->idx += RECORD_HEADER_SZ;
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_DATA;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_DATA:
+        {
+            if (input!= NULL) {
+                XMEMCPY(output + args->idx, input, inSz);
+                args->idx += inSz;
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_MAC;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_MAC:
+        {
+            if (ssl->specs.cipher_type!= aead) {
+                ret = BuildMac(ssl, output + args->idx, args->digestSz, type);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+                args->idx += args->digestSz;
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_DONE;
+        }
+        FALL_THROUGH;
+        case BUILD_MSG_DONE:
+        {
+            if (ssl->specs.cipher_type == aead) {
+                ret = BuildAeadMac(ssl, output, args->idx, args->digestSz, type);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+                args->idx += args->digestSz;
+            }
+
+            if (ssl->specs.cipher_type!= aead) {
+                if (ssl->specs.cipher_type == block) {
+                    if (args->pad > 0) {
+                        output[args->idx] = (byte)args->pad;
+                        args->idx++;
+                    }
+                    ret = wc_PadPKCS7(output + args->idx, args->pad,
+                                      ssl->specs.block_size);
+                    if (ret!= 0)
+                        goto exit_buildmsg;
+                    args->idx += args->pad;
+                }
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_BEGIN;
+
+            if (ssl->specs.cipher_type == aead) {
+                if (ssl->specs.bulk_cipher_algorithm == wolfssl_chacha) {
+                    ret = BuildChaChaMac(ssl, output, args->idx, args->digestSz,
+                                        type);
+                    if (ret!= 0)
+                        goto exit_buildmsg;
+                    args->idx += args->digestSz;
+                }
+                else {
+                    ret = BuildAeadMac(ssl, output, args->idx, args->digestSz,
+                                      type);
+                    if (ret!= 0)
+                        goto exit_buildmsg;
+                    args->idx += args->digestSz;
+                }
+            }
+
+            if (ssl->specs.cipher_type == block) {
+                if (ssl->options.tls1_1) {
+                    ret = wc_RNG_GenerateBlock(ssl->rng, output + args->idx,
+                                              args->ivSz);
+                    if (ret!= 0)
+                        goto exit_buildmsg;
+                    args->idx += args->ivSz;
+                }
+            }
+
+            if (hashOutput) {
+                ret = BuildHashHeader(ssl, output, args->idx, type);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+                args->idx += HASH_HEADER_SZ;
+            }
+
+            if (ssl->options.buildMsgState == BUILD_MSG_DONE) {
+                ssl->options.buildMsgState = BUILD_MSG_BEGIN;
+            }
+
+            if (ssl->options.tls1_3) {
+                ret = BuildTls13Message(ssl, output, outSz, input, inSz, type,
+                                       hashOutput, sizeOnly, asyncOkay);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+            }
+
+            if (ssl->options.dtls) {
+                ret = BuildDtlsMessage(ssl, output, outSz, input, inSz, type,
+                                      hashOutput, sizeOnly, asyncOkay);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+            }
+
+            if (ssl->options.tls1_2) {
+                ret = BuildTls12Message(ssl, output, outSz, input, inSz, type,
+                                       hashOutput, sizeOnly, asyncOkay);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+            }
+
+            if (ssl->options.tls1_1) {
+                ret = BuildTls11Message(ssl, output, outSz, input, inSz, type,
+                                       hashOutput, sizeOnly, asyncOkay);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+            }
+
+            if (ssl->options.tls1_0) {
+                ret = BuildTls10Message(ssl, output, outSz, input, inSz, type,
+                                       hashOutput, sizeOnly, asyncOkay);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+            }
+
+            if (ssl->options.sslv3) {
+                ret = BuildSsl3Message(ssl, output, outSz, input, inSz, type,
+                                      hashOutput, sizeOnly, asyncOkay);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+            }
+
+            if (ssl->options.sslv2) {
+                ret = BuildSsl2Message(ssl, output, outSz, input, inSz, type,
+                                      hashOutput, sizeOnly, asyncOkay);
+                if (ret!= 0)
+                    goto exit_buildmsg;
+            }
+
+            ssl->options.buildMsgState = BUILD_MSG_BEGIN;
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->options.asyncState == ASYNC_IN_PROGRESS) {
+                ssl->options.asyncState = ASYNC_NOT_READY;
+            }
+
+            if (ssl->options.asyncState == ASYNC_NOT_READY) {
+                ssl->options.asyncState = ASYNC_IN_PROGRESS;
+            }
+
+            if (ssl->

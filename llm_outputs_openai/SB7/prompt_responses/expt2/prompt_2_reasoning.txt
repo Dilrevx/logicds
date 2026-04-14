@@ -1,0 +1,19 @@
+The repair works by reordering the operations and adding extra error-handling measures to ensure that any error that arises from validating the leaf certificate is properly recorded before the certificate chain is duplicated.
+
+First, the leaf certificate is validated with two separate checks. The call to x509_verify_cert_valid(ctx, leaf, null) verifies the certificate's validity, while x509_verify_cert_hostname(ctx, leaf, name) verifies that the hostname matches. By performing these validations before duplicating the certificate chain, the repair ensures that any errors detected at the leaf level are captured immediately. This is crucial because if you duplicate the chain first, any error from the leaf might be overwritten or lost, leading to a misrepresented error state.
+
+Next, for each validation check (both cert validity and hostname), there’s a conditional block that, when the verification fails, checks if the certificate being processed is the leaf (depth == 0) and if the error does not equal the specific issuer certificate error (X509_V_ERR_ISSUER_CERT_ERROR). If these conditions are met, the repair records the error in the error array of the corresponding certificate chain at index [0]. This targeted error recording ensures that the error from the leaf certificate is noted in addition to any further processing errors. This step is what fixes the vulnerability: it prevents errors from being hidden or overwritten due to callbacks or later chain duplication.
+
+After successfully validating the leaf certificate, the code moves on to duplicate the certificate chain. Only after verifying the certificate first does it attempt to duplicate the chain with x509_verify_chain_dup. If this duplication fails (likely due to an out-of-memory condition), the repair immediately returns an out-of-memory error, which preserves the correct error state related to the duplication issue itself.
+
+Once the chain is successfully duplicated, the repair then sets the duplicated chain's error array at the current depth (this could cover any higher-level errors if they had been set) to the current error status from the context. This step maintains a detailed map of error codes per certificate level. After this record is set, the new chain is added to the context’s chain list, and the chain count is incremented.
+
+Finally, the context’s error is reset to indicate overall success (X509_V_OK) after the chain has been duplicated and added. This reset clearly demarcates that the verification process (post-validation) is successful, while still preserving the original error details for diagnostic use.
+
+In summary, the repair fixes the vulnerability by:
+
+• Reordering the logic so that leaf certificate validation happens before chain duplication.
+• Recording the leaf-specific error (when appropriate) before any changes that might obscure it occur.
+• Maintaining an accurate and detailed error map across the certificate chain.
+
+By doing so, the repair prevents a scenario where an earlier error (e.g., from a verification callback) might be lost or overwritten during chain duplication, ensuring that error reporting remains accurate and reliable throughout the certificate validation process.

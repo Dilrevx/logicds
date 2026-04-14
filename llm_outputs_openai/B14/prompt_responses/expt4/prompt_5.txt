@@ -1,0 +1,43 @@
+<repair>
+void
+isc__nmhandle_detach(isc_nmhandle_t **handlep FLARG) {
+	isc_nmsocket_t *sock = NULL;
+	isc_nmhandle_t *handle = NULL;
+
+	REQUIRE(handlep != NULL);
+	REQUIRE(VALID_NMHANDLE(*handlep));
+
+	handle = *handlep;
+	*handlep = NULL;
+
+	sock = handle->sock;
+
+	/*
+	 * To fix the vulnerability where an attacker can craft TCP streams
+	 * to keep connections in CLOSE_WAIT indefinitely, we force the
+	 * underlying socket to close immediately. This ensures that if the
+	 * remote side has shutdown its writing (leaving us in CLOSE_WAIT),
+	 * we proactively shutdown our side and release the connection.
+	 *
+	 * Note: isc_socket_close() is assumed to properly perform shutdown
+	 * and resource cleanup of the socket.
+	 */
+	if (sock != NULL && sock->socket != NULL)
+		isc_socket_close(sock->socket);
+
+	if (sock->tid == isc_nm_tid()) {
+		nmhandle_detach_cb(&handle FLARG_PASS);
+	} else {
+		isc__netievent_detach_t *event =
+			isc__nm_get_netievent_detach(sock->mgr, sock);
+		/*
+		 * we are using implicit "attach" as the last reference
+		 * need to be destroyed explicitly in the async callback
+		 */
+		event->handle = handle;
+		FLARG_IEVENT_PASS(event);
+		isc__nm_enqueue_ievent(&sock->mgr->workers[sock->tid],
+				       (isc__netievent_t *)event);
+	}
+}
+</repair>

@@ -1,0 +1,16 @@
+The repair replaces the conditional check that depends on comparing algorithm arrays with a forced safeguard. Previously, the code evaluated whether the “guess” was right or wrong by performing comparisons between the client's and server's algorithm choices:
+
+  cmp_first_kex_algo(client_methods[SSH_KEX], server_methods[SSH_KEX])  
+  cmp_first_kex_algo(client_methods[SSH_HOSTKEYS], server_methods[SSH_HOSTKEYS])
+
+This approach could be exploited because an attacker might manipulate or omit certain extension packets during the handshake. The attacker’s modifications can lead the client to believe that certain security features were agreed upon, even if they were not fully negotiated. This is the essence of the Terrapin attack: bypassing integrity checks and downgrading the security of the connection.
+
+In the repaired code, whenever the "first key exchange packet follows" flag is set (or the session flag indicates that the first key exchange packet follows), the code unconditionally forces the guess to be wrong by setting:
+
+  session->first_kex_follows_guess_wrong = 1;
+
+By doing so, it avoids relying on potentially attacker-manipulated comparisons. The implication is that the handshake will not proceed under the assumption that the initial guess on key exchange parameters was correct. Consequently, this results in extra caution, prompting the system to engage in renegotiation or extra validation of the cryptographic parameters being established. The essence of the safeguard is to prevent attackers from exploiting out-of-sequence or omitted packets to force the use of less secure algorithms.
+
+This design change is key in mitigating the vulnerability: rather than trying to verify the integrity of the algorithms using a method that could be bypassed if packets are selectively dropped or altered, the system proactively invalidates the guess when the risk is detected. The forced outcome (guess being wrong) prevents an attacker from silently downgrading the connection's security during that critical phase of the SSH handshake.
+
+In summary, the repair ensures that when the risky condition is detected, the SSH handshake does not rely on possibly compromised algorithm comparisons, but instead forces a conservative, secure fallback by marking the initial guess as wrong. This measure blocks the Terrapin attack vector, where an adversary might manipulate extension negotiation messages, ensuring that the SSH binary packet protocol (BPP) does not fall back to insecure (or downgraded) cryptographic settings.

@@ -1,0 +1,158 @@
+Below is an example C-code snippet that repairs the vulnerability by enforcing strict sequence‐number verification, proper NAS header unpacking, and additional state checks and integrity validations. In this example, a NAS message is processed only if its sequence number is equal to or higher than the expected one; plain NAS messages are rejected if a security context is already in place; and integrity‐protected messages are verified (with decryption for ciphered ones). This approach prevents replay attacks such as accepting a nas_sm_cmd_replay after registration has completed.
+
+------------------------------------------------------------
+/* Example C-code repair for NAS message processing vulnerability */
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
+
+/* Define return values */
+#define SUCCESS                  0
+#define ERR_SEQUENCE_INVALID    -1
+#define ERR_INTEGRITY_FAIL      -2
+#define ERR_DECRYPT_FAIL        -3
+#define ERR_HEADER_UNPACK_FAIL  -4
+#define ERR_UNSUPPORTED_MESSAGE -5
+
+/* Enumeration for NAS security header types */
+typedef enum {
+    NAS_MSG_PLAIN = 0,              // Plain NAS message
+    NAS_MSG_INTEGRITY_PROTECTED,    // Integrity protected only
+    NAS_MSG_CIPHERED,               // Integrity protected and ciphered
+    NAS_MSG_NEW_CONTEXT             // New/security context message (unsupported in this case)
+} NasSecurityHeaderType;
+
+/* NAS header structure */
+typedef struct {
+    uint8_t security_header_type;   // Determines protection type, e.g., plain, integrity, ciphered
+    uint8_t message_type;           // NAS message type identifier
+    uint32_t sequence_number;       // Sequence number for replay detection
+    // ... other header fields as needed
+} NasHeader;
+
+/* Security context maintained for NAS processing */
+typedef struct {
+    bool security_established;      // True when registration / authentication has been completed
+    uint32_t expected_sequence;     // Next expected sequence number
+    // ... other security parameters (keys, etc.)
+} NasSecurityContext;
+
+/* Stub for unpacking NAS header from a protocol data unit (PDU).
+   Returns SUCCESS if successful, or ERR_HEADER_UNPACK_FAIL on error. */
+int unpack_nas_header(const uint8_t *pdu, size_t pdu_len, NasHeader *header) {
+    // (Implement proper PDU parsing; below is a dummy placeholder)
+    if (pdu == NULL || pdu_len < sizeof(NasHeader))
+        return ERR_HEADER_UNPACK_FAIL;
+    
+    // For demonstration purposes, assume the buffer begins with the header.
+    // In a real implementation, careful parsing and boundary checking are required.
+    header->security_header_type = pdu[0];
+    header->message_type = pdu[1];
+    header->sequence_number = (pdu[2] << 24) | (pdu[3] << 16) | (pdu[4] << 8) | pdu[5];
+    
+    return SUCCESS;
+}
+
+/* Stub for integrity verification. Returns SUCCESS if passed, ERR_INTEGRITY_FAIL if verification fails. */
+int verify_integrity(const uint8_t *payload, size_t len, const NasSecurityContext *ctx) {
+    // (Implement proper integrity checking here)
+    // For demonstration purposes, assume the integrity is valid.
+    return SUCCESS;
+}
+
+/* Stub for decryption. Returns SUCCESS if decryption is successful, ERR_DECRYPT_FAIL otherwise. */
+int decrypt_message(uint8_t *payload, size_t len, const NasSecurityContext *ctx) {
+    // (Implement decryption using security context keys)
+    // For demonstration purposes, assume decryption is successful.
+    return SUCCESS;
+}
+
+/* Main function to process a NAS message */
+int process_nas_message(const uint8_t *pdu, size_t pdu_len, NasSecurityContext *ctx) {
+    int ret = 0;
+    NasHeader header;
+
+    /* STEP 1: Unpack the NAS header.
+       If unpacking fails, log the error and terminate processing. */
+    ret = unpack_nas_header(pdu, pdu_len, &header);
+    if (ret != SUCCESS) {
+        // Log error: "Header unpacking failed"
+        return ERR_HEADER_UNPACK_FAIL;
+    }
+
+    /* STEP 2: Verify the sequence number.
+       Reject messages with a sequence number lower than expected to block replay attempts. */
+    if (header.sequence_number < ctx->expected_sequence) {
+        // Log error: "Received outdated sequence number; potential replay attack detected"
+        return ERR_SEQUENCE_INVALID;
+    }
+
+    /* STEP 3: Determine message type and enforce security context rules.
+       If a plain NAS message is received after a security context is active, reject it. */
+    NasSecurityHeaderType msg_type;
+    switch (header.security_header_type) {
+        case NAS_MSG_PLAIN:
+            msg_type = NAS_MSG_PLAIN;
+            if (ctx->security_established) {
+                // Log error: "Plain NAS message rejected after security context established"
+                return ERR_UNSUPPORTED_MESSAGE;
+            }
+            break;
+        case NAS_MSG_INTEGRITY_PROTECTED:
+            msg_type = NAS_MSG_INTEGRITY_PROTECTED;
+            break;
+        case NAS_MSG_CIPHERED:
+            msg_type = NAS_MSG_CIPHERED;
+            break;
+        case NAS_MSG_NEW_CONTEXT:
+            /* If a message contains a new security context (such as a fresh 5-gram context)
+               that is not expected here, reject it to avoid uncertain behaviors. */
+            return ERR_UNSUPPORTED_MESSAGE;
+        default:
+            // Unrecognized header type; safest to reject.
+            return ERR_UNSUPPORTED_MESSAGE;
+    }
+
+    /* STEP 4: If applicable, perform integrity check on the received message.
+       This is done for integrity protected and ciphered messages. */
+    if (msg_type == NAS_MSG_INTEGRITY_PROTECTED || msg_type == NAS_MSG_CIPHERED) {
+        ret = verify_integrity(pdu, pdu_len, ctx);
+        if (ret != SUCCESS) {
+            // Log error: "Integrity verification failed"
+            return ERR_INTEGRITY_FAIL;
+        }
+    }
+
+    /* STEP 5: For ciphered messages, decrypt the payload after successful integrity validation. */
+    if (msg_type == NAS_MSG_CIPHERED) {
+        // Note: The decryption call may operate on a buffer that excludes the header,
+        // depending on the protocol specifics.
+        ret = decrypt_message((uint8_t *)pdu, pdu_len, ctx);
+        if (ret != SUCCESS) {
+            // Log error: "Decryption of payload failed"
+            return ERR_DECRYPT_FAIL;
+        }
+    }
+
+    /* STEP 6: Update security context state.
+       Advance the expected sequence number to ensure proper ordering of subsequent messages. */
+    ctx->expected_sequence = header.sequence_number + 1;
+
+    /* Process the NAS message payload further based on the message_type and business logic.
+       ... */
+
+    return SUCCESS;
+}
+
+------------------------------------------------------------
+
+Explanation:
+
+1. The code begins by unpacking the NAS header from the incoming PDU. If unpacking fails, the processing stops immediately.
+2. A strict check on the sequence number is performed. If the header’s sequence_number is older (i.e. less than the expected sequence), the message is rejected—thus blocking any replayed commands.
+3. The security header type is examined. For plain NAS messages, the code verifies that no security context is active (i.e. registration is not complete). Message types that indicate new or unsupported security contexts are preemptively rejected.
+4. For messages that are integrity protected (or ciphered), an integrity check is performed. For ciphered messages, decryption is performed only after a successful integrity check.
+5. After processing the message, the expected sequence number is updated to preclude replay of previously seen messages.
+
+This repair effectively mitigates the vulnerability by ensuring proper sequencing, integrity checks, and enforcing strict security context rules, thereby preventing replay attacks even after registration is complete.

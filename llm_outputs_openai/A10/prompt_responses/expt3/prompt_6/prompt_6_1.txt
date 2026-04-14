@@ -1,0 +1,110 @@
+Below is an example of a C-language fix for the vulnerability. In the original code the certificate’s signature algorithm parameters were validated by comparing only the lengths (and if nonzero, the contents), which meant that a NULL parameter (with its own ASN.1 tag) could be mistaken for an empty array. The repair adds a check that verifies that both the ASN.1 tag and the content match as expected. (Note that this example assumes structures similar to the ones below.)
+
+─────────────────────────────────────────────
+// Structures representing ASN.1 elements and the algorithm identifier
+typedef struct {
+    unsigned char tag;     // ASN.1 tag (e.g. V_ASN1_NULL vs. V_ASN1_ARRAY)
+    size_t length;         // Length of the data
+    unsigned char *data;   // Pointer to raw data bytes
+} ASN1_ELEMENT;
+
+typedef struct {
+    unsigned char *oid;    // Signature algorithm OID
+    size_t oid_len;        // Length of the OID
+    ASN1_ELEMENT *params;  // Pointer to algorithm parameters;
+                           // may be NULL to represent an explicit ASN.1 NULL.
+} AlgorithmIdentifier;
+
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+
+// Function to validate that the certificate's algorithm identifier matches the expected one.
+// It first compares the algorithm OID, then checks the parameters by comparing tag, length,
+// and—if present—a byte-for-byte match.
+bool validate_algorithm_identifier(const AlgorithmIdentifier *certAlg,
+                                     const AlgorithmIdentifier *expectedAlg)
+{
+    // 1. Compare the signature algorithm OIDs.
+    if (certAlg->oid_len != expectedAlg->oid_len ||
+        memcmp(certAlg->oid, expectedAlg->oid, certAlg->oid_len) != 0)
+    {
+        return false;
+    }
+
+    // 2. Check for presence/absence mismatch of algorithm parameters.
+    if ((certAlg->params == NULL) != (expectedAlg->params == NULL))
+    {
+        // One is NULL while the other is not.
+        return false;
+    }
+
+    // 3. If both certificate and expected parameters exist, compare their tag, length, and content.
+    if (certAlg->params && expectedAlg->params)
+    {
+        // First, compare the ASN.1 tag fields.
+        if (certAlg->params->tag != expectedAlg->params->tag)
+        {
+            return false;
+        }
+
+        // Next, compare the lengths.
+        if (certAlg->params->length != expectedAlg->params->length)
+        {
+            return false;
+        }
+
+        // Finally, if there is data, perform a byte-for-byte comparison.
+        if (certAlg->params->length > 0)
+        {
+            if (memcmp(certAlg->params->data, expectedAlg->params->data, certAlg->params->length) != 0)
+            {
+                return false;
+            }
+        }
+    }
+
+    // If we reach here, all parts match.
+    return true;
+}
+
+/*
+Example usage:
+
+Assume we have certificate data that has a signature algorithm whose parameters
+are encoded as ASN1_ELEMENT, and an expected value that we want to compare against.
+
+AlgorithmIdentifier certAlg = ...;      // Filled from certificate parsing
+AlgorithmIdentifier expectedAlg = ...;  // Constructed with expected OID and parameters
+if (!validate_algorithm_identifier(&certAlg, &expectedAlg)) {
+    // Certificate is invalid
+}
+else {
+    // Certificate is valid
+}
+
+─────────────────────────────────────────────
+
+Explanation of the Repair:
+
+1. OID Comparison:
+   The function first compares the certificate’s signature OID against the expected OID by
+   checking that their lengths match and that the byte sequences are identical.
+   
+2. Parameters Presence Check:
+   Before comparing the contents of the parameters, it ensures that either both algorithm
+   parameters are present or both are absent. This step ensures that a certificate with a NULL
+   parameter (which carries its own ASN.1 tag) will not match one that has an empty array set.
+
+3. Tag Comparison:
+   If both parameters exist, the repair then checks that the ASN.1 tag (which signifies the
+   type of the element, such as NULL versus an array of REAL) is identical for both. This is the
+   crucial enhancement that prevents misinterpretation.
+
+4. Length and Content Comparison:
+   Finally, the code checks that the lengths are identical and, if there is any data present,
+   that the data matches exactly byte-for-byte.
+
+By following this sequence, we ensure that any discrepancy—whether in the type (tag), length,
+or content of the signature algorithm parameters—leads to the certificate being considered invalid,
+thus addressing the vulnerability.

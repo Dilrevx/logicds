@@ -1,0 +1,16 @@
+The repair introduces a simple conditional check that neutralizes negative return values from the default certificate verification path. Here’s how it works:
+
+1. The code first checks if an application-defined verification callback exists. If it does, the code uses this callback without modification. This preserves the expected behavior for applications that handle certificate verification themselves.
+
+2. If no custom callback is set, the code calls the default internal certificate verification function, X509_STORE_CTX.verify_cert(ctxStore). The vulnerability arises because this function can return a negative value when an internal error occurs (such as an out-of-memory condition). Negative values are not expected by the rest of the SSL/TLS handshake logic, which might then return an unexpected error code (SSL_ERROR_WANT_RETRY_VERIFY).
+
+3. Immediately after calling verify_cert, the repair checks whether the return value (stored in 'i') is negative. If it is, the code resets 'i' to zero. By doing so, the repair effectively neutralizes the erroneous negative value and prevents it from propagating upward to the high-level handshake functions.
+
+4. Resetting the negative value to zero is important because it ensures that the SSL/TLS handshake does not misinterpret the signal as a condition that it cannot handle. Without this check, the handshake might fail unexpectedly because it would see a negative value as a severe error, even if it was just an internal evaluation error that shouldn’t affect the handshake outcome.
+
+In summary, the repair works by:
+• Maintaining the original behavior when a custom verification callback is provided (thus preserving compatibility).
+• Catching any negative return value from the default certificate verification function.
+• Converting a negative value (which indicates an internal certificate verification error) to zero, ensuring that the handshake can continue without misinterpreting the result.
+
+This fix prevents the library from incorrectly signaling an error (specifically SSL_ERROR_WANT_RETRY_VERIFY) to the application, thereby improving the robustness and reliability of the SSL/TLS handshake process when no custom certificate verification callback is used.

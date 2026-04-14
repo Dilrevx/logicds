@@ -1,0 +1,66 @@
+The provided repair addresses a critical vulnerability in the `ssl3_get_cert_verify` function related to the handling of client authentication using Diffie-Hellman (DH) certificates. The original code did not enforce the requirement for a `CertificateVerify` message when a DH certificate was used, which could allow an attacker to bypass authentication by sending specially crafted TLS handshake messages.
+
+### Original Vulnerability Analysis
+
+In the original code snippet:
+
+```java
+if (s.s3.tmp.message_type != Constants.SSL3_MT_CERTIFICATE_VERIFY) {
+    s.s3.tmp.reuse_message = 1;
+    if (peer != null && (type & Constants.EVP_PKT_SIGN) != 0) {
+        al = Constants.SSL_AD_UNEXPECTED_MESSAGE;
+        Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+                Constants.SSL_R_MISSING_VERIFY_MESSAGE);
+        Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);
+        return ret;
+    }
+    return 1;
+}
+```
+
+The code checks if the current message type is not `SSL3_MT_CERTIFICATE_VERIFY`. If it is not, it sets `reuse_message` to 1 and then checks if the peer is not null and if the `type` includes `EVP_PKT_SIGN`. If both conditions are true, it sends a fatal alert indicating a missing `CertificateVerify` message. However, if the `type` does not include `EVP_PKT_SIGN`, it simply reuses the message and returns 1, effectively skipping the `CertificateVerify` requirement for certain types of certificates, including those based on Diffie-Hellman.
+
+This oversight means that if a client presents a DH certificate and does not send a `CertificateVerify` message, the server might accept the authentication process as complete, allowing unauthorized access.
+
+### Repair Explanation
+
+The repair introduces additional logic to ensure that a `CertificateVerify` message is always required when a DH certificate is used, regardless of whether signing is explicitly required. Here's how the repair works:
+
+```java
+if (s.s3.tmp.message_type != Constants.SSL3_MT_CERTIFICATE_VERIFY) {
+    if (peer != null && (type & Constants.EVP_PKT_SIGN) != 0) {
+        al = Constants.SSL_AD_UNEXPECTED_MESSAGE;
+        Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+                Constants.SSL_R_MISSING_VERIFY_MESSAGE);
+        Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);
+        return ret;
+    }
+    // If no peer or signing is not required, still require CERTIFICATE_VERIFY for DH certificates
+    if (peer != null && (type & Constants.EVP_PKT_EXCH) != 0 && (type & Constants.EVP_PKT_DHE) != 0) {
+        al = Constants.SSL_AD_UNEXPECTED_MESSAGE;
+        Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+                Constants.SSL_R_MISSING_VERIFY_MESSAGE);
+        Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);
+        return ret;
+    }
+    s.s3.tmp.reuse_message = 1;
+    return 1;
+}
+```
+
+#### Key Changes
+
+1. **Additional Check for DH Certificates:**
+   - After checking if the `type` includes `EVP_PKT_SIGN`, the repair adds another condition to check if the `type` includes both `EVP_PKT_EXCH` and `EVP_PKT_DHE`. This indicates that the certificate exchange involves Diffie-Hellman.
+   - If both `EVP_PKT_EXCH` and `EVP_PKT_DHE` are set, it means a DH certificate is being used. In this case, the code sends a fatal alert if a `CertificateVerify` message is not received, even if signing is not explicitly required.
+
+2. **Maintaining Existing Functionality:**
+   - The existing functionality remains intact for cases where the `type` includes `EVP_PKT_SIGN`. This ensures that the server continues to require a `CertificateVerify` message for certificates that require signing.
+   - The repair only introduces additional checks for scenarios involving DH certificates, ensuring that the server does not inadvertently skip the `CertificateVerify` step.
+
+3. **Ensuring Security:**
+   - By enforcing the requirement for a `CertificateVerify` message for DH certificates, the repair prevents attackers from bypassing authentication. This aligns with the security requirements of the TLS protocol, which mandates a `CertificateVerify` message for authenticated key exchanges.
+
+### Conclusion
+
+The repair ensures that the server correctly enforces the requirement for a `CertificateVerify` message when a DH certificate is used, thereby mitigating the vulnerability described. This change strengthens the security of the TLS handshake process, preventing unauthorized access and maintaining the integrity of the authentication mechanism.

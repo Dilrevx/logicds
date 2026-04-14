@@ -1,0 +1,108 @@
+Below is one example of a repaired version of the snippet. In this version the alternative chain loop is simplified so that the chain is never reinitialized and so that every removal of a certificate properly updates both the chain length and the last_untrusted counter. (Comments have been added to highlight the repair steps corresponding to the repair description.)
+
+--------------------------------------------------
+/* Repaired version of the certificate chain building/verification snippet */
+do {
+    i = ctx.chain.size();
+    x = ctx.chain.get(i - 1);
+
+    // 1. Handle self‐signed certificate case in a safe way.
+    if (Helper.cert_self_signed(x)) {
+        if (ctx.chain.size() == 1) {
+            ok = ctx.get_issuer(x);
+            if (ok <= 0 || !Helper.equals(x, Helper.lastIssuer)) {
+                ctx.error = Constants.X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT;
+                ctx.current_cert = x;
+                ctx.error_depth = i - 1;
+                if (ok == 1) {
+                    Helper.free(Helper.lastIssuer);
+                    Helper.lastIssuer = null;
+                }
+                bad_chain = 1;
+                ok = cb.call(0, ctx);
+                if (!Helper.booleanOk(ok))
+                    return ok;
+            } else {
+                Helper.free(x);
+                x = Helper.lastIssuer;
+                ctx.chain.set(i - 1, x);
+                ctx.last_untrusted = 0;
+            }
+        } else {
+            // Removing the self-signed certificate from the chain safely.
+            X509 chain_ss = ctx.chain.remove(ctx.chain.size() - 1);
+            Helper.free(chain_ss);  // free any allocated memory
+            ctx.last_untrusted = ctx.chain.size(); // update last_untrusted to match chain size
+            num--;
+            j--;
+            x = ctx.chain.get(num - 1);
+        }
+    }
+
+    // 2. Alternative chain building: follow the chain until we have a candidate or we hit a self-signed cert.
+    while (depth >= num) {
+        if (Helper.cert_self_signed(x))
+            break;
+        ok = ctx.get_issuer(x);
+        if (ok < 0)
+            return ok;
+        if (ok == 0)
+            break;
+        // Successful resolution: update chain without changing the chain container itself.
+        x = Helper.lastIssuer;  
+        ctx.chain.add(x);
+        num++;
+    }
+
+    // 3. Check trust for the current chain state.
+    i = Helper.check_trust(ctx);
+    if (i == Constants.X509_TRUST_REJECTED)
+        break;
+
+    retry = 0;
+    // If not explicitly trusted, and alternative chain search is allowed, try to drop excessive certs.
+    if (i != Constants.X509_TRUST_TRUSTED &&
+          ((param.flags & Constants.X509_V_FLAG_TRUSTED_FIRST) == 0) &&
+          ((param.flags & Constants.X509_V_FLAG_NO_ALT_CHAINS) == 0))
+    {
+        // Process possible alternative chains without reassigning the chain container.
+        while (j-- > 1) {
+            // Instead of reassigning the chain, we simply retrieve the certificate at position j-1.
+            X509 xtmp2 = ctx.chain.get(j - 1);
+            ok = ctx.get_issuer(xtmp2);
+            if (ok < 0)
+                return ok;
+            if (ok > 0) {
+                // Free the temporary issuer as soon as a trusted confirmation is received.
+                Helper.free(Helper.lastIssuer);
+                Helper.lastIssuer = null;
+                // 4. Remove all certificates beyond position j and update last_untrusted.
+                while (num > j) {
+                    X509 removed = ctx.chain.remove(ctx.chain.size() - 1);
+                    Helper.free(removed);
+                    num--;
+                }
+                // Set last_untrusted to the current chain size to ensure subsequent operations use a correct index.
+                ctx.last_untrusted = ctx.chain.size();
+                retry = 1;
+                break;
+            }
+        }
+    }
+} while (retry != 0);
+
+// 5. Final adjustment to ensure chain state integrity
+ctx.last_untrusted = ctx.chain.size();
+--------------------------------------------------
+
+Explanation of Key Changes:
+
+1. Self-Signed Handling remains largely intact. When a self‐signed certificate is at the very start, we retrieve the issuer and validate; otherwise, the certificate is removed and the counter (last_untrusted) is immediately updated.
+
+2. The alternative chain loop now simply appends certificates via ctx.chain.add(x) without reassigning the chain container. This avoids any confusion as to which container is being referenced.
+
+3. When a valid alternative chain candidate is found (via a successful get_issuer call), the code frees any temporary issuer information and then removes all certificates beyond the acceptable chain depth—updating the chain’s length (num) and last_untrusted accordingly. Memory cleanup for each removed certificate is performed immediately.
+
+4. Finally, before leaving the loop, the repair explicitly resets ctx.last_untrusted to the current chain size to avoid any discrepancies.
+
+This patch prevents an attacker from spoofing a CA role by ensuring that any modifications made to the certificate chain are properly tracked and cleaned up, and that the untrusted index always correctly reflects the current chain state.

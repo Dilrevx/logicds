@@ -1,0 +1,15 @@
+The repair addresses the situation where the call to verify the certificate chain may return a negative value, which, according to the OpenSSL behavior noted, indicates an internal error (such as out-of-memory) rather than an intended "non-validation" result. Without a check, a negative return value could propagate through the chain and later confuse applications expecting a positive or zero return, ultimately leading to erroneous error handling where operations might block or be retried unnecessarily.
+
+Here's how the repair works:
+
+1. The function first checks whether an application-specific verification callback is defined (s.ctx.app_verify_callback). If it is, then that callback is invoked to perform the verification by passing the X509_STORE_CTX structure (ctxStore) along with an application-specific argument (s.ctx.app_verify_arg). This maintains the intended flexibility (e.g., custom certificate check implementations).
+
+2. In the absence of an application callback, the code then calls X509_STORE_CTX.verify_cert(ctxStore) to perform default verification. The potential issue here is that if X509_STORE_CTX.verify_cert returns a negative value, it signals an internal error rather than an intentional certificate verification failure.
+
+3. To fix the logical vulnerability, after calling verify_cert the code checks if the return value (i) is negative. If i is less than zero, the repair then assigns zero to i. This effectively prevents the negative error code from being misinterpreted by the calling functions. By converting the negative error to 0, the repair ensures that internal errors (which are not intended for propagation as regular verification outcomes) are not mistakenly treated as a result indicating some incomplete or special retry state in the higher layers (e.g., SSL_ERROR_WANT_RETRY_VERIFY).
+
+4. Lastly, regardless of the branch taken, the result of the verification is stored in s.verify_result, and then the final value of i is returned. This makes sure that the verification outcome is properly communicated and that any internal error does not inadvertently trigger an unexpected error handling behavior in the SSL handshake process.
+
+By handling negative return values appropriately, the repair mitigates the risk of an internal error being misinterpreted by the caller. This change prevents applications from encountering unintended error states, such as SSL_ERROR_WANT_RETRY_VERIFY, which are only supposed to be used if a custom cert verification callback is in place. The approach effectively isolates internal errors and aligns the behavior with the expectations for SSL handshake processes.
+
+In summary, the repair adds a safeguard specifically for negative return values by converting them to a non-negative (zero) value. This ensures that only valid verification results are propagated upward, thereby avoiding potential misinterpretation leading to unexpected SSL behavior.

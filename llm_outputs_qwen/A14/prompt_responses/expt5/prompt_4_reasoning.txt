@@ -1,0 +1,29 @@
+The repair implemented addresses the Critical ChangeCipherSpec (CCS) Injection vulnerability, a significant flaw in the OpenSSL library's handling of the ChangeCipherSpec (CCS) message during the TLS handshake process. This vulnerability can allow a man-in-the-middle (MITM) attacker to inject a CCS message prematurely, leading to the use of a zero-length master key and potentially hijacking the session or obtaining sensitive information.
+
+### Key Components of the Repair
+
+#### 1. Introduction of `SSL3_FLAGS_CCS_OK` Flag
+
+A new flag, `SSL3_FLAGS_CCS_OK`, is introduced to track whether it is appropriate to receive a CCS message at the current stage of the TLS handshake. This flag serves as a critical safeguard to ensure that the CCS message is only processed when it is expected. The flag is part of the `s->s3->flags` bitmask, which holds various flags related to the state of the SSL/TLS connection.
+
+#### 2. Checking the `SSL3_FLAGS_CCS_OK` Flag Before Processing CCS
+
+Before processing a CCS message, the code checks if the `SSL3_FLAGS_CCS_OK` flag is set. This check is performed at the very beginning of the CCS message processing block. If the flag is not set, indicating that a CCS message is not expected at this point in the handshake, the code responds with an error alert (`SSL_AD_UNEXPECTED_MESSAGE`) and terminates the connection with an error code (`SSL_R_CCS_RECEIVED_EARLY`). This action prevents the premature processing of the CCS message, which is the core issue exploited by the CCS Injection vulnerability.
+
+#### 3. Ensuring Proper Validation Checks Remain Intact
+
+While the new flag-based check is added, the existing validation checks for the CCS message are maintained. These checks ensure that the CCS message is correctly formatted (it must be a single byte with a value of `SSL3_MT_CCS`) and that there is a new cipher available to switch to (`s->s3->tmp.new_cipher` should not be `NULL`). The additional flag-based check complements these existing validations, providing an additional layer of security without altering the fundamental correctness of the CCS message processing.
+
+#### 4. Resetting the `SSL3_FLAGS_CCS_OK` Flag After Processing CCS
+
+After the CCS message is successfully processed, the `SSL3_FLAGS_CCS_OK` flag is reset. This is achieved by performing a bitwise AND operation with the bitwise NOT of `SSL3_FLAGS_CCS_OK`. Clearing the flag ensures that subsequent CCS messages are not processed until the flag is appropriately set again during the next valid phase of the handshake. This step is crucial to maintaining the integrity of the handshake process and preventing repeated attacks. The flag reset is placed immediately after the successful processing of the CCS message and before the `goto start;` statement, ensuring that the handshake proceeds correctly to the next phase.
+
+#### 5. Logging and Error Reporting
+
+When the CCS message is rejected due to the `SSL3_FLAGS_CCS_OK` flag not being set, the code logs an error using `SSLerr` and sets an appropriate alert level (`SSL_AD_UNEXPECTED_MESSAGE`). This provides clear feedback about the nature of the error and aids in debugging and monitoring for potential attacks. The error reporting mechanism helps administrators and developers understand why a connection was terminated and assists in identifying malicious activities.
+
+### Broader Impact on Security
+
+By implementing these changes, the repair effectively addresses the CCS Injection vulnerability by ensuring that the CCS message is only processed when it is expected and valid within the context of the TLS handshake. This enhancement significantly improves the security of OpenSSL and protects against MITM attacks that exploit the improper handling of CCS messages. The introduction of the `SSL3_FLAGS_CCS_OK` flag and its careful management throughout the handshake process demonstrate a proactive approach to securing the TLS protocol against known vulnerabilities.
+
+In summary, the repair is a well-thought-out solution that balances the need for robust security measures with the requirement to maintain the correct functionality of the TLS handshake. It introduces a new flag to control the timing of CCS message processing, checks this flag before processing, maintains existing validation mechanisms, resets the flag after processing, and ensures thorough error logging and reporting. These steps collectively enhance the security posture of OpenSSL and help protect against the CCS Injection vulnerability.

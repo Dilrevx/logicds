@@ -1,0 +1,64 @@
+To fix the vulnerability in the given code snippet, we need to ensure that the connection is properly closed and the resources are released when the client terminates the connection. Here's a step-by-step approach to repair the code:
+
+### Step 1: Identify the Root Cause
+
+The issue arises when the connection remains in CLOSE_WAIT status indefinitely. This typically occurs when the server is waiting for the client to send a close request, but the client has already terminated the connection.
+
+### Step 2: Implement Proper Connection Closure
+
+To fix this, we need to ensure that the server actively closes the connection when it detects that the client has terminated the connection. We can achieve this by setting a timeout for the CLOSE_WAIT state and closing the connection if the timeout expires.
+
+### Step 3: Modify the Code
+
+Here's the modified code snippet:
+
+```c
+sock = handle->sock;
+if (sock->tid == isc_nm_tid()) {
+    nmhandle_detach_cb(&handle FLARG_PASS);
+} else {
+    isc__netievent_detach_t *event =
+        isc__nm_get_netievent_detach(sock->mgr, sock);
+    /*
+     * we are using implicit "attach" as the last reference
+     * need to be destroyed explicitly in the async callback
+     */
+    event->handle = handle;
+    FLARG_IEVENT_PASS(event);
+    isc__nm_enqueue_ievent(&sock->mgr->workers[sock->tid],
+                           (isc__netievent_t *)event);
+
+    // Set a timeout for the CLOSE_WAIT state
+    struct timeval timeout;
+    timeout.tv_sec = 30; // 30-second timeout
+    timeout.tv_usec = 0;
+
+    // Set the timeout for the socket
+    setsockopt(sock->fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    // Check if the client has terminated the connection
+    if (sock->state == CLOSE_WAIT) {
+        // Close the connection if the timeout expires
+        close(sock->fd);
+        sock->state = CLOSED;
+    }
+}
+```
+
+### Step 4: Handle Asynchronous Callbacks
+
+In the asynchronous callback, we need to ensure that the connection is properly closed and resources are released:
+
+```c
+static void
+nmhandle_detach_cb(isc_nmhandle_t *handle) {
+    //...
+
+    // Close the connection and release resources
+    close(handle->sock->fd);
+    isc_nm_free(handle->sock);
+    isc_nm_free(handle);
+}
+```
+
+By implementing these changes, we can fix the vulnerability and ensure that connections are properly closed and resources are released when the client terminates the connection.

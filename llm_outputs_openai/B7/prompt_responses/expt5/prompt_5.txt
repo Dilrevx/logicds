@@ -1,0 +1,43 @@
+<repair>
+	if (!x509_verify_ctx_validate_legacy_chain(ctx, chain, depth))
+		return 0;
+
+	/*
+	 * First, verify the leaf certificate’s validity and hostname.
+	 * This ensures that any error from leaf verification is captured
+	 * before proceeding.
+	 */
+	if (!x509_verify_cert_valid(ctx, leaf, NULL)) {
+		/* 
+		 * If no deeper error has been recorded yet and the error is not
+		 * the special "unable to get issuer cert locally", capture it
+		 * in the first slot of the certificate error list.
+		 */
+		if (ctx->error_depth == -1 &&
+		    ctx->error != X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY)
+			chain->errors[0] = ctx->error;
+		return 0;
+	}
+
+	if (!x509_verify_cert_hostname(ctx, leaf, name)) {
+		if (ctx->error_depth == -1 &&
+		    ctx->error != X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY)
+			chain->errors[0] = ctx->error;
+		return 0;
+	}
+
+	/*
+	 * Only after the leaf certificate has been verified do we duplicate
+	 * the certificate chain. This preserves any error info from the leaf
+	 * verifications.  If duplication fails, return an out-of-memory error.
+	 */
+	if ((ctx->chains[ctx->chains_count] = x509_verify_chain_dup(chain)) == NULL)
+		return x509_verify_cert_error(ctx, last, depth,
+		    X509_V_ERR_OUT_OF_MEM, 0);
+
+	ctx->chains_count++;
+	/* Mark the context as having successfully processed this chain */
+	ctx->error = X509_V_OK;
+	ctx->error_depth = depth;
+	return 1;
+</repair>

@@ -1,0 +1,50 @@
+Below is one example of a repaired version of the snippet. Notice that the verification of the leaf certificate happens before attempting to duplicate the chain, and that when verifying the leaf certificate (depth zero) a specific check is made so that any error is saved in an array (here referenced as ctx.chain_errors) to record the error state for that level. When the chain is later duplicated, the code immediately returns an out‐of‐memory error if duplication fails, and finally the chain count and overall error state are updated while also recording the (reset) error code for the current depth.
+
+─────────────────────────────────────────────
+// Revised code snippet
+
+// 1. First, verify the leaf certificate validity and hostname.
+if (!X509Utils.x509_verify_cert_valid(ctx, leaf, null)) {
+    // For the leaf certificate (depth 0), if the error is not the known issuer error,
+    // record the error in the chain’s error array. (Replace X509_V_ERR_CERT_ISSUER_NOT_FOUND
+    // with the specific issuer error constant if needed.)
+    if (depth == 0 && ctx.error != X509Constants.X509_V_ERR_CERT_ISSUER_NOT_FOUND)
+        ctx.chain_errors[0] = ctx.error;
+    return 0;
+}
+
+if (!X509Utils.x509_verify_cert_hostname(ctx, leaf, name)) {
+    if (depth == 0 && ctx.error != X509Constants.X509_V_ERR_CERT_ISSUER_NOT_FOUND)
+        ctx.chain_errors[0] = ctx.error;
+    return 0;
+}
+
+// 2. With certificate verification complete, attempt to duplicate the certificate chain.
+if (ctx.chains_count < ctx.max_chains) {
+    ctx.chains[ctx.chains_count] = X509Utils.x509_verify_chain_dup(chain);
+} else {
+    ctx.chains[ctx.chains_count] = null;
+}
+
+// Immediately check if the chain duplication was successful.
+if (ctx.chains[ctx.chains_count] == null) {
+    return X509Utils.x509_verify_cert_error(ctx, last, depth, X509Constants.X509_V_ERR_OUT_OF_MEM, 0);
+}
+
+// 3. Update the context state: increment the chain count and reset the error.
+ctx.chains_count++;
+ctx.error = X509Constants.X509_V_OK;
+
+// 4. Record the (now reset) error code into the chain’s error array at the current depth.
+ctx.chain_errors[depth] = ctx.error;
+
+─────────────────────────────────────────────
+
+Explanation of key repair steps:
+
+• Certificate and hostname validation are now executed first. This reordering ensures that any error at the leaf (depth 0) is captured immediately.
+• If the depth equals zero and the encountered error is not a specific known issuer error, then that error is stored (for example, in ctx.chain_errors[0]). This way, even if the verification callback later decides to continue after the error, the error from the leaf certificate is not lost.
+• Only after successful validation is the certificate chain duplicated. If duplication fails because, for example, of insufficient memory, the error is returned immediately.
+• Finally, after successful duplication, the chain count is incremented and the overall error state reset to success. The chain’s error array is updated with the fresh error code so that any further diagnostics have a complete record of errors encountered during the validation process.
+
+This repair fixes the vulnerability by preserving the original error state from the leaf certificate verification rather than having it overwritten by the chain duplication process.

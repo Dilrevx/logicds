@@ -1,0 +1,14 @@
+The repair changes how the function handles cases where the supplied DNSKEY is not found in the configured trust anchor table. In the original buggy code, when a key was not found in the trust anchor table (or only partially matched), the function would simply return success. This allowed an attacker to potentially inject forged zone data because the failure to find a valid trust anchor did not cause the validator to treat the data as invalid.
+
+In the repaired code, after retrieving a key from the DNSKEY RDATA, the code calls dns_keytable_findkeynode to search for a corresponding trust anchor. If the function returns ISC_R_SUCCESS, it means that the supplied key is trusted. In this case, the repair detaches the key from the trust anchor table, updates the trust level on the keyset and keysigs to secure, and sets the flag (goodkey) to true, allowing the validation process to continue correctly.
+
+If the key is not found in the trust anchor table, instead of simply continuing or treating it as a partial match, the code immediately frees the allocated key and returns an error (DNS_R_INVALIDTRUST). By returning an explicit error in this case, the function prevents the possibility of an attacker substituting valid trust anchor–validated data with forged data. Essentially, it enforces that if trust anchors are configured, every DNSKEY RRset must have at least one matching, validated anchor; otherwise, the data is rejected.
+
+Furthermore, cleaning up by freeing the key structure after its use avoids any memory leaks that could arise from leaving unused key resources allocated.
+
+In summary, the fix addresses the vulnerability by ensuring that:
+1. Only a DNSKEY that correctly matches an entry in the trust anchor table is accepted.
+2. The function returns a failure code when no valid trust anchor can be found, rather than silently allowing potentially invalid data.
+3. Key resources are properly cleaned up regardless of the outcome.
+
+This prevents an on-path attacker from taking advantage of the mirror zone feature to replace trusted zone data with forged content, thereby closing the security gap present in the original implementation.

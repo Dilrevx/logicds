@@ -1,0 +1,30 @@
+<repair>
+    /* Prevent double-destruction by marking the handle as detached.
+       (Assumes that handle contains an atomic_flag named "detached".) */
+    if (atomic_flag_test_and_set(&handle->detached))
+        return;
+
+    sock = handle->sock;
+    if (sock->tid == isc_nm_tid()) {
+        nmhandle_detach_cb(&handle FLARG_PASS);
+    } else {
+        isc__netievent_detach_t *event =
+            isc__nm_get_netievent_detach(sock->mgr, sock);
+        if (event == NULL) {
+            /*
+             * If we cannot allocate the asynchronous event,
+             * fall back to performing the detach callback directly.
+             */
+            nmhandle_detach_cb(&handle FLARG_PASS);
+        } else {
+            /*
+             * We are relying on an implicit "attach" as being the last reference –
+             * it will be explicitly released in the asynchronous callback.
+             */
+            event->handle = handle;
+            FLARG_IEVENT_PASS(event);
+            isc__nm_enqueue_ievent(&sock->mgr->workers[sock->tid],
+                                   (isc__netievent_t *) event);
+        }
+    }
+</repair>

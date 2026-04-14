@@ -1,0 +1,14 @@
+The repair adds a check right after the call to X509_verify_cert() to see if it returned a negative value. In the original code, a negative return (indicating an internal error such as an out-of-memory condition) is simply assigned to "i" and then later returned. This negative value can trigger unexpected behavior in the application (e.g., SSL_get_error() returning SSL_ERROR_WANT_RETRY_VERIFY), which is only meant for cases where an application has installed a custom verification callback.
+
+In the repaired code, after the call to X509_verify_cert(), we explicitly check if the returned value "i" is negative. If it is, we set a generic error code (X509_V_ERR_UNSPECIFIED) in s->verify_result to indicate an internal error, and then we set "i" to 0 (treating it as a verification failure). This way, any negative result is normalized to a known failure state rather than propagating an unexpected negative value up the call stack.
+
+By doing so, the function ensures that the negative return value is never passed to higher-level APIs. This prevents the client application from misinterpreting the error as a condition (SSL_ERROR_WANT_RETRY_VERIFY) that should only be used when a certificate verify callback has been set. Essentially, the repair eliminates the vulnerability where the misinterpretation of an internal error could lead to unpredictable application behavior.
+
+In summary, the key changes are:
+
+1. An additional conditional check right after the certificate verification:
+   - If "i < 0", then set s->verify_result to a generic error (X509_V_ERR_UNSPECIFIED) and normalize "i" to 0.
+2. This adjustment makes sure that negative error codes, which are not expected by most applications, are converted into a standard failure indication.
+3. By doing so, it prevents the unexpected SSL_ERROR_WANT_RETRY_VERIFY return value from reaching the application, thereby addressing and eliminating the vulnerability.
+
+This repair thus improves robustness and ensures that error reporting remains consistent and predictable, in line with the expected behavior of the SSL/TLS handshake process.

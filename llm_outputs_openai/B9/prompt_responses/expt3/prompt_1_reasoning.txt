@@ -1,0 +1,21 @@
+The repair adds extra validation to ensure that whenever a certificate for a specific algorithm is presented, the corresponding signature algorithm must match. Essentially, it prevents situations where a client might use a mismatched certificate and signature algorithm that could allow bypassing the certificate check.
+
+Here’s the walkthrough of the changes made for each algorithm family:
+
+1. ED25519 and ED448:
+   • The original code only checked if the signature algorithm was used without a matching certificate flag. The repair adds an extra check: if the certificate flag for ED25519 (or ED448) is set, but the signature algorithm in the message is not the corresponding one, then the verification fails. This ensures that both the presence of the certificate and the matching signature algorithm are mandatory.
+   • This means if a client sends an ED25519 certificate, it is forced to use the ED25519 signature algorithm; otherwise, an error is triggered.
+
+2. ECC:
+   • Similar to the ED curves, both consistency checks are enforced. Not only does the code verify that an ECC signature isn’t used unless an ECC certificate is present, it also checks that a present ECC certificate forces use of the ECC signature algorithm.
+   • This synchronizes the signature and certificate types, avoiding any possibility of the handshake bypass by mixing a certificate with an algorithm from a different authentication type.
+
+3. PQC (Falcon):
+   • The code supports two signature algorithms (Falcon Level 1 and Falcon Level 5). The repair confirms that if either Falcon signature algorithm is used, there must be a corresponding Falcon certificate (“peerFalconKeyPresent”). Moreover, if there’s any Falcon certificate present, the signature algorithm must be one of the two allowed Falcon levels.
+   • This keeps the two operations in sync, so a fraudulent signature algorithm cannot be accepted even if some form of Falcon certificate is present.
+
+4. RSA:
+   • The repair continues enforcing that no PKCS#1.5 signature is used (which is not allowed in TLS 1.3) and additionally checks for the consistency between RSA certificate and RSA-PSS signature.
+   • If an RSA certificate is present, the signature algorithm must be RSA-PSS; any mismatch triggers an error. This measure closes any loophole where the RSA certificate might have been used with a different signature algorithm, bypassing certificate verification.
+
+Overall, the vulnerability was that the TLS client could potentially bypass the certificate check if there was a mismatch between the signature algorithm and the certificate type. By adding bidirectional checks (verifying that if a certificate is present, then the signature algorithm must match, and vice versa), the repair ensures that both the certificate and the signature parts of the handshake are consistent. This mitigates the vulnerability by ensuring that a certificate cannot be falsely supplemented with a different signature algorithm, which could otherwise lead to improper authentication and potentially allow a man-in-the-middle or similar attack.

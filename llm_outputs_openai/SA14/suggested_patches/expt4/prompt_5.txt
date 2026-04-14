@@ -1,0 +1,84 @@
+package master;
+
+import common.TlsState;
+import common.HandshakeStates;
+import common.HandshakeException;
+
+public class TlsClient {
+    public TlsState state;
+
+    public TlsClient() {
+        this.state = new TlsState();
+        this.state.handshakeStage = 0;
+        this.state.flags = 0;
+        this.state.handshakeComplete = false;
+        this.state.masterSecretDerived = false;
+        this.state.SSL3_FLAGS_CCS_OK = 0x0080;
+    }
+
+
+    public int ssl3_connect() {
+        int ret = -1;
+        switch (state.handshakeStage) {
+            case 0:
+                System.out.println("Client: Sending ClientHello");
+                // Start waiting for the Finished message (without having processed a ChangeCipherSpec)
+                state.handshakeStage = HandshakeStates.SSL3_ST_CR_FINISHED_A;
+                ret = 1;
+                break;
+            case HandshakeStates.SSL3_ST_CR_FINISHED_A:
+                // In this state we expect the Finished message.
+                // If a ChangeCipherSpec message was received prematurely,
+                // reject the handshake to protect against CCS injection.
+                if (state.receivedCCS) {
+                    throw new HandshakeException("Unexpected ChangeCipherSpec message received during Finished phase");
+                }
+                System.out.println("Client: Processing Finished message");
+                ret = ssl3_get_finished();
+                if (ret <= 0)
+                    return ret;
+                // After a correct Finished message, expect the valid CCS.
+                state.handshakeStage = HandshakeStates.SSL3_ST_CR_FINISHED_B;
+                break;
+            case HandshakeStates.SSL3_ST_CR_FINISHED_B:
+                // Now verify that a legitimate ChangeCipherSpec message is received.
+                if (!state.receivedCCS) {
+                    throw new HandshakeException("Expected ChangeCipherSpec message was not received");
+                }
+                System.out.println("Client: Processing ChangeCipherSpec message");
+                state.handshakeStage = HandshakeStates.SSL_ST_OK;
+                ret = 1;
+                break;
+            case HandshakeStates.SSL_ST_OK:
+                state.handshakeComplete = true;
+                ret = 1;
+                break;
+            default:
+                throw new HandshakeException("Client: Unknown handshake state");
+        }
+        return ret;
+    }
+
+
+    private int ssl3_get_finished() {
+        System.out.println("Client: ssl3_get_finished() succeeded");
+        return 1;
+    }
+
+    public int readChangeCipherSpec() {
+        if ((state.flags & state.SSL3_FLAGS_CCS_OK) == 0) {
+           return 0;
+        }
+        System.out.println("Client: CCS accepted");
+        state.flags &= ~state.SSL3_FLAGS_CCS_OK;
+        return 1;
+    }
+
+    public void readServerFinished() {
+        if (state.handshakeStage != HandshakeStates.SSL_ST_OK) {
+            throw new HandshakeException("Client: Not ready for Finished");
+        }
+        System.out.println("Client: Received Finished; handshake complete");
+        state.handshakeComplete = true;
+    }
+}

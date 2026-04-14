@@ -1,0 +1,22 @@
+The repair focuses on the section of code handling the NULL cipher logic in the TLS 1.3 handshake. In the original (buggy) code, the block was commented out and combined vulnerable and non-vulnerable behaviors in a confusing manner. This could lead to the wrong branch being executed, resulting in an insecure state where the negotiation or processing of the pre-shared key (PSK) and related cipher settings might not be correctly applied.
+
+Below is a walkthrough of the repair:
+
+1. The repaired code clearly checks the value of *extMsgType. If it equals server_hello, the code enters the branch where it processes PSK information in a secure way. This ensures that if the message is indeed a server_hello, it strictly follows the expected PSK processing steps.
+
+2. Inside this branch, it searches for a PreSharedKey entry within the TLS extensions by using TLSX_Find. Then, through iteration (using a while loop), it looks for a PSK that has been marked as chosen. This part is critical, because without this check the handshake could mistakenly negotiate an insecure state or even process an incorrect PSK.
+
+3. If no valid PSK is found, the code explicitly clears out any residual state: it sets the resuming flag to 0, clears the PSK key size, and wipes the PSK key. This is an important security mechanism that ensures an attacker cannot inject or leverage leftover PSK data, thereby preventing misuse of previous session keys.
+
+4. If a valid PSK is found, it calls SetupPskKey(ssl, psk, 0) to safely set up the PSK key. The return value of this function is checked immediately; if there is any error, the function returns early. This early exit further prevents proceeding in an inconsistent state.
+
+5. Once the PSK is handled correctly, the code flags that encryption is enabled (ssl->keys.encryptionOn = 1) and finalizes the server state by setting it to SERVER_HELLO_COMPLETE.
+
+6. In the else branch (i.e., if *extMsgType is not server_hello), the code correctly adjusts the logic for a hello retry request by setting the TLS 1.3 flag and transitioning to SERVER_HELLO_RETRY_REQUEST_COMPLETE. It also restarts the handshake hash by calling RestartHandshakeHash(ssl); this ensures that the handshake resynchronizes its state securely.
+
+By restructuring the null cipher code block into clear conditional statements, the repair prevents a logical vulnerability where an attacker might force an ambiguous state between handling a proper server hello and a hello retry request. Specifically, the corrected sequence ensures that:
+• PSK processing and cipher suite negotiation are only executed for a server_hello message.
+• Incorrect or missing PSK entries are handled safely by clearing any sensitive data.
+• The state transition in the handshake is clear and unambiguous, preventing any accidental fall-through that could lead to insecure processing.
+
+In summary, the repair strengthens the code by separating the handling of server_hello and hello retry requests, validating the PSK thoroughly, and ensuring that the confidential keys and cipher parameters are set only when appropriate. This prevents misuse of keys or inadvertent exposure of session data, which directly addresses the logical vulnerability present in the original code.

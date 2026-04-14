@@ -1,0 +1,20 @@
+The repair augments the query lookup function by taking an additional parameter—recv_fd—which represents the file descriptor on which the reply was received. This extra parameter is then compared against a recorded socket/file descriptor (f->socket_fd) that was used when the original query was sent out.
+
+Originally, the code only checked that the reply’s identifier (new_id) and, if provided, the hash matched the forwarded query. This was a security risk because an attacker could forge a reply with the correct identifier (and hash if known), and there was no guarantee that the reply actually originated from the same communication channel (socket) that the legitimate query was sent on. By simply matching on these two attributes, it became easier for an attacker to recreate or guess appropriate values and successfully inject a fake response.
+
+With the repair, the function now iterates over each pending query (frec) checking:
+1. That the query was actually sent.
+2. That the query’s identifier and hash match the reply.
+3. Crucially, that the reply’s associated file descriptor (recv_fd) is identical to the one stored in the pending query (f->socket_fd).
+
+This extra socket validation is significant because the file descriptor effectively encapsulates the network socket from which the query was sent. For both IPv4 and IPv6, if the query was sent using a random port, it is necessary for the same channel (and hence the same file descriptor) to be used for the reply to be considered valid. This follows the spirit of RFC5452—requiring multiple matching attributes (in this case, including network-level details) to mitigate DNS cache poisoning.
+
+The detailed steps in the repair are as follows:
+• First, the function now accepts a third parameter (recv_fd) representing the file descriptor of the received message.
+• The loop then checks whether each query (f) in the list was actually sent.
+• It then checks whether the reply’s identifier (id) and the optional hash match what was recorded for the forward query.
+• Finally, the repair introduces a new condition: if the file descriptor used to send the query (stored as f->socket_fd) does not match recv_fd, the reply is ignored. Only if all checks pass does the function return the query record.
+
+This means that even if an attacker manages to forge a DNS response that happens to have the correct query identifier and hash, the response will be discarded if it doesn’t come in on the same network socket as the original forwarded query. Requiring the network socket to match makes it much harder for an attacker to predict or intercept the right socket details, thus significantly reducing the potential for cache poisoning attacks.
+
+In summary, by comparing the file descriptor from which the reply is received with the one associated with the sent query, the repair ensures that replies are only accepted if they originate on the same network channel. This added validation aligns the behavior with RFC5452, substantially narrowing the window for an attacker to successfully spoof a DNS response.

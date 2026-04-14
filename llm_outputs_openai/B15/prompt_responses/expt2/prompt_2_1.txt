@@ -1,0 +1,65 @@
+<repair>
+	/*
+	 * First, attempt to locate candidate trust anchor keys.
+	 */
+	result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+	                                   dst_key_alg(key), dst_key_id(key),
+	                                   &keynode);
+	if (result == ISC_R_SUCCESS) {
+		/*
+		 * Iterate over all candidate keynodes to locate an exact match
+		 * using a secure key comparison.
+		 */
+		while (keynode != NULL) {
+			/*
+			 * Compare the provided key and the key from the candidate node.
+			 * Assume that dst_key_securecompare() returns 0 when the two keys match.
+			 */
+			if (dst_key_securecompare(key, dns_keynode_getkey(keynode)) == 0) {
+				/* Exact match found: detach it and mark the key as trusted. */
+				dns_keytable_detachkeynode(vctx->secroots, &keynode);
+				dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+				dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+				*goodkey = true;
+				/* No need to examine further candidates. */
+				break;
+			} else {
+				/*
+				 * Candidate does not match.
+				 * Detach this candidate and attempt to retrieve the next one.
+				 */
+				dns_keytable_detachkeynode(vctx->secroots, &keynode);
+				result = dns_keytable_findnextkeynode(vctx->secroots, vctx->origin,
+				                                       dst_key_alg(key), dst_key_id(key),
+				                                       &keynode);
+				/*
+				 * If no further candidate is found, terminate the loop.
+				 */
+				if (result != ISC_R_SUCCESS)
+					keynode = NULL;
+			}
+		}
+		/*
+		 * Regardless of whether an exact match was found, normalize the result.
+		 */
+		result = ISC_R_SUCCESS;
+	} else if (result == DNS_R_PARTIALMATCH || result == ISC_R_NOTFOUND) {
+		/*
+		 * No candidate key was found; this is not an error.
+		 */
+		result = ISC_R_SUCCESS;
+	} else {
+		/*
+		 * Propagate any other errors.
+		 */
+		goto cleanup;
+	}
+
+cleanup:
+	/*
+	 * Clean up allocated resources.
+	 */
+	dst_key_free(&key);
+
+	return (result);
+</repair>

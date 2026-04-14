@@ -1,0 +1,15 @@
+The repair introduces additional checks to ensure that if the SRTP restart process fails, the insecure RTP fallback is avoided completely. Here’s the walk-through:
+
+1. Re-run SRTP unprotect only after successfully restarting SRTP:  
+   The original code would attempt to re-run srtp_unprotect after a restart (regardless of the restart’s success status) if error conditions were met. In our repair, after calling pjmedia_transport_srtp_stop and pjmedia_transport_srtp_start, we check if the status is not PJ_SUCCESS. If the restart fails, the function immediately returns without processing the packet further. By doing so, we prevent the risky fallback path where the media might be transmitted using basic RTP.
+
+2. Early exit on restart failures:  
+   If pjmedia_transport_srtp_start returns an error (status != PJ_SUCCESS), the repair simply returns and does not continue. This is crucial because continuing after a failed restart would mean the packet data would be processed insecurely, exposing the vulnerability described. Dropping the packet in this scenario mitigates the risk of sending media insecurely.
+
+3. Check for valid reprotection post-restart:  
+   After a successful restart, the code runs srtp_unprotect again on the packet. If the unprotect operation still fails (i.e., err != PJ_SUCCESS), it again stops further processing by returning. This double-check ensures that only properly decrypted, secure packets reach the RTP callback for further handling.
+
+4. Safe packet delivery only after successful SRTP operations:  
+   Finally, the code ensures that only if SRTP unprotection is successful (err == PJ_SUCCESS) and there is a valid RTP callback does the packet get passed on. This avoids further processing of packets that might have bypassed secure transport layers.
+
+Overall, these changes ensure that if SRTP restart does not succeed, the fallback to basic RTP is completely avoided. By terminating processing early when errors occur, the repair effectively addresses the vulnerability where media could be transmitted insecurely after an SRTP restart failure, ensuring that all media is handled only if secured SRTP is in operation.

@@ -1,0 +1,34 @@
+Below is one way to fix the vulnerability. In the buggy code the unconditional acceptance of an “EAP-TLV Success” packet lets an attacker complete authentication early. In our patch we make sure that a success TLV is processed only when Phase 2 has really started (or when other internal checks have been passed) rather than immediately trusting any success packet. One example patch follows:
+
+––––– Begin Patch –––––
+  /* Earlier in the state machine, set a flag like “phase2_started” when Phase 2 begins. */
+  
+  if (status == EAP_TLV_RESULT_SUCCESS) {
+    wpa_printf(MSG_INFO, "EAP-TLV: TLV Result - Success received");
+
+    /* Only accept TLV success if Phase 2 has actually started.
+     * (For example, phase2_started is set true by the Phase 2 negotiation code.)
+     * This rejects premature success packets that could be injected to bypass authentication.
+     */
+    if (!phase2_started) {
+      wpa_printf(MSG_INFO, "EAP-TLV: Unexpected Success packet: Phase 2 not initiated – forcing failure");
+      resp_status = EAP_TLV_RESULT_FAILURE;
+      ret->decision = DECISION_FAIL;
+    } else if (force_failure) {
+      wpa_printf(MSG_INFO, "EAP-TLV: Earlier failure – force failed Phase 2");
+      resp_status = EAP_TLV_RESULT_FAILURE;
+      ret->decision = DECISION_FAIL;
+    } else {
+      resp_status = EAP_TLV_RESULT_SUCCESS;
+      ret->decision = DECISION_UNCOND_SUCC;
+    }
+  } else if (status == EAP_TLV_RESULT_FAILURE) {
+    /* existing handling for failure status */
+  }
+––––– End Patch –––––
+
+Explanation of the repair:
+1. We add a check for whether Phase 2 has been initiated (for example by a flag “phase2_started” that should be set when the system actually enters Phase 2). If the success packet is received but Phase 2 never started, we treat it as an attack and force an authentication failure.
+2. The rest of the code (including the force_failure check) remains the same.
+
+With this change even if the client is misconfigured to not verify the TLS certificate during Phase 1, an attacker trying to send an unsolicited EAP-TLV Success packet will not be able to bypass Phase 2 authentication because the code now requires that Phase 2 be in progress before any success result is accepted.

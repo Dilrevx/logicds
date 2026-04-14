@@ -1,0 +1,70 @@
+Q: You will provide a repair for a mentioned buggy code snippet to fix a vulnerability.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+A TLS v1.3 client attempting to authenticate a TLS v1.3 server can have its certificate check bypassed. If the sig_algo in the certificate_verify message is different than the certificate message checking may be bypassed.
+</vulnerability_description>
+Here is the buggy source code:
+<buggy_code>
+        #ifdef HAVE_ED25519
+            if (args->sigAlgo == ed25519_sa_algo &&
+                                                  !ssl->peerEd25519KeyPresent) {
+                WOLFSSL_MSG("Peer sent ED25519 sig but not ED25519 cert");
+                ret = SIG_VERIFY_E;
+                goto exit_dcv;
+            }
+        #endif
+        #ifdef HAVE_ED448
+            if (args->sigAlgo == ed448_sa_algo && !ssl->peerEd448KeyPresent) {
+                WOLFSSL_MSG("Peer sent ED448 sig but not ED448 cert");
+                ret = SIG_VERIFY_E;
+                goto exit_dcv;
+            }
+        #endif
+        #ifdef HAVE_ECC
+            if (args->sigAlgo == ecc_dsa_sa_algo &&
+                                                   !ssl->peerEccDsaKeyPresent) {
+                WOLFSSL_MSG("Peer sent ECC sig but not ECC cert");
+                ret = SIG_VERIFY_E;
+                goto exit_dcv;
+            }
+        #endif
+        #ifdef HAVE_PQC
+            if (args->sigAlgo == falcon_level1_sa_algo && !ssl->peerFalconKeyPresent) {
+                WOLFSSL_MSG("Peer sent Falcon Level 1 sig but different cert");
+                ret = SIG_VERIFY_E;
+                goto exit_dcv;
+            }
+            if (args->sigAlgo == falcon_level5_sa_algo && !ssl->peerFalconKeyPresent) {
+                WOLFSSL_MSG("Peer sent Falcon Level 5 sig but different cert");
+                ret = SIG_VERIFY_E;
+                goto exit_dcv;
+            }
+        #endif
+
+        #ifndef NO_RSA
+            if (args->sigAlgo == rsa_sa_algo) {
+                WOLFSSL_MSG("Peer sent PKCS#1.5 algo but not in certificate");
+                ERROR_OUT(INVALID_PARAMETER, exit_dcv);
+            }
+            if (args->sigAlgo == rsa_pss_sa_algo &&
+                         (ssl->peerRsaKey == NULL || !ssl->peerRsaKeyPresent)) {
+                WOLFSSL_MSG("Peer sent RSA sig but not RSA cert");
+                ret = SIG_VERIFY_E;
+                goto exit_dcv;
+            }
+        #endif
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair takes a unified, consolidated approach to ensuring that the signature algorithm specified in the certificate verify message actually corresponds to the type of certificate provided by the peer. In the original code, each signature algorithm check performed an independent validation with an immediate error return if the corresponding certificate’s presence flag wasn’t set. This design could be exploited by mismatching the signature algorithm with the certificate, bypassing critical certificate validation.
+
+To resolve the issue, the repair first removes the immediate error returns and instead introduces a single boolean variable (referred to as a flag) that will indicate whether the provided signature actually matches the certificate type. For each supported algorithm, it checks if the signature algorithm from the TLS record matches a known type. If it does, a message is logged indicating the signature type, and then the flag is set depending on whether the corresponding certificate key flag is true. For instance, when the signature algorithm corresponds to ED25519, the flag is set based on whether an ED25519 key is actually provided by the peer. Similar logic applies for ED448, ECC, and the different PQC signature algorithms.
+
+The repair makes sure that even if multiple algorithms are available, each check now only sets the flag appropriately for that algorithm rather than handling an error immediately. This means that the actual validation of whether the signature is legitimate happens later in a unified check. For RSA-related algorithms, a clear and strict policy is maintained: the PKCS#1.5 algorithm is explicitly marked as not valid for TLS 1.3 by logging an error and terminating processing. For RSA-PSS, validation is performed in a similar manner to other algorithms by setting the flag to true only if a valid RSA key is both provided (i.e., not NULL) and marked as present.
+
+After all possible algorithms have been tested and their corresponding flags set, a single check is made on the flag. If the flag indicates that no valid match between the signature algorithm and the certificate was found, an error message is logged stating that the signature algorithm does not correspond to a valid certificate. The function then terminates the certification verification process and returns an error value.
+
+Overall, this repair ensures that there is a proper, sequential check correlating the signature algorithm to the expected certificate. By consolidating the error handling into one final decision based on the flag, the repair prevents bypassing the certificate check when the signature algorithm does not match the certificate content. This method eliminates the possibility of a mismatch where the certificate key presence was not properly validated, thus closing the vulnerability that previously allowed an attacker to provide a signature using one algorithm while bypassing the certificate check with a different algorithm.
+</repair_description>
+A: Let's think step by step.

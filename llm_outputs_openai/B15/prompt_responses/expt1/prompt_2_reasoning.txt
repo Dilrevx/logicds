@@ -1,0 +1,13 @@
+The repair primarily addresses a logical vulnerability in the part of the code that handles the trust anchor checking for a DNSKEY. Originally, once the code obtained a key from the record (with dns_dnssec_keyfromrdata), it did not check whether the key was actually trusted (i.e. present in the provided trust anchor table within vctx->secroots). This could lead to incorrectly marking a key as good (by setting *goodkey = true) even if it wasn’t trusted. This weakness might allow an attacker to craft DNS responses that are not properly authenticated against the trust anchors.
+
+Below is a step-by-step explanation of the repair:
+
+1. After obtaining the key through dns_dnssec_keyfromrdata(), the code now invokes dns_dnssec_trustanchor() to verify that the key is in the trust anchor table (vctx->secroots). This function is assumed to check if the key matches any trusted anchors. If the newly acquired key is not trusted, the function frees up the allocated resource using dst_key_free(key) and returns an error result (ISC_R_FAILURE).
+
+2. By adding the trust anchor check, the code avoids the vulnerability where an unverified key might have been accepted as good. This change ensures that only keys verified against the provided trust anchors are marked as good by setting *goodkey = true. In other words, it securely validates the authority of a DNSKEY before accepting it as valid.
+
+3. Memory management is also handled properly. Regardless of whether the key is trusted or not, the key resource is explicitly freed with dst_key_free(key) before returning. This is important to prevent resource leaks, which can be another source of vulnerabilities, though it might have not been the primary issue in this case.
+
+4. Finally, the function returns ISC_R_SUCCESS if the key is found in the trust anchor, meaning that the DNSKEY is a valid and trusted key. The execution path is now more secure, as invalid or untrusted keys result in an immediate error and are not marked as good.
+
+In summary, the repair adds a crucial check against the trust anchor table. It ensures that any DNSKEY being validated is compared with trusted anchors, thus eliminating the potential for a spoofed key to be accepted as good. The repair improves the integrity of the DNSSEC validation process, aligning the code with the intended security requirements for trust anchor verification.

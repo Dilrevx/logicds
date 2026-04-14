@@ -1,0 +1,44 @@
+Certainly! The repair provided addresses a significant security vulnerability in the handling of TLS 1.3 sessions within the wolfSSL library. The core issue revolves around the potential use of a predictable default buffer as the Input Keying Material (IKM) when neither a Pre-Shared Key (PSK) extension nor a Key Share Extension (KSE) is received from the server during the TLS handshake process. This scenario can allow an attacker to reconstruct the session master secret, leading to compromised session security.
+
+### Vulnerability Overview
+
+TLS 1.3, the latest version of the Transport Layer Security protocol, emphasizes security and efficiency. It introduces several new features, including the use of pre-shared keys and ephemeral key exchanges via key shares. During the TLS 1.3 handshake, the client and server negotiate parameters that determine the security of the session, including the method for key derivation. One critical parameter is the IKM, which is used to derive the session master secret.
+
+In the original code snippet, there is no explicit check to ensure that at least one of the required extensions (PSK or KSE) is present before proceeding with the encryption setup. If neither extension is provided, the code uses a default buffer for the IKM. This default buffer is predictable and can be exploited by an attacker to deduce the session master secret, compromising the confidentiality and integrity of the communication.
+
+### Repair Implementation
+
+The repair introduces a critical validation step to address this vulnerability. Here's a detailed explanation of the changes:
+
+#### Step-by-Step Breakdown
+
+1. **Initial PSK Handling**:
+   - The code checks if the received extension type is `server_hello`.
+   - It then searches for the `TLSX_PRE_SHARED_KEY` extension within the SSL extensions.
+   - If the extension is found, it retrieves the `PreSharedKey` object.
+   - The code iterates through the list of PSKs until it finds one that has been chosen by the server (`psk.chosen`).
+   - If no suitable PSK is found, the code resets PSK-related options and clears the PSK key array to ensure no residual data is used.
+
+2. **Validation for Missing Extensions**:
+   - After handling the PSK, the repair code introduces a conditional check:
+     ```java
+     if (!ssl.options.pskNegotiated && ssl.session.namedGroup == 0) {
+         return CommonsConstants.EXT_MISSING;
+     }
+     ```
+   - This condition checks two things:
+     - `!ssl.options.pskNegotiated`: Ensures that no valid PSK was negotiated during the handshake.
+     - `ssl.session.namedGroup == 0`: Checks if the named group associated with the Key Share Extension is unset. The named group specifies the elliptic curve or finite field to be used for the key exchange.
+   - If both conditions are true, meaning neither a valid PSK nor a valid key share mechanism is available, the function returns `CommonsConstants.EXT_MISSING`. This action halts the handshake process and signals an error, preventing the establishment of a session based on a predictable IKM.
+
+3. **Continuation of Handshake**:
+   - If either a PSK is negotiated (`ssl.options.pskNegotiated`) or a valid named group is present (`ssl.session.namedGroup != 0`), the handshake continues as intended.
+   - Encryption is enabled (`ssl.keys.encryptionOn = true`), and the server state is updated to reflect the completion of the `ServerHello` phase (`ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE`).
+
+### Impact and Benefits
+
+- **Security Enhancement**: By ensuring that at least one of the required key exchange mechanisms (PSK or Ephemeral Key Exchange) is present, the repair significantly enhances the security of TLS 1.3 sessions. It prevents the use of a predictable IKM, which could otherwise be exploited by attackers.
+- **Error Handling**: The introduction of error handling for missing extensions provides clear feedback when the handshake cannot proceed due to configuration issues. This can help in diagnosing and fixing problems more effectively.
+- **Compliance with Standards**: The repair aligns with the TLS 1.3 standard, which mandates the use of at least one key exchange mechanism to derive the session keys securely.
+
+In summary, the repair ensures that the TLS 1.3 session cannot proceed unless at least one of the required key exchange mechanisms is properly established. This change effectively mitigates the risk of session key compromise, ensuring the integrity and confidentiality of the communication channel.

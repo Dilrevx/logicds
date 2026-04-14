@@ -1,0 +1,20 @@
+The repair adds a state check to ensure that the ChangeCipherSpec (CCS) message is only processed when it is actually expected during the handshake. Previously, the code validated only the format of the CCS message (its length and content) and ensured the new cipher was available. However, without checking if the CCS was appropriate for the current handshake phase, an attacker might have been able to inject an unsolicited CCS message and disrupt the protocol by triggering an unexpected cipher change.
+
+Here’s a walkthrough of the changes:
+
+1. Format and Cipher Checks Remain Unchanged:
+  • The first step confirms that the record is exactly one byte long, starts at offset zero, and carries the correct CCS value. This ensures that the basic record formatting is correct.
+  • The code then checks that a new cipher has already been negotiated (i.e., s->s3->tmp.new_cipher is not NULL). This confirms that the CCS is not coming too early in the handshake.
+
+2. New State Check for Expected CCS:
+  • The repair introduces a new condition, “if (!s->s3->expect_ccs)”, to verify whether the handshake state actually expects a CCS message at this moment. This additional check prevents an attacker from sending a rogue CCS message when it is not appropriate.
+  • If the expected state flag (expect_ccs) is not set, an error alert is raised, logging the issue and causing the handshake to terminate. This protects against any attempts to exploit the handshake sequence.
+
+3. Clearing the CCS Expectation:
+  • Once the CCS message is verified as expected, the flag s->s3->expect_ccs is cleared. This is crucial because it prevents the same message or any subsequent CCS messages from being processed out of turn during the remainder of the handshake. Clearing the flag reinforces that the CCS message has been recognized and handled properly.
+
+4. Proceeding with the Original Flow:
+  • Following these state validations, the record’s length is set to zero, and if a message callback is registered, it is invoked.
+  • Finally, the handshake state is updated by setting s->s3->change_cipher_spec to 1, and the cipher change operation is performed with ssl3_do_change_cipher_spec(s).
+
+In summary, the vulnerability was fixed by tying the acceptance of the CCS message to a specific, expected state during the handshake. This extra step ensures that the CCS is processed only when allowed by the protocol’s logic, protecting against any possible injection of an unexpected CCS message.

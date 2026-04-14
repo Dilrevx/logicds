@@ -1,0 +1,29 @@
+Below is a detailed walkthrough of the repair:
+
+1. Original Vulnerability Context:
+   The buggy code allowed the application’s verification callback (s.ctx.app_verify_callback) to be invoked regardless of whether the built-in verification (using X509_STORE_CTX.verify_cert) succeeded. That means even if the initial certificate verification failed, the app callback would run. This could potentially introduce a security vulnerability where invalid or malicious certificates might be accepted if the callback mishandles error conditions.
+
+2. Built-in Verification First:
+   The first change is to perform the built-in verification using i = X509_STORE_CTX.verify_cert(ctxStore); before checking the application callback. This establishes a “baseline” success of the SSL certificate validation before any additional custom logic is applied. Now the certificate chain is at least verified by OpenSSL’s own logic.
+
+3. Conditional Callback Invocation:
+   After the built-in verification, we check:
+   
+   if (i == 1 && s.ctx.app_verify_callback != null) { 
+       i = s.ctx.app_verify_callback.verify(ctxStore, s.ctx.app_verify_arg);
+   }
+   
+   This condition explicitly ensures that the application-level callback is only invoked if the built-in verification has succeeded—that is, when i equals 1. If the built-in verification fails, we skip calling the potentially untrusted or less rigorously implemented application callback. This prevents the application callback from overriding a failed certificate verification result.
+
+4. Propagating the Error:
+   Regardless of whether the callback was called, the verification result error code is stored in s.verify_result using:
+   
+   s.verify_result = ctxStore.get_error();
+   
+   This ensures that any failure information from the certificate chain verification remains accessible for logging or error-handling purposes.
+
+5. Return the Final Status:
+   Finally, the result i, which reflects either the outcome of the built-in verification or the overridden result from the application callback (if it was safe to invoke), is returned. By doing so, the function upholds the integrity of the certificate verification process.
+
+Summary:
+The repair fixes the vulnerability by ensuring that the built-in certificate verification (which is assumed to be secure) is always the first step. The application callback is then conditionally invoked only when this built-in check passes. This prevents a scenario where a flawed or compromised callback might approve a certificate that already had problems detected by standard verification. Overall, the change reinforces the security boundary and maintains a proper flow of verification, mitigating the risk of improper certificate validation.

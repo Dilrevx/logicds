@@ -1,0 +1,13 @@
+The repair changes the behavior in the error-handling block to differentiate between fatal system errors and ordinary certificate verification failures. Here’s a walk-through:
+
+1. Originally, the code checked if “ret <= 0” and then treated any non-positive return as a fatal error by calling ERR.raiseData and returning a negative error code. This behavior doesn’t align with the expected behavior for certificate verification. In cases without the special OCSP_NOCHECKS flag, the convention is to return 0 (indicating a verification failure) rather than a negative value (indicating a fatal error).
+
+2. In the repaired version, the condition is changed to “if (ret < 0)” instead of “if (ret <= 0)”. This means that if the verification process returned a 0 value (which represents a certificate verification failure), then the block is not executed. The value 0, therefore, neatly signals that the verification failed without implying a fatal error.
+
+3. If ret is negative (ret < 0), then this is treated as a fatal error. The code captures the specific error code from the store context (using ctx.getError()) and passes it along to the error handler with a detailed message. This ensures that the error is logged with the specific error code and message string provided by the context.
+
+4. After raising an error message, the code explicitly sets ret to 0. This is crucial because it aligns the function’s return value with the expected behavior for a certificate verification failure rather than propagating a negative error value up to the callers. This prevents the function from erroneously indicating success when the verification has actually failed.
+
+5. Finally, if a chain pointer is provided, the code updates it with the chain computed within the context. Regardless of what happens, before finishing, the context (ctx) is freed to ensure proper resource de-allocation.
+
+By making these changes, the repair ensures that a certificate verification failure is correctly indicated with a return value of 0 and not a negative number. This behavior removes the risk of contradicting signals in the logs/output (i.e., error messages that indicate a failure while returning a “successful” code value). Essentially, it normalizes error reporting in accordance with the expected behavior of the OCSP_basic_verify function and rectifies the vulnerability where misuse of the OCSP_NOCHECKS flag could have otherwise led to a misleading verification result.

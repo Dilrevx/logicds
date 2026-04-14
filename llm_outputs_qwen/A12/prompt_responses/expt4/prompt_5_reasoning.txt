@@ -1,0 +1,34 @@
+The vulnerability described pertains to a TLS v1.3 server that requires mutual authentication. In such a scenario, both the client and the server must present certificates to each other to establish a secure connection. The vulnerability arises because the server does not enforce the requirement for the client to send a `certificate_verify` message, which is critical for verifying the client's identity. This allows a malicious client to connect without presenting a certificate, thereby bypassing the intended security measures.
+
+To address this vulnerability, the repair involves adding a check in the `DoTls13Finished` function to ensure that the server has received a valid certificate from the client before proceeding with the handshake. This check is particularly important when the server is expecting a client certificate (`ssl->options.side == WOLFSSL_SERVER_END` and `!ssl->options.handShakeDone`).
+
+### Detailed Explanation of the Repair:
+
+1. **Context and Functionality**:
+   - The `DoTls13Finished` function is part of the TLS handshake process in the WolfSSL library. It handles the `Finished` message, which is a crucial step in the TLS handshake protocol.
+   - The `Finished` message is sent by both the client and the server to confirm that they have received all the handshake messages up to that point and to verify that the shared secrets have been correctly established.
+
+2. **Identifying the Vulnerability**:
+   - The vulnerability stems from the fact that the server does not check whether the client has provided a certificate (`ssl->options.havePeerCert`) before processing the `Finished` message.
+   - Without this check, a malicious client could skip sending its certificate and the `CertificateVerify` message, leading to an insecure connection where the server incorrectly assumes that the client has authenticated.
+
+3. **Implementing the Repair**:
+   - The repair introduces a conditional check within the `DoTls13Finished` function to verify that the server has received the client's certificate (`ssl->options.havePeerCert`).
+   - This check is placed before the server processes the `Finished` message, ensuring that the server only proceeds with the handshake if it has verified the client's identity.
+   - If the server determines that the client has not sent a certificate (`!ssl->options.havePeerCert`), it sends a fatal alert (`handshake_failure`) to the client and returns an error code (`BAD_CERTIFICATE_ERROR`).
+
+4. **Code Insertion**:
+   - The repair code is inserted at the beginning of the `DoTls13Finished` function, specifically after the initial checks for buffer sizes and before any further processing of the `Finished` message.
+   - This strategic placement ensures that the server performs the certificate verification check as early as possible in the handshake process, minimizing the risk of proceeding with an unauthenticated client.
+
+5. **Impact of the Repair**:
+   - By enforcing the requirement for mutual authentication, the repair enhances the security of the TLS connection.
+   - It prevents unauthorized clients from establishing a connection without proper authentication, thereby mitigating the risk of man-in-the-middle attacks and other forms of impersonation.
+   - The repair maintains compatibility with the existing TLS handshake process while addressing the specific vulnerability related to client certificate verification.
+
+6. **Considerations**:
+   - The repair assumes that the `ssl->options.havePeerCert` flag is correctly set by the server when it receives and verifies the client's certificate.
+   - It is essential that the certificate verification process is robust and that the server properly updates the `ssl->options.havePeerCert` flag based on the outcome of the verification.
+   - The repair does not introduce any additional overhead or performance penalties, as it simply adds a conditional check at the beginning of the function.
+
+In summary, the repair addresses the vulnerability by ensuring that the server only processes the `Finished` message if it has received and verified the client's certificate. This enhancement strengthens the mutual authentication mechanism in TLS v1.3, providing a more secure environment for client-server communications.

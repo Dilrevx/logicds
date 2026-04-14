@@ -1,0 +1,35 @@
+Below is one way to fix the issue. In the original code the caller simply returns 0 when one of the leaf‐verification functions fails and never saves the error that actually occurred. One solution is to capture and save the error code (for example by calling a helper such as get_last_error or by “hard‐coding” an appropriate error code if needed) before returning. For example, if the two verification functions leave an error code behind, you can check for failure and, if ctx.error is still “OK”, update it with the specific error so that later calls (or the caller) can see the proper reason even if a callback told the verifier to continue. Here’s one possible repair:
+
+----------------------------------------------------------------
+        if ((ctx.chains_count < ctx.max_chains 
+             ? (ctx.chains[ctx.chains_count] = X509Utils.x509_verify_chain_dup(chain)) 
+             : null) == null) {
+            return X509Utils.x509_verify_cert_error(ctx, last, depth,
+                X509Constants.X509_V_ERR_OUT_OF_MEM, 0);
+        }
+        
+        if (!X509Utils.x509_verify_cert_valid(ctx, leaf, null)) {
+            // If no error code has been stored yet, capture the error so it’s not lost.
+            if (ctx.error == X509Constants.X509_V_OK)
+                ctx.error = X509Utils.get_last_error();  // or use an appropriate error code
+            return 0;
+        }
+        
+        if (!X509Utils.x509_verify_cert_hostname(ctx, leaf, name)) {
+            if (ctx.error == X509Constants.X509_V_OK)
+                ctx.error = X509Utils.get_last_error();  // similarly capture hostname error
+            return 0;
+        }
+        
+        ctx.chains_count++;
+        ctx.error = X509Constants.X509_V_OK;
+        return 1;
+----------------------------------------------------------------
+
+Step by step explanation:
+1. The code first attempts to duplicate the chain and returns a memory error via x509_verify_cert_error if the allocation fails.
+2. Then the call to x509_verify_cert_valid is made. In the bad code if it fails the function returned 0 without updating ctx.error. In the fixed version, before returning failure, we check if ctx.error is still OK and if so, capture the error (via a helper like X509Utils.get_last_error()).
+3. The hostname verification is then performed similarly. If that fails no error had been recorded, we store the proper error code.
+4. Finally, on success the chain count is incremented and ctx.error is reset to OK.
+
+This change ensures that if an installed callback instructs the verifier to keep going despite an error, the error code is not lost.

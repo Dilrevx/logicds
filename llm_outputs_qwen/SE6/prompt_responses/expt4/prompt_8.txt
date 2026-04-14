@@ -1,0 +1,101 @@
+<repair>
+    public void write_pdu(int lcid, UniqueByteBuffer pdu) {
+        int pd = 0;
+        int msg_type = 0;
+        int sec_hdr_type = 0;
+
+        logger.info(pdu.msg, pdu.N_bytes, "DL %s PDU", rrc.getRbName(lcid));
+
+        RefHolder pdHolder = new RefHolder();
+        RefHolder secHdrHolder = new RefHolder();
+        LiblteMme.parseMsgSecHeader(pdu.get(), pdHolder, secHdrHolder);
+        sec_hdr_type = secHdrHolder.value;
+        switch (sec_hdr_type) {
+            case LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS:
+            case LIBLTE_MME_SECURITY_HDR_TYPE_SERVICE_REQUEST:
+                break;
+            case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY:
+            case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED:
+                if (integrity_check(pdu.get())) {
+                    if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED) {
+                        cipher_decrypt(pdu.get());
+                    }
+                    break;
+                } else {
+                    logger.error("Not handling NAS message with integrity check error");
+                    return;
+                }
+            case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT:
+            case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT:
+                if (integrity_check(pdu.get())) {
+                    if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT) {
+                        cipher_decrypt(pdu.get());
+                    }
+                    break;
+                } else {
+                    logger.error("Not handling NAS message with integrity check error");
+                    return;
+                }
+            default:
+                logger.error("Not handling NAS message with SEC_HDR_TYPE=%02X", sec_hdr_type);
+                return;
+        }
+
+        if (pcap != null) {
+            pcap.writeNas(pdu.msg, pdu.N_bytes);
+        }
+
+        RefHolder msgTypeHolder = new RefHolder();
+        LiblteMme.parseMsgHeader(pdu.get(), pdHolder, msgTypeHolder);
+        msg_type = msgTypeHolder.value;
+        logger.info(pdu.msg, pdu.N_bytes, "DL %s Decrypted PDU", rrc.getRbName(lcid));
+
+        if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS) {
+            switch (msg_type) {
+                case LIBLTE_MME_MSG_TYPE_IDENTITY_REQUEST:
+                case LIBLTE_MME_MSG_TYPE_EMM_INFORMATION:
+                case LIBLTE_MME_MSG_TYPE_EMM_STATUS:
+                case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REQUEST:
+                case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REJECT:
+                case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+                case LIBLTE_MME_MSG_TYPE_DETACH_REQUEST:
+                case LIBLTE_MME_MSG_TYPE_DETACH_ACCEPT:
+                case LIBLTE_MME_MSG_TYPE_TRACKING_AREA_UPDATE_REJECT:
+                case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT:
+                    break;
+                default:
+                    logger.error(
+                            "Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X without integrity protection!",
+                            msg_type,
+                            sec_hdr_type
+                    );
+                    return;
+            }
+        }
+
+        if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT
+                && msg_type != LIBLTE_MME_MSG_TYPE_SECURITY_MODE_COMMAND) {
+            logger.error(
+                    "Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X. Security header type reserved!",
+                    msg_type,
+                    sec_hdr_type
+            );
+            return;
+        }
+
+        switch (msg_type) {
+            case LIBLTE_MME_MSG_TYPE_ATTACH_ACCEPT:
+                parseAttachAccept(lcid, pdu);
+                break;
+            case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+                parseAttachReject(lcid, pdu);
+                break;
+            case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REQUEST:
+                parseAuthenticationRequest(lcid, pdu, sec_hdr_type);
+                break;
+            default:
+                logger.error("Not handling NAS message with MSG_TYPE=%02X", msg_type);
+                return;
+        }
+    }
+</repair>

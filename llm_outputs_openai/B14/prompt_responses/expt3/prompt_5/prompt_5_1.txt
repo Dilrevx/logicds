@@ -1,0 +1,40 @@
+Below is the repaired code snippet. The only change is that the condition used to decide between an immediate (synchronous) and deferred (asynchronous) detachment now not only checks whether the current thread identifier matches, but also verifies that the socket’s close-handle callback pointer is NULL. This additional check ensures that if a close-handle callback has already been registered for asynchronous handling, the code will not attempt an immediate detachment, thereby avoiding the risk of leaving TCP connections in the CLOSE_WAIT state indefinitely.
+
+Repaired code:
+
+-----------------------------------------------------------
+	sock = handle->sock;
+	/* Now check both thread identity and that no close-handle callback is already set */
+	if ((sock->tid == isc_nm_tid()) && (sock->closecb == NULL)) {
+		nmhandle_detach_cb(&handle FLARG_PASS);
+	} else {
+		isc__netievent_detach_t *event =
+			isc__nm_get_netievent_detach(sock->mgr, sock);
+		/*
+		 * we are using implicit "attach" as the last reference
+		 * need to be destroyed explicitly in the async callback
+		 */
+		event->handle = handle;
+		FLARG_IEVENT_PASS(event);
+		isc__nm_enqueue_ievent(&sock->mgr->workers[sock->tid],
+				       (isc__netievent_t *)event);
+	}
+-----------------------------------------------------------
+
+Step-by-Step Explanation:
+
+1. Identify the socket from the handle:
+   - The variable "sock" is set from "handle->sock".
+
+2. Enhanced Decision Logic for Synchronous Detachment:
+   - The code now checks that the current thread ID (sock->tid) equals that returned by isc_nm_tid() and also confirms that there is no pending close-handle callback (sock->closecb == NULL).
+   - If both conditions are met, the immediate detachment is safe to execute using nmhandle_detach_cb().
+
+3. Fallback to Asynchronous Processing:
+   - If either the thread condition fails or a close-handle callback pointer is already set (indicating ongoing asynchronous processing), an event is prepared for deferred processing.
+   - The event is enqueued appropriately using isc__nm_enqueue_ievent(), ensuring that the detachment logic is handled correctly later.
+
+4. Mitigating the Vulnerability:
+   - This refined logic ensures that connections are properly cleaned up and not left lingering in the CLOSE_WAIT state, even when faced with specially crafted TCP streams.
+
+This repair addresses the vulnerability by preventing a scenario where overlapping or redundant operations on sockets could leave them in an unresolved state.

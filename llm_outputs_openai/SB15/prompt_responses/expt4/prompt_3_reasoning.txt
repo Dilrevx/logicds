@@ -1,0 +1,13 @@
+The repair stops the code from automatically marking validation as successful in cases where the data is only partially matching or not found. Here’s how it works:
+
+1. In the original code, the cases Commons.DNS_R_PARTIALMATCH and Commons.ISC_R_NOTFOUND were both forcing the result to ISC_R_SUCCESS. This means that even if the incoming key data did not fully validate, the code would treat it as valid. An attacker could exploit this behavior by injecting forged data that only partially matches a known key, then causing the vulnerability to trigger. The recursive resolver might later rely on the invalid, potentially attacker-controlled, key data.
+
+2. In our repaired version, we preserve the successful path (Commons.ISC_R_SUCCESS) by processing it normally: detaching the keynode, updating the trust on the keyset and key signatures, and setting goodkey[0] to true. This represents a state where the signature validation is fully trusted.
+
+3. For the cases Commons.DNS_R_PARTIALMATCH and Commons.ISC_R_NOTFOUND, instead of overriding the result to ISC_R_SUCCESS, we simply let the error state remain unmodified. By doing this, the code does not falsely elevate an error or partially validated result to success. This ensures that any invalid or unverified data is not mistakenly accepted.
+
+4. The default case is also left untouched. This way, any other errors remain intact, and there is no inadvertent success override anywhere in the decision-making process.
+
+5. Finally, the call to free keyOut (Dst.dst_key_free(keyOut)) happens regardless of the case, ensuring that resources are properly handled. The function then returns the original result, which only reflects a fully successful validation if true success was achieved; any kind of partial or error state is properly propagated.
+
+By not forcibly converting error conditions into a success result, the repair prevents an attacker from using on-path manipulation to replace a DNSSEC validated record with externally forged data — a key concern in mirror zone scenarios. In essence, maintaining the original error state preserves the integrity of the DNSSEC validation process and stops the possibility of accepting forged root zone data.

@@ -1,0 +1,15 @@
+The repair adds a critical additional safety check after processing the PSK extension. Initially, the code attempts to find and process a valid PSK from the extensions provided by the server. If a PSK is present and marked as “chosen,” the code then successfully sets up the PSK key. If no valid PSK is found, the original behavior sets some session options to indicate that no PSK was negotiated and clears the PSK-derived key buffer.
+
+In TLS 1.3, both a PSK and a key share extension can be used as input keying material (IKM) for generating the session master secret. The original vulnerability emerged from the possibility that if a client received neither a PSK nor key share information, the session would fallback to using a default, often zeroed, IKM buffer. This predictable behavior could allow an attacker to replicate the master secret generation process knowing the IKM, potentially compromising the session’s security.
+
+The repair addresses this by introducing a check immediately after the PSK processing block. It examines two conditions:
+1. It checks whether no valid PSK was negotiated (i.e., the flag ssl->options.pskNegotiated is false).
+2. It checks whether the key share is missing, as indicated by ssl->session.namedGroup being zero.
+
+If both conditions are met, it is clear that neither secure PSK material nor a key share (which provided unique, ephemeral key material) is available. When this situation occurs, the function returns an error code (EXT_MISSING) immediately, thereby halting the handshake process before using any fallback or default IKM value.
+
+This change prevents the TLS 1.3 session from proceeding with an insecure key derivation process. By enforcing the presence of at least one reliable source of keying material (a negotiated PSK or a valid key share), the repair eliminates the possibility of inadvertently using a default, predictable IKM. In other words, it ensures that the master secret is derived only when there’s sufficient entropy and unpredictability in the key material, significantly reducing the risk of a security breach through session compromise.
+
+The addition of the conditional check is pivotal because it directly addresses the underlying vulnerability: ensuring that if both the PSK and key share elements are absent, the connection is not allowed to proceed. This proactive safeguard prevents an attacker from forcing the use of a default key derivation process, thereby securing the key negotiation mechanism in TLS 1.3.
+
+Overall, the repair enhances the security of the TLS handshake by tightly controlling the conditions under which secure key material is accepted, ensuring that the session master secret is derived using either a valid PSK or a robust key share, and otherwise aborting the connection to avoid potential exploitation by an attacker.

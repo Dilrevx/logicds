@@ -1,0 +1,15 @@
+The repair reorders the checks so that the certificate’s CA status is verified before performing the elliptic curve (EC) parameter check.
+
+Originally, the code first performed the EC curve check when strict mode was enabled. However, if the certificate was not a valid CA (i.e., the certificate’s EXFLAG_CA was not set while having a valid path length constraint), the CA error was applied after the EC check. This could lead to a situation where the EC check's result might overwrite an error set from the non-CA verification. Essentially, an error in the EC curve check could cancel out or hide the critical CA validation error. This bypassed the important rule that non-CA certificates must not be able to issue additional certificates, risking the chain’s integrity and security.
+
+The fixed code first checks the certificate’s CA status. Specifically, if the certificate is not a CA (i.e., the certificate lacks the CA flag and has an explicitly defined path length), and strict mode is active, the code immediately sets the error for an invalid extension (reflecting that a non-CA certificate is not allowed to issue certificates) and stops further processing for that certificate by setting ret to 0.
+
+Only if the certificate is a valid CA (or the conditions for the CA check are not triggered) does the code then proceed to perform the check on explicitly encoded elliptic curve parameters. This later check ensures that if explicit EC parameters are used, they’re properly examined without risking bypassing the necessary CA validation.
+
+By restructuring the order of these checks:
+
+1. The critical validation to ensure that only valid CA certificates are allowed to issue other certificates is applied first. This prevents any misuse where the EC check might inadvertently override an earlier CA validity error.
+  
+2. The EC parameter check is then executed only if the certificate already passes the CA flag and path length validation. This means that an error resulting from the EC parameter check will only be considered if the certificate was already deemed an acceptable issuing certificate (as per the CA validation).
+
+This fix directly addresses the vulnerability by ensuring that the strict check flag does not inadvertently mask or override a failed CA check. The integrity of the certificate chain validation is maintained as the primary check on CA status is no longer at risk of being invalidated by subsequent checks.

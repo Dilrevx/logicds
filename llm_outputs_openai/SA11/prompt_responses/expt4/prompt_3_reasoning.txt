@@ -1,0 +1,21 @@
+The original code compared the certificate’s serial number against an entry in the CRL and then checked if the revocation date had passed relative to the local system clock via Helper.mbedtls_x509_time_is_past(cur.revocationDate). An attacker could manipulate the local clock—by setting it to a time before cur.revocationDate—even if the certificate was already revoked, thus bypassing the intended check.
+
+In the repair, we remove the dependency on the local clock entirely from the revocation decision. Now, when the certificate's serial matches the CRL entry’s serial number, we immediately return that the certificate is revoked—without checking if the revocationDate has passed according to the potentially manipulated system time. This means that as soon as there is a matching serial, the certificate is considered revoked regardless of the local clock’s state.
+
+The repaired snippet now looks like this:
+
+------------------------------------------------
+if (crt.serial.len == cur.serial.len
+        && MemUtil.memcmp(crt.serial.p, cur.serial.p, crt.serial.len) == 0) {
+    /* 
+     * Removed the dependency on the local clock check for revocation date.
+     * The decision is now made based on a matching serial number only,
+     * avoiding exploitation via tampering with the clock.
+     */
+    return 1;
+}
+------------------------------------------------
+
+By eliminating the usage of the revocationDate check in this decision-making process, the code no longer trusts the local clock for determining whether a certificate is revoked. This reduces the attack surface that was introduced by relying on a variable and potentially manipulated system parameter (the local clock). The certificate is marked as revoked based solely on the serial number match, which is a secure and static property not influenced by external factors.
+
+This change fixes the vulnerability because it removes the opportunity for an attacker to exploit the time-check mechanism. If an attacker tried to adjust the system clock to keep the certificate “valid” (by making it appear as if the revocationDate hasn’t passed yet), it would no longer matter—the matching serial number would trigger an immediate revocation decision. In summary, the fix strengthens the revocation mechanism by ensuring that certificate revocation is enforced reliably regardless of external factors such as the system clock state.

@@ -1,0 +1,135 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags. Do not provide any extra text explanation.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+UE accepts nas_sm_cmd_replay even after registration complete
+</vulnerability_description>
+Source code:
+Context code:
+<context_code>
+### src/main/Nas5g.java ###
+public class Nas5g {
+    public static final int SRSRAN_SUCCESS = 0;
+    public static final int SRSRAN_ERROR = -1;
+    static Logger logger = new Logger();
+    private CtxtBase ctxt_base = new CtxtBase();
+    static Pcap pcap;
+
+    public int write_pdu(UniqueByteBuffer pdu) {
+        logger.info(pdu.msg, pdu.N_bytes, "DL PDU (length %d)", pdu.N_bytes);
+        Nas5gsMsg nas_msg = new Nas5gsMsg();
+
+............
+
+</context_code>
+Buggy source code:
+
+<buggy_code>
+    public int write_pdu(UniqueByteBuffer pdu) {
+        logger.info(pdu.msg, pdu.N_bytes, "DL PDU (length %d)", pdu.N_bytes);
+        Nas5gsMsg nas_msg = new Nas5gsMsg();
+        if (nas_msg.unpack_outer_hdr(pdu) != SRSRAN_SUCCESS) {
+            logger.error("Unable to unpack outer NAS header");
+            return SRSRAN_ERROR;
+        }
+        switch (nas_msg.hdr.security_header_type) {
+            case Nas5gsHdr.security_header_type_opts.plain_5gs_nas_message:
+                break;
+            case Nas5gsHdr.security_header_type_opts.integrity_protected:
+                if (!integrity_check(pdu.get())) {
+                    logger.error("Not handling NAS message with integrity check error");
+                    return SRSRAN_ERROR;
+                }
+                break;
+            case Nas5gsHdr.security_header_type_opts.integrity_protected_and_ciphered:
+                if (!integrity_check(pdu.get())) {
+                    logger.error("Not handling NAS message with integrity check error");
+                    return SRSRAN_ERROR;
+                } else {
+                    cipher_decrypt(pdu.get());
+                }
+                break;
+            case Nas5gsHdr.security_header_type_opts.integrity_protected_with_new_5G_nas_context:
+                break;
+            case Nas5gsHdr.security_header_type_opts.integrity_protected_and_ciphered_with_new_5G_nas_context:
+                return SRSRAN_ERROR;
+            default:
+                logger.error("Not handling NAS message with unkown security header");
+                break;
+        }
+        if (pcap != null) {
+            pcap.write_nas(pdu.msg, pdu.N_bytes);
+        }
+        logger.info(pdu.msg, pdu.N_bytes, "Decrypted DL PDU (length %d)", pdu.N_bytes);
+        if (nas_msg.unpack(pdu) != SRSRAN_SUCCESS) {
+            logger.error("Unable to unpack complete NAS pdu");
+            return SRSRAN_ERROR;
+        }
+        switch (nas_msg.hdr.message_type) {
+            case MsgOpts.Options.registration_accept:
+                handle_registration_accept(nas_msg.registration_accept());
+                break;
+            case MsgOpts.Options.registration_reject:
+                handle_registration_reject(nas_msg.registration_reject());
+                break;
+            case MsgOpts.Options.authentication_reject:
+                handle_authentication_reject(nas_msg.authentication_reject());
+                break;
+            case MsgOpts.Options.authentication_request:
+                handle_authentication_request(nas_msg.authentication_request());
+                break;
+            case MsgOpts.Options.identity_request:
+                handle_identity_request(nas_msg.identity_request());
+                break;
+            case MsgOpts.Options.security_mode_command:
+                handle_security_mode_command(nas_msg.security_mode_command(), pdu);
+                break;
+            case MsgOpts.Options.service_accept:
+                handle_service_accept(nas_msg.service_accept());
+                break;
+            case MsgOpts.Options.service_reject:
+                handle_service_reject(nas_msg.service_reject());
+                break;
+            case MsgOpts.Options.deregistration_accept_ue_terminated:
+                handle_deregistration_accept_ue_terminated(nas_msg.deregistration_accept_ue_terminated());
+                break;
+            case MsgOpts.Options.deregistration_request_ue_terminated:
+                handle_deregistration_request_ue_terminated(nas_msg.deregistration_request_ue_terminated());
+                break;
+            case MsgOpts.Options.dl_nas_transport:
+                handle_dl_nas_transport(nas_msg.dl_nas_transport());
+                break;
+            case MsgOpts.Options.deregistration_accept_ue_originating:
+                handle_deregistration_accept_ue_originating(nas_msg.deregistration_accept_ue_originating());
+                break;
+            case MsgOpts.Options.configuration_update_command:
+                handle_configuration_update_command(nas_msg.configuration_update_command());
+                break;
+            default:
+                logger.error("Not handling NAS message type: " + nas_msg.hdr.message_type);
+                break;
+        }
+        return SRSRAN_SUCCESS;
+    }
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair steps for the given vulnerability involve several key modifications to the original code. Here's a breakdown of the changes:
+
+1. **Sequence Number Validation**: The first step is to validate the sequence number of the incoming NAS message. This is done by comparing the sequence number in the message header with the expected sequence number stored in the context base. If the sequence numbers do not match, an error is logged, and the function returns an error code. This check ensures that the message is processed in the correct order and prevents replay attacks.
+
+2. **Reordering of Checks**: In the original code, the security header type is checked before unpacking the outer NAS header. In the repaired code, the order is reversed. The outer NAS header is unpacked first, and then the security header type is checked. This change ensures that the security header type is validated after the header has been successfully unpacked.
+
+3. **Additional Security Header Type Checks**: The repaired code includes additional checks for specific security header types. For example, if the security header type is plain 5G NAS message, the code checks if a security context has already been established. If a security context exists, an error is logged, and the function returns an error code. This prevents the processing of plain NAS messages after a security context has been established.
+
+4. **Assignment of Current Message Header**: In the repaired code, a variable `current_message_header` is assigned a value based on the security header type. This variable is not present in the original code and is likely used to track the current message header type for further processing.
+
+5. **Error Handling**: The repaired code includes more comprehensive error handling. For example, if the integrity check fails or the security header type is unknown, an error is logged, and the function returns an error code. This ensures that any errors or unexpected conditions are properly handled and logged.
+
+6. **Cipher Decryption**: The repaired code includes cipher decryption for security header types that require it. This ensures that encrypted messages are properly decrypted before processing.
+
+Overall, the repair steps focus on improving the security and robustness of the code by adding sequence number validation, reordering checks, and including additional security header type checks. These changes prevent replay attacks, ensure proper error handling, and maintain the integrity of the NAS messages.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

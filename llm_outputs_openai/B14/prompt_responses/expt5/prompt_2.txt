@@ -1,0 +1,21 @@
+Below is one acceptable repair. The problem is that if the detachment is deferred to a worker thread (“asynchronous‐detach”) the TCP socket isn’t immediately shut down. Under a specially crafted stream the worker thread may never get around to processing the detach event – leaving the underlying socket alive (in CLOSE_WAIT) indefinitely. One solution is to force the socket to shut down immediately rather than relying solely on asynchronous cleanup. For example, the repair below immediately shuts down and closes the socket before calling the detachment callback. (In your deployment you may wish to log errors from shutdown(2) or close(2) as appropriate.)
+
+<repair>
+	sock = handle->sock;
+	/*
+	 * Force immediate shutdown of the connection to ensure that a
+	 * maliciously delayed asynchronous event can never leave the socket in
+	 * an indefinite CLOSE_WAIT state.
+	 */
+	if (shutdown(sock->fd, SHUT_RDWR) < 0) {
+		/* Optionally log the error here */
+	}
+	close(sock->fd);
+	/*
+	 * Now run the detach callback immediately rather than forcing an asynchronous
+	 * event. This ensures the socket is cleaned up in a timely manner.
+	 */
+	nmhandle_detach_cb(&handle FLARG_PASS);
+</repair>
+
+In this repair the socket is explicitly shut down and closed immediately before detaching the handle so that no connection remains lingering in CLOSE_WAIT even if the worker thread were to be stalled.

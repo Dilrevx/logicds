@@ -1,0 +1,49 @@
+The original code snippet contains a logical vulnerability that affects how Certificate Revocation Lists (CRLs) are retrieved and verified during the TLS handshake process. Specifically, the vulnerability lies in the way the `get1_crls` method is called, which retrieves the CRLs based on the certificate's subject name rather than its issuer name. This oversight can lead to a situation where valid CRLs are not considered, potentially allowing revoked certificates to pass validation and establish connections with the server.
+
+### Understanding the Vulnerability
+
+In the context of Public Key Infrastructure (PKI), CRLs are lists maintained by Certificate Authorities (CAs) that specify which certificates have been revoked before their natural expiration date. When a client presents a certificate during a TLS handshake, the server must verify this certificate against the relevant CRLs to ensure it has not been revoked. The correct approach is to retrieve CRLs based on the issuer of the certificate, as the issuer is responsible for maintaining the CRLs for the certificates it issues.
+
+In the provided code, the following lines are problematic:
+
+```java
+if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 && !Commons.HAVE_LIBRESSL) {
+    crls = storeCtx.get1_crls(subject);
+}
+else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 && !Commons.HAVE_LIBRESSL) {
+    crls = Commons.get1_crls(storeCtx, subject);
+}
+else {
+    crls = null;
+}
+```
+
+Here, `subject` refers to the subject of the certificate being verified. Instead, `issuer` should be used to fetch the appropriate CRLs. Using the subject to retrieve CRLs is incorrect because the subject is the entity to whom the certificate was issued, not the entity that issued the certificate and maintains the CRLs.
+
+### Correcting the Code
+
+To address this vulnerability, the code needs to be modified to use the `issuer` instead of the `subject` when retrieving CRLs. Here’s the corrected version of the relevant section:
+
+```java
+if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 && !Commons.HAVE_LIBRESSL) {
+    crls = storeCtx.get1_crls(issuer);
+}
+else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 && !Commons.HAVE_LIBRESSL) {
+    crls = Commons.get1_crls(storeCtx, issuer);
+}
+else {
+    crls = null;
+}
+```
+
+By making this change, the code correctly retrieves the CRLs issued by the same authority that issued the client's certificate. This ensures that the CRLs are relevant and can accurately determine whether the certificate has been revoked.
+
+### Additional Considerations
+
+After retrieving the CRLs using the correct issuer, the code proceeds to verify each CRL. It checks the signature of the CRL to ensure its integrity and verifies the `nextUpdate` field to confirm that the CRL is still valid. If any of these checks fail, the function sets an appropriate error on the `X509StoreCtx` object and returns `FALSE`, indicating that the certificate verification failed.
+
+It's also important to note that after processing the CRLs, the code frees the CRL list and cleans up the `X509StoreCtx` object to prevent memory leaks. This is a good practice in resource management, especially in long-running applications like servers handling many TLS handshakes.
+
+### Conclusion
+
+The repair addresses a critical logical flaw in the certificate verification process by ensuring that CRLs are retrieved based on the correct criteria (issuer instead of subject). This correction enhances the security of the TLS handshake by accurately validating the status of client certificates, thereby preventing revoked certificates from establishing secure connections with the server.

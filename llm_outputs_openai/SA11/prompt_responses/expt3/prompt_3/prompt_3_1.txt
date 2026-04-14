@@ -1,0 +1,53 @@
+We're checking a CRL entry by comparing the serial numbers and then testing the revocation date. However, basing the decision on a check like mbedtls_x509_time_is_past—which uses the local (and thus attacker‐controlled) clock—opens the door for clock–manipulation attacks. In other words, an attacker who can change the system clock might “force” the revocationDate to appear in the past (or future), leading to incorrect decisions about the certificate’s revocation status.
+
+There are two main strategies to fix this:
+
+1. Use a trusted time source (or a monotonic clock) that the application controls rather than the local system clock. This way, even if an attacker modifies the operating system clock, your time source remains secure.
+
+2. If you already trust that the presence of the certificate in the CRL is enough to mark it as revoked, then you can remove the dependency on the revocationDate check entirely. (This is common in many CRL implementations, where the entry’s very presence means the certificate is revoked regardless of when it happened.)
+
+Below are both approaches:
+
+───────────────────────────── 
+Option 1: Using a Trusted Time Source
+
+Assume you have a function get_trusted_time() that returns the current time from a trusted source (this might be obtained periodically from a secure NTP server, for example):
+
+-----------------------------------------------------------------
+            if (crt.serial.len == cur.serial.len &&
+                MemUtil.memcmp(crt.serial.p, cur.serial.p, crt.serial.len) == 0) {
+                // Instead of calling a helper that uses the system clock,
+                // compare using trusted time:
+                time_t trusted_time = get_trusted_time();
+                if (trusted_time > cur.revocationDate)
+                    return 1;
+            }
+-----------------------------------------------------------------
+
+In this version, the check uses a trusted time source rather than the local clock.
+
+───────────────────────────── 
+Option 2: Removing the Clock‐dependent Check
+
+If the mere inclusion of the certificate’s serial number in the CRL indicates that it is revoked, you can simplify the check by omitting the local-time–dependent date check:
+
+-----------------------------------------------------------------
+            if (crt.serial.len == cur.serial.len &&
+                MemUtil.memcmp(crt.serial.p, cur.serial.p, crt.serial.len) == 0) {
+                // Remove the time check to avoid reliance on the system clock:
+                return 1;
+            }
+-----------------------------------------------------------------
+
+This version trusts the CRL’s data without attempting to verify the revocation date using a potentially manipulated system clock.
+
+───────────────────────────── 
+Explanation
+
+The vulnerability came from the fact that mbedtls_x509_time_is_past uses the local clock, which an attacker might change. Depending on your security needs and the broader context of your application, choose one of these fixes:
+
+• Option 1 is a more nuanced fix if you need to consider time windows (for example, if you need to know when a certificate was revoked relative to a trusted timeline).
+
+• Option 2 is simpler and effective if your policy is to always consider a certificate revoked as soon as its serial appears in the CRL.
+
+Both approaches remove the attacker’s ability to bypass revocation checks by simply altering the local system time.

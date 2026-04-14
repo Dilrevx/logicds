@@ -1,0 +1,16 @@
+The repair adds a crucial validity check on the keynode before the trusted zone data is accepted. In the original code, when the result was ISC_R_SUCCESS (indicating a successful operation), the code immediately detached the keynode and marked the associated dataset as trusted. This behavior is problematic because if an attacker manages to tamper with the mirror zone data, the server might mistakenly trust forged data.
+
+In the repaired code, before detaching the keynode and marking the dataset as secure, there’s an additional step:
+
+  if (!Keynode.dns_keynode_check_validity(keynode)) { ... }
+
+This extra check serves to verify that the keynode’s data (which includes DNSKEYs or any cryptographic material) has been cryptographically validated against the designated trust anchors. Essentially, it confirms that the zone data has truly been signed by a trusted key (e.g., per RFC 5011's dynamic trust anchor management) and that the signatures validate correctly. If this check fails, the code does not mark the incoming data as secure; instead, it falls back by setting the result to a partial match status (or another non-success code), which means that the mirror zone data won’t be used without proper cryptographic verification.
+
+By doing so, the repair mitigates a key vulnerability: it prevents an on-path attacker from injecting falsified data into the mirror zone. Even if the attacker can modify responses or deliver forged zone data, the extra check requires proper cryptographic validation. Without valid signatures as per your DNSSEC trust anchor configuration, the data will not be accepted, and the system will fall back to using traditional recursion or other appropriate methods that ensure data integrity.
+
+To summarize, the key improvements are: 
+
+1. The extra validity check (dns_keynode_check_validity) ensures that only key nodes matching the cryptographic standards expected by the trusted resolver (as configured with DNSSEC trust anchors and possibly RFC5011 management) are accepted.
+2. If the validity check fails, instead of trusting potentially manipulated data, the code modifies the control flow to fall back to a less trusted state (using DNS_R_PARTIALMATCH), which prevents it from using unverified data.
+
+In essence, this repair directly addresses the vulnerability by ensuring that even if an attacker intercepts and alters the mirror zone data, it will not be erroneously trusted unless it passes rigorous DNSSEC validation against your configured trust anchors.

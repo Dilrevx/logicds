@@ -1,0 +1,130 @@
+<repair>
+static int eap_tlv_process(struct eap_sm *sm, struct eap_peap_data *data,
+                           struct eap_method_ret *ret,
+                           const struct wpabuf *req, struct wpabuf **resp,
+                           int force_failure)
+{
+    size_t left, tlv_len;
+    const u8 *pos, *tlvs_start;
+    const u8 *result_tlv = NULL, *crypto_tlv = NULL;
+    /* New: Store the pointer to the start of the TLV header for TLVs we need to validate */
+    const u8 *crypto_tlv_hdr = NULL;
+    size_t result_tlv_len = 0, crypto_tlv_len = 0;
+    int tlv_type, mandatory;
+
+    /* Validate and get pointer to TLV portion */
+    pos = eap_hdr_validate(EAP_VENDOR_IETF, EAP_TYPE_TLV, req, &left);
+    if (pos == NULL)
+        return -1;
+    tlvs_start = pos;
+    wpa_hexdump(MSG_DEBUG, "EAP-TLV: Received TLVs", pos, left);
+
+    /* Parse TLVs. Note: For TLVs that require processing of the full TLV (header+value),
+     * we store the pointer to the TLV header.
+     */
+    while (left >= 4) {
+        const u8 *tlv_hdr = pos; /* pointer to the TLV header */
+        mandatory = !!(pos[0] & 0x80);
+        tlv_type = WPA_GET_BE16(pos) & 0x3fff;
+        pos += 2;
+        tlv_len = WPA_GET_BE16(pos);
+        pos += 2;
+        left -= 4;
+        if (tlv_len > left) {
+            wpa_printf(MSG_DEBUG, "EAP-TLV: TLV underrun (tlv_len=%lu left=%lu)",
+                       (unsigned long) tlv_len, (unsigned long) left);
+            return -1;
+        }
+        switch (tlv_type) {
+        case EAP_TLV_RESULT_TLV:
+            result_tlv = pos;
+            result_tlv_len = tlv_len;
+            break;
+        case EAP_TLV_CRYPTO_BINDING_TLV:
+            /* Instead of later subtracting 4 from the value pointer (which risks an under-read),
+             * store the TLV header pointer directly.
+             */
+            if (tlv_hdr < tlvs_start) {
+                wpa_printf(MSG_DEBUG, "EAP-TLV: CRYPTO TLV header pointer is out of bounds");
+                return -1;
+            }
+            crypto_tlv_hdr = tlv_hdr;
+            crypto_tlv = pos;
+            crypto_tlv_len = tlv_len;
+            break;
+        default:
+            wpa_printf(MSG_DEBUG, "EAP-TLV: Unsupported TLV Type %d%s",
+                       tlv_type, mandatory ? " (mandatory)" : "");
+            if (mandatory) {
+                /* NAK TLV and ignore all TLVs in this packet. */
+                *resp = eap_tlv_build_nak(eap_get_id(req), tlv_type);
+                return *resp == NULL ? -1 : 0;
+            }
+            /* Ignore this TLV, but continue processing remaining TLVs */
+            break;
+        }
+        pos += tlv_len;
+        left -= tlv_len;
+    }
+    if (left) {
+        wpa_printf(MSG_DEBUG, "EAP-TLV: Last TLV too short in Request (left=%lu)",
+                   (unsigned long) left);
+        return -1;
+    }
+
+    /* Process supported TLVs */
+    if (crypto_tlv && data->crypto_binding != NO_BINDING) {
+        /* Pass the TLV header and full TLV length (header + value) for validation */
+        wpa_hexdump(MSG_DEBUG, "EAP-PEAP: Cryptobinding TLV",
+                    crypto_tlv_hdr, crypto_tlv_len + 4);
+        if (eap_tlv_validate_cryptobinding(sm, data, crypto_tlv_hdr,
+                                           crypto_tlv_len + 4) < 0) {
+            if (result_tlv == NULL)
+                return -1;
+            force_failure = 1;
+            /* Do not include Cryptobinding TLV in response if invalid */
+            crypto_tlv = NULL;
+            crypto_tlv_hdr = NULL;
+        }
+    } else if (!crypto_tlv && data->crypto_binding == REQUIRE_BINDING) {
+        wpa_printf(MSG_DEBUG, "EAP-PEAP: No cryptobinding TLV");
+        return -1;
+    }
+
+    if (result_tlv) {
+        int status, resp_status;
+        wpa_hexdump(MSG_DEBUG, "EAP-TLV: Result TLV", result_tlv, result_tlv_len);
+        if (result_tlv_len < 2) {
+            wpa_printf(MSG_INFO, "EAP-TLV: Too short Result TLV (len=%lu)",
+                       (unsigned long) result_tlv_len);
+            return -1;
+        }
+        status = WPA_GET_BE16(result_tlv);
+
+        /* Continue processing Result TLV...
+         * (Add further Result TLV handling logic here.)
+         */
+        /* Example: derive a response status based on the status value */
+        resp_status = (status == 0) ? 0 : 1;
+        if (force_failure)
+            resp_status = 1;
+        /* Build a response from the Result TLV information – this example
+         * assumes that eap_tlv_build_result_resp() is the proper routine.
+         */
+        *resp = eap_tlv_build_result_resp(eap_get_id(req), resp_status,
+                                          crypto_tlv_hdr,
+                                          crypto_tlv ? crypto_tlv_len + 4 : 0);
+        if (*resp == NULL)
+            return -1;
+
+        ret->methodState = METHOD_DONE;
+        ret->decision = (resp_status == 0) ? DECISION_COND_SUCC : DECISION_FAIL;
+    } else {
+        /* No Result TLV: set failure */
+        ret->methodState = METHOD_DONE;
+        ret->decision = DECISION_FAIL;
+    }
+
+    return 0;
+}
+</repair>

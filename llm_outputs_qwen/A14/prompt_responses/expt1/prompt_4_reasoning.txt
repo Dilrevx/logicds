@@ -1,0 +1,77 @@
+The provided code snippet is part of the OpenSSL library's implementation for handling SSL/TLS record layer operations, specifically the `ssl3_read_bytes` function. This function is responsible for reading bytes from the SSL/TLS connection and processing them according to their record type (such as application data, handshake messages, alerts, etc.). The vulnerability identified in the original code pertains to the handling of 'Change Cipher Spec' (CCS) records.
+
+### Original Vulnerability
+
+In the original code, the check for whether a CCS message is expected is missing before processing the CCS record. The code directly proceeds to validate the CCS message format and perform the cipher change without checking if the CCS message is appropriate given the current state of the SSL/TLS handshake. This can lead to several security issues:
+
+1. **Unexpected CCS Message**: An attacker could send a CCS message at an inappropriate time, causing the server or client to prematurely change its encryption state. This could lead to various attacks, such as truncating the handshake or forcing the use of weaker encryption algorithms.
+
+2. **State Desynchronization**: Premature processing of a CCS message can desynchronize the client and server states, leading to potential protocol failures or further security vulnerabilities.
+
+3. **Denial of Service (DoS)**: An attacker could exploit this vulnerability to cause the SSL/TLS connection to fail, leading to a denial of service.
+
+### Repair Explanation
+
+To address these issues, the repaired code introduces a check to ensure that a CCS message is only processed when it is expected. This check is implemented using the `SSL3_FLAGS_CCS_OK` flag, which indicates that the CCS message is acceptable at the current point in the handshake process.
+
+#### Detailed Steps of the Repair
+
+1. **Check for Expected CCS Message**:
+   ```c
+   if (!(s->s3->flags & SSL3_FLAGS_CCS_OK))
+   {
+       al=SSL_AD_UNEXPECTED_MESSAGE;
+       SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_CCS_RECEIVED_EARLY);
+       goto f_err;
+   }
+   ```
+   - **Purpose**: Before processing a CCS message, the code checks if the `SSL3_FLAGS_CCS_OK` flag is set. This flag is typically set after the appropriate handshake messages (such as the Finished message) have been exchanged and it is safe to change ciphers.
+   - **Security Impact**: This check prevents the premature processing of CCS messages, mitigating the risks associated with receiving CCS messages at inappropriate times.
+
+2. **Validate CCS Message Format**:
+   ```c
+   /* 'Change Cipher Spec' is just a single byte, so we know
+    * exactly what the record payload has to look like */
+   if ((rr->length != 1) || (rr->off != 0) ||
+       (rr->data[0] != SSL3_MT_CCS))
+   {
+       al=SSL_AD_ILLEGAL_PARAMETER;
+       SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_BAD_CHANGE_CIPHER_SPEC);
+       goto f_err;
+   }
+   ```
+   - **Purpose**: After confirming that a CCS message is expected, the code validates that the message format is correct. A valid CCS message should be exactly one byte long and contain the value `SSL3_MT_CCS` (which is typically `0x01`).
+   - **Security Impact**: This ensures that the CCS message is correctly formatted, preventing attacks that attempt to manipulate the message content.
+
+3. **Check for New Cipher Availability**:
+   ```c
+   /* Check we have a cipher to change to */
+   if (s->s3->tmp.new_cipher == NULL)
+   {
+       al=SSL_AD_UNEXPECTED_MESSAGE;
+       SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_CCS_RECEIVED_EARLY);
+       goto f_err;
+   }
+   ```
+   - **Purpose**: Before changing ciphers, the code verifies that there is a new cipher suite available to switch to. This is stored in `s->s3->tmp.new_cipher`.
+   - **Security Impact**: Ensuring that a new cipher is available prevents the protocol from attempting to change to an undefined or invalid cipher, maintaining the integrity of the encryption process.
+
+4. **Process the CCS Message**:
+   ```c
+   rr->length=0;
+
+   if (s->msg_callback)
+       s->msg_callback(0, s->version, SSL3_RT_CHANGE_CIPHER_SPEC, rr->data, 1, s, s->msg_callback_arg);
+
+   s->s3->change_cipher_spec=1;
+   if (!ssl3_do_change_cipher_spec(s))
+       goto err;
+   else
+       goto start;
+   ```
+   - **Purpose**: Once all checks pass, the code processes the CCS message by setting the `change_cipher_spec` flag to `1` and calling `ssl3_do_change_cipher_spec` to perform the actual cipher change.
+   - **Security Impact**: This step ensures that the cipher change is executed securely and only when all conditions are met, maintaining the security and integrity of the SSL/TLS connection.
+
+### Conclusion
+
+By introducing a check for the expected CCS message using the `SSL3_FLAGS_CCS_OK` flag, the repaired code significantly enhances the security of the SSL/TLS record layer. It prevents the premature processing of CCS messages, ensuring that the cipher change occurs only at the appropriate time during the handshake process. This repair addresses critical vulnerabilities that could otherwise lead to serious security issues, including protocol desynchronization and denial of service attacks.

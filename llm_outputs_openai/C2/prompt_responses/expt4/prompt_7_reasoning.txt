@@ -1,0 +1,17 @@
+The repair makes a key change in the order and conditions under which the explicit elliptic curve parameters check (check_curve) is applied. In the buggy code, the call to check_curve was made unconditionally inside the loop, which could overwrite the result of the earlier CA validation check. As a result, if a certificate failed the CA check (e.g. the certificate was an invalid CA) but later passed or failed the curve check, the original error stored in ctx->error (for an invalid CA) could be lost or replaced. This created a vulnerability because it could allow an invalid CA certificate to be mistakenly accepted if the curve check did not enforce the intended failure.
+
+In the repaired code, the check_curve function is now called only if the initial CA validation (“ret” is 1) passed. Notice the new conditional:
+
+  if (ret == 1 && (ctx->param->flags & X509_V_FLAG_X509_STRICT) && num > 1) { … }
+
+This means that if the certificate already failed the CA check, the curve check will not run. The repaired code stores the result from check_curve in a temporary variable ("curve_ret") and, if it fails (returns a value less than 0 or equal to 0), it then explicitly sets ret to 0 and assigns the appropriate error code. By doing so, the repair makes sure that any earlier error detected by X509_check_ca is not overwritten by the later curve check.
+
+Other parts of the function remain the same, so the overall certificate chain verification process (checking for critical extensions, proxy certificate constraints, path length constraints, etc.) is preserved. This specific ordering ensures that if a certificate is not a valid CA, even if the elliptic curve check might succeed, the failure from the CA check remains effective. Consequently, a non-CA certificate cannot bypass the CA check merely because it also passes the curve verification.
+
+In summary, the repair fixes the vulnerability by:
+
+1. Evaluating the curve check conditionally—only when the certificate has already passed CA validation (i.e., ret == 1), ensuring that an earlier CA error is not overwritten.
+2. Storing the result of check_curve in a temporary variable to avoid clobbering any prior error codes.
+3. Maintaining clear error state propagation by setting ret = 0 and ctx->error appropriately when check_curve fails.
+
+This careful restructuring restores the intended order of validations and prevents the bypass of the CA certificate check when the X509_V_FLAG_X509_STRICT flag is set, thus preserving the security guarantees of the certificate chain validation process.

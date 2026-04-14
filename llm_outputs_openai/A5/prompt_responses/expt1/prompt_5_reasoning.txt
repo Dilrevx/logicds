@@ -1,0 +1,19 @@
+The repair addresses a logical vulnerability related to the handling of verification failures when the OCSP_NOCHECKS flag is not used. Here’s the walkthrough:
+
+1. Checking the verification result:  
+   Originally, if certificate verification failed (i.e., ret ≤ 0), the code would set ret to the error code from X509_STORE_CTX_get_error(ctx), raise an error with that message, and then jump to cleanup. With the vulnerability, if OCSP_NOCHECKS was set elsewhere, a verification failure might be mistakenly shown as successful. The repair first inspects ret and, if ret is ≤ 0, checks if the OCSP_NOCHECKS flag is set.
+
+2. Conditional logic based on OCSP_NOCHECKS:  
+   The repair adds a conditional that explicitly tests whether the OCSP_NOCHECKS flag is provided.  
+   - If the flag is set, even though ret is ≤ 0 (meaning a failure in the verification process), the code resets ret to 0. This bypasses the error-raising logic. This is deliberate: when OCSP_NOCHECKS is used, the intention is to skip certain certificate checks; hence, a failure is overridden.  
+   - If the flag is not set, the code behaves as originally intended—retrieving the specific error code from the verification context, raising a detailed error message, and performing necessary cleanup.
+
+3. Clearing up before function exit:  
+   Regardless of the branch taken for ret ≤ 0, the code eventually moves to the “end:” label where it always frees the X509_STORE_CTX and returns the final ret value. This ensures that resource cleanup occurs consistently.
+
+4. Impact on the vulnerability:  
+   The logical flaw was that, under certain conditions (when OCSP_NOCHECKS was used improperly), a failed verification could erroneously be interpreted as success. By explicitly checking for OCSP_NOCHECKS, the repair ensures that:
+   - If OCSP_NOCHECKS is set, the failure is intentionally overridden to “success” (ret = 0), aligning with the intended use of that flag.
+   - If OCSP_NOCHECKS is not present, any verification failure generates a proper error, preventing a false positive verification result.
+
+In summary, the repair introduces a conditional branch that distinguishes between cases where certificate verification failure should be treated as a hard error and cases where, due to the use of OCSP_NOCHECKS, the failure is acceptable and should yield a “successful” return code. This targeted change helps ensure that the caller of the function receives the expected result based on which flags were used, thereby mitigating the vulnerability where a failure could be misinterpreted as a valid response.

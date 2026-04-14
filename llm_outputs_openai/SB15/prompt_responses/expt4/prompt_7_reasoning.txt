@@ -1,0 +1,15 @@
+The repair addresses the vulnerability by ensuring that the code does not return or finalize key status based solely on an initial signature validation, which could be exploited to force acceptance of malicious mirror zone data. Here’s how the changes work:
+
+1. Delaying Early Return:  
+   In the original code, when the call to either dns_dnssec_selfsigns or dns_dnssec_signs succeeded, the code immediately incremented the corresponding algorithm counter (in active_keys) and in one branch returned success. This meant that if an attacker could manipulate the responses in the mirror zone, the recursive server might bypass full trust anchor verification. In the repaired code, instead of returning immediately after a successful signature check, the code records that a valid signature has been found (by setting the validSignature flag) but does not exit early. This allows the program to continue to the trust-anchor verification step.
+
+2. Unconditional Trust Anchor Verification:  
+   After processing the signature checks, regardless of whether an early "success" condition would have been met, the code checks if a trust anchor is configured (via vctx.secroots). If there are trust anchors, the function enforces additional DNSSEC trust validation by converting the rdata into a key (via dns_dnssec_keyfromrdata) and then checking for a matching key in the trust anchor key table. This extra verification ensures that even if an attacker could forge a signature that appears to validate mirror zone data, the key would still need to match a trusted source, protecting against the mirror zone data manipulation vulnerability.
+
+3. Consistency in Key Incrementing and Fallback:  
+   Both active_keys and standby_keys are incremented accordingly, similar to the original logic, but importantly, these increments now only serve as counters and do not affect if the final trust-anchor based validation is performed. Even if the less rigorous signature verification passes, without a matching trust anchor, the key is not marked as “good” (i.e., accepted). This forces the system to depend on the correct, cryptographically-backed trust relationships rather than superficial signature presence.
+
+4. Comments and Code Structure:  
+   The repair includes detailed comments explaining why the early return was removed and emphasizing that a full validation loop needs to occur. This makes it clear that the integrity of incoming zone data is now based solely on its ability to pass both the initial signatures and the subsequent trusted key verification.
+
+Overall, by removing early exit conditions and enforcing a mandatory trust-anchor-based key validation, the modification mitigates the vulnerability where an on-path attacker might induce the DNS server to accept falsified zone data. This approach ensures that a valid DNSSEC signature is not sufficient on its own; the signature must also be backed by a trusted key, thereby strengthening the overall security of the mirror zone functionality.

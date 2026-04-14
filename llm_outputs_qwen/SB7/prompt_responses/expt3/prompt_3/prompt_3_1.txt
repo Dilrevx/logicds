@@ -1,0 +1,45 @@
+To address the described vulnerability, we need to ensure that any errors encountered during the leaf certificate verification process are properly stored and returned. The current code does not handle errors from `x509_verify_cert_valid` and `x509_verify_cert_hostname` appropriately. Instead of returning `0` when these functions fail, we should capture the specific error and store it in the context.
+
+Here's a revised version of the code that addresses this issue:
+
+```c
+if ((ctx.chains_count < ctx.max_chains ? (ctx.chains[ctx.chains_count] = X509Utils.x509_verify_chain_dup(chain)) : NULL) == NULL) {
+    return X509Utils.x509_verify_cert_error(ctx, last, depth, X509Constants.X509_V_ERR_OUT_OF_MEM, 0);
+}
+
+// Verify the validity of the leaf certificate
+if (!X509Utils.x509_verify_cert_valid(ctx, leaf, &ctx.error)) {
+    // If the verification fails, store the error and return it
+    return X509Utils.x509_verify_cert_error(ctx, last, depth, ctx.error, 0);
+}
+
+// Verify the hostname of the leaf certificate
+if (!X509Utils.x509_verify_cert_hostname(ctx, leaf, name, &ctx.error)) {
+    // If the hostname verification fails, store the error and return it
+    return X509Utils.x509_verify_cert_error(ctx, last, depth, ctx.error, 0);
+}
+
+// Increment the chains count if everything is valid
+ctx.chains_count++;
+ctx.error = X509Constants.X509_V_OK;
+
+return X509Constants.X509_V_OK;  // Return success
+```
+
+### Explanation:
+
+1. **Memory Allocation Check**: The first `if` statement checks if memory allocation for the chain duplication was successful. If not, it returns an out-of-memory error.
+
+2. **Certificate Validity Check**: 
+   - The second `if` statement calls `x509_verify_cert_valid`. This function now takes an additional parameter (a pointer to `ctx.error`) where it can store the specific error if the certificate is invalid.
+   - If the certificate is invalid, the function returns `false`, and we call `x509_verify_cert_error` with the stored error to return the correct error code.
+
+3. **Hostname Verification**:
+   - Similarly, the third `if` statement calls `x509_verify_cert_hostname` which also takes a pointer to `ctx.error` to store any hostname verification errors.
+   - If the hostname does not match, the function returns `false`, and we again call `x509_verify_cert_error` with the stored error.
+
+4. **Success Case**:
+   - If both the certificate validity and hostname verification pass, we increment the `chains_count` and set `ctx.error` to `X509Constants.X509_V_OK`.
+   - Finally, we return `X509Constants.X509_V_OK` indicating that the verification was successful.
+
+This approach ensures that any specific error encountered during the verification process is captured and returned, providing more accurate feedback to the caller.

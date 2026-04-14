@@ -1,0 +1,50 @@
+Below is one example of a patched version of the code. Notice the additional conditional check (highlighted in comments) immediately following the PSK processing. This check verifies that if no valid PSK was negotiated (the pskNegotiated flag is false) then the namedGroup field (representing the key share extension) is examined. If the namedGroup value is still zero—indicating no key share extension was provided—the function returns an error (EXT_MISSING) to abort the handshake. This prevents falling back to the default predictable key material.
+
+---------------------------------------------------------
+/* Patched Code */
+
+if (*extMsgType == server_hello) {
+#if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
+    PreSharedKey* psk = NULL;
+    TLSX* ext = TLSX_Find(ssl->extensions, TLSX_PRE_SHARED_KEY);
+    if (ext != NULL)
+        psk = (PreSharedKey*)ext->data;
+    while (psk != NULL && !psk->chosen)
+        psk = psk->next;
+    if (psk == NULL) {
+        ssl->options.resuming = 0;
+        ssl->arrays->psk_keySz = 0;
+        XMEMSET(ssl->arrays->psk_key, 0, MAX_PSK_KEY_LEN);
+    }
+    else {
+        if ((ret = SetupPskKey(ssl, psk, 0)) != 0)
+            return ret;
+        ssl->options.pskNegotiated = 1;
+    }
+#endif
+
+    /* Added Safety Check: For TLS 1.3, ensure that either
+       a valid PSK is negotiated or a proper key share (namedGroup != 0)
+       is provided. Abort the handshake if both are missing. */
+    if (!ssl->options.pskNegotiated && (ssl->session.namedGroup == 0)) {
+        return EXT_MISSING;
+    }
+
+    ssl->keys.encryptionOn = 1;
+    ssl->options.serverState = SERVER_HELLO_COMPLETE;
+}
+else {
+    ssl->options.tls1_3 = 1;
+    ssl->options.serverState = SERVER_HELLO_RETRY_REQUEST_COMPLETE;
+
+    ret = RestartHandshakeHash(ssl);
+}
+---------------------------------------------------------
+
+Explanation of the changes:
+1. After processing the PSK extension, we now check if a PSK was negotiated by evaluating ssl->options.pskNegotiated.
+2. In parallel, we verify that a valid key share is present by checking that ssl->session.namedGroup is not zero.
+3. If both the PSK and key share are absent, the function returns the error EXT_MISSING immediately—thus avoiding the use of a predictable key buffer for generating the session master secret.
+4. If either a valid PSK or a valid key share is available, the handshake proceeds normally, enabling encryption and updating the server state.
+
+This repair ensures that an insecure TLS 1.3 session cannot be established by forcing the handshake to abort when both critical key negotiation elements are missing.

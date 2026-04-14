@@ -1,0 +1,62 @@
+The vulnerability described pertains to a specific scenario in the TLS 1.3 protocol implementation within the wolfSSL library. When a TLS 1.3 client does not receive either a Pre-Shared Key (PSK) extension or a Key Share Extension (KSE) from the server during the handshake process, the implementation uses a default, predictable buffer to generate the Initial Keying Material (IKM). This predictable IKM can be exploited by an attacker to reconstruct the session master secret, thereby compromising the security of the TLS session.
+
+### Understanding the Vulnerability
+
+In TLS 1.3, the session master secret is derived from the IKM, which is generated based on the key exchange mechanism agreed upon by the client and server. The PSK and KSE extensions are crucial for this process:
+
+- **Pre-Shared Key (PSK):** This allows clients and servers to use previously established keys to speed up the handshake process and reduce latency.
+- **Key Share Extension (KSE):** This is part of the Elliptic Curve Diffie-Hellman (ECDHE) key exchange mechanism, which is essential for establishing a secure session key.
+
+If neither of these extensions is present, the implementation falls back to using a default IKM, which is predictable and can be easily guessed or reconstructed by an attacker. This predictability undermines the security of the session, making it susceptible to attacks such as man-in-the-middle (MITM) or passive eavesdropping.
+
+### Analysis of the Buggy Code
+
+The provided code snippet is part of the TLS 1.3 handshake process in the wolfSSL library. It checks for the presence of the PSK extension and handles the situation where no suitable PSK is found. However, it does not account for the absence of the KSE, leading to the use of a default IKM when both extensions are missing.
+
+### Proposed Repair
+
+The repair involves ensuring that if neither the PSK nor the KSE is present, a random IKM is generated instead of using a default, predictable one. Here's how the repair addresses the vulnerability:
+
+1. **Check for KSE:** In addition to checking for the PSK extension, the code now also looks for the KSE extension.
+   ```java
+   KeyShareEntry kse = null;
+   ext = TLSX.find(ssl.extensions, CommonsConstants.TLSX_KEY_SHARE);
+   if (ext != null)
+       kse = ((KeyShare) ext.data).getFirst();
+   ```
+
+2. **Handle Absence of Both Extensions:** If neither the PSK nor the KSE is found, the code generates a random IKM.
+   ```java
+   if (psk == null && kse == null) {
+       // Handle the case where neither PSK nor KSE is provided
+       // Generate a random IKM value instead of using a default predictable one
+       byte[] randomIKM = new byte[32]; // Example size, adjust as necessary
+       ssl.rand.generateBlock(randomIKM, 0, randomIKM.length);
+       System.arraycopy(randomIKM, 0, ssl.arrays.psk_key, 0, Math.min(randomIKM.length, ssl.arrays.psk_key.length));
+       ssl.arrays.psk_keySz = randomIKM.length;
+       ssl.options.resuming = false;
+   }
+   ```
+   - **Random IKM Generation:** A random block of bytes is generated using a secure random number generator (`ssl.rand.generateBlock`). The size of this block (32 bytes in this example) should be sufficient to provide adequate entropy for the IKM.
+   - **Setting IKM:** The generated random IKM is then copied into the `ssl.arrays.psk_key` array, which is used as the IKM for deriving the session master secret.
+   - **Resuming Flag:** The `ssl.options.resuming` flag is set to `false` to indicate that a new session is being established rather than resuming an existing one.
+
+3. **Continue Normal Processing:** If a valid PSK is found, the code proceeds as before, setting up the PSK key and marking the PSK as negotiated.
+   ```java
+   else if (psk != null) {
+       ret = SetupPskKey(ssl, psk, 0);
+       if (ret != 0)
+           return ret;
+       ssl.options.pskNegotiated = true;
+   }
+   ```
+
+4. **Completion of Handshake:** The encryption is enabled, and the server state is updated to indicate that the ServerHello phase is complete.
+   ```java
+   ssl.keys.encryptionOn = true;
+   ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE;
+   ```
+
+### Conclusion
+
+By ensuring that a random IKM is generated when neither the PSK nor the KSE is present, the repair effectively mitigates the vulnerability associated with the use of a predictable IKM. This change enhances the security of TLS sessions by preventing attackers from reconstructing the session master secret, thus maintaining the confidentiality and integrity of the communication.

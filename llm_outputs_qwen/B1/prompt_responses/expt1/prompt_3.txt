@@ -1,0 +1,71 @@
+<repair>
+	if (pkey == NULL || peer == NULL) {
+		al = SSL_AD_HANDSHAKE_FAILURE;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_NO_PUBLICKEY);
+		goto f_err;
+	}
+
+	p = s->init_msg;
+
+	if (s->version == SSL3_VERSION) {
+		j = *(p++);
+		if ((j & ~SSL_CLIENT_AUTHENTICATION) != 0) {
+			al = SSL_AD_ILLEGAL_PARAMETER;
+			SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_SIGNATURE_FOR_NON_SIGNING_CERTIFICATE);
+			goto f_err;
+		}
+		type = j;
+	} else {
+		type = EVP_PKEY_type(EVP_PKEY_id(pkey));
+	}
+
+	j = EVP_PKEY_size(pkey);
+	n2s(p,i);
+	if (i != j) {
+		al = SSL_AD_DECODE_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_WRONG_SIGNATURE_SIZE);
+		goto f_err;
+	}
+
+	if (s->version == TLS1_2_VERSION) {
+		const unsigned char *sigalg;
+		int sigalg_len;
+
+		sigalg = p;
+		sigalg_len = 2;
+		p += sigalg_len;
+		i -= sigalg_len;
+
+		if (!tls12_check_peer_sigalg(&md, sigalg, sigalg_len, pkey, s)) {
+			al = SSL_AD_ILLEGAL_PARAMETER;
+			SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_WRONG_SIGNATURE_TYPE);
+			goto f_err;
+		}
+	} else {
+		md = EVP_sha1();
+	}
+
+	if (EVP_VerifyInit_ex(&mctx, md, NULL) <= 0) goto err;
+	if (!ssl3_take_mac(s, &mctx)) goto err;
+	if (EVP_VerifyUpdate(&mctx, &(s->s3->client_random[0]), SSL3_RANDOM_SIZE) <= 0) goto err;
+	if (EVP_VerifyUpdate(&mctx, &(s->s3->server_random[0]), SSL3_RANDOM_SIZE) <= 0) goto err;
+	if (EVP_VerifyFinal(&mctx,p,(int)n,pkey) <= 0) {
+		al=SSL_AD_DECRYPT_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY,SSL_R_BAD_SIGNATURE);
+		ret=0;
+		goto f_err;
+	}
+
+	ret=1;
+f_err:
+	EVP_PKEY_free(pkey);
+	EVP_MD_CTX_cleanup(&mctx);
+	return(ret);
+err:
+	ret=0;
+	f_err:
+	EVP_PKEY_free(pkey);
+	EVP_MD_CTX_cleanup(&mctx);
+	return(ret);
+}
+</repair>

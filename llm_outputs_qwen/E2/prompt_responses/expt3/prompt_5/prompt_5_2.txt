@@ -1,0 +1,63 @@
+<repair>
+if (nas_msg.unpack_outer_hdr(pdu) != SRSRAN_SUCCESS) {
+  logger.error("Unable to unpack outer NAS header");
+  return SRSRAN_ERROR;
+}
+
+// Initialize current_message_header to an invalid value
+uint8_t current_message_header = 99;
+
+switch (nas_msg.hdr.security_header_type) {
+  case nas_5gs_hdr::security_header_type_opts::plain_5gs_nas_message:
+    current_message_header = static_cast<uint8_t>(nas_msg.hdr.security_header_type);
+    // Check if security context has been established
+    if (has_sec_ctxt) {
+      logger.error("Received plain NAS message after security context establishment");
+      return SRSRAN_ERROR;
+    }
+    break;
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected:
+    current_message_header = static_cast<uint8_t>(nas_msg.hdr.security_header_type);
+    // Check sequence number for replay detection
+    if (nas_msg.hdr.sequence_number != ctxt_base.rx_count || nas_msg.hdr.sequence_number < (ctxt_base.rx_count - 1)) {
+      logger.error("Replay detected: Invalid sequence number");
+      return SRSRAN_ERROR;
+    }
+    if (integrity_check(pdu.get()) == false) {
+      logger.error("Not handling NAS message with integrity check error");
+      return SRSRAN_ERROR;
+    }
+    break;
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered:
+    current_message_header = static_cast<uint8_t>(nas_msg.hdr.security_header_type);
+    // Check sequence number for replay detection
+    if (nas_msg.hdr.sequence_number != ctxt_base.rx_count || nas_msg.hdr.sequence_number < (ctxt_base.rx_count - 1)) {
+      logger.error("Replay detected: Invalid sequence number");
+      return SRSRAN_ERROR;
+    }
+    if (integrity_check(pdu.get()) == false) {
+      logger.error("Not handling NAS message with integrity check error");
+      return SRSRAN_ERROR;
+    } else {
+      cipher_decrypt(pdu.get());
+    }
+    break;
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_with_new_5G_nas_context:
+    current_message_header = static_cast<uint8_t>(nas_msg.hdr.security_header_type);
+    // Check sequence number for replay detection
+    if (nas_msg.hdr.sequence_number != ctxt_base.rx_count || nas_msg.hdr.sequence_number < (ctxt_base.rx_count - 1)) {
+      logger.error("Replay detected: Invalid sequence number");
+      return SRSRAN_ERROR;
+    }
+    break;
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered_with_new_5G_nas_context:
+    logger.error("Not handling NAS message with new 5G NAS context");
+    return SRSRAN_ERROR;
+  default:
+    logger.error("Not handling NAS message with unknown security header");
+    break;
+}
+
+// Update the rx_count after successful message processing
+ctxt_base.rx_count = nas_msg.hdr.sequence_number + 1;
+</repair>

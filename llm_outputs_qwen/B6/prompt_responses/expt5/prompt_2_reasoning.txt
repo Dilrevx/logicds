@@ -1,0 +1,55 @@
+The vulnerability in the original code lies in how it verifies the expected common name (CN) against the names listed in the Subject Alternative Name (SAN) extension of an X.509 certificate. Specifically, the code does not differentiate between the types of names listed in the SAN extension. As a result, it can mistakenly accept an IP address as a valid domain name if the expected CN matches an IP address listed in the SAN.
+
+### Original Vulnerability Analysis
+
+In the original code snippet:
+
+```c
+if( crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME )
+{
+    for( cur = &crt->subject_alt_names; cur != NULL; cur = cur->next )
+    {
+        if( x509_crt_check_cn( &cur->buf, cn, cn_len ) == 0 )
+            break;
+    }
+
+    if( cur == NULL )
+        *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+}
+```
+
+The loop iterates through each entry in the `subject_alt_names` linked list without checking the type of each entry. The function `x509_crt_check_cn` is called on each entry's buffer (`cur->buf`) to compare it against the expected common name (`cn`). If a match is found, the loop breaks, indicating a successful verification. However, this approach is flawed because the SAN extension can contain various types of names, including DNS names, email addresses, and IP addresses. By not filtering for DNS names, the code can incorrectly match an IP address to a domain name, allowing an attacker to impersonate a domain by obtaining a certificate for the corresponding IP address.
+
+### Repair Explanation
+
+To mitigate this vulnerability, the repaired code introduces a check to ensure that only DNS names (type 2) are considered during the verification process. Here is the repaired code snippet:
+
+```c
+if( crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME )
+{
+    for( cur = &crt->subject_alt_names; cur != NULL; cur = cur->next )
+    {
+        // Check if the type of the SAN is DNS name (type 2)
+        if( cur->type == MBEDTLS_X509_SAN_DNSNAME &&
+            x509_crt_check_cn( &cur->buf, cn, cn_len ) == 0 )
+            break;
+    }
+
+    if( cur == NULL )
+        *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+}
+```
+
+#### Key Changes
+
+1. **Type Checking**: The critical change is the addition of a condition to check the type of each SAN entry (`cur->type`). The code now verifies that the type is `MBEDTLS_X509_SAN_DNSNAME`, which corresponds to DNS names. This ensures that only DNS names are considered when matching against the expected common name (`cn`).
+
+2. **Maintaining Functionality**: The rest of the logic remains unchanged. The code still iterates through all SAN entries, but it only attempts to match against those that are DNS names. If no matching DNS name is found, it sets the `MBEDTLS_X509_BADCERT_CN_MISMATCH` flag, indicating a mismatch.
+
+3. **Handling Absence of SAN**: If the certificate does not have a SAN extension, the code reverts to the original behavior of checking the Common Name (CN) in the Subject field of the certificate.
+
+### Security Implications
+
+By implementing this repair, the system now correctly enforces the expectation that the common name should match a DNS name in the SAN extension, rather than any type of name. This prevents attackers from using IP addresses or other types of names in the SAN extension to impersonate a domain. The security of the system is thereby enhanced, as it adheres more closely to the intended use of the SAN extension according to the X.509 standard.
+
+In summary, the repair addresses the vulnerability by ensuring that only DNS names are considered during the common name verification process, thereby preventing potential mismatches that could lead to security issues.

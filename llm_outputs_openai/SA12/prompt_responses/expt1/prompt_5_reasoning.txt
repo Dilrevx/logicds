@@ -1,0 +1,21 @@
+The repair introduces an explicit check for mutual authentication requirements before continuing with the Finished message processing. Here’s a step-by-step explanation:
+
+1. Mutual Authentication Enforcement:
+   - The vulnerability existed because in TLS v1.3, if a client is not required to send a Certificate Verify message (even when the server requires it), the handshake could be mistakenly accepted. This allowed an attacker to bypass the client-authentication check.
+   - The repair adds a conditional check:
+     • It verifies whether mutual authentication is required (using ssl.reqMutualAuth).
+     • It then confirms that a valid Certificate Verify message has been received (using ssl.certVerifyReceived).
+   - If mutual authentication is required but the Certificate Verify message hasn’t been processed (or is missing), the function returns a dedicated error code (Constants.CERT_VERIFY_MISSING). This prevents the handshake from proceeding if the client fails to provide the necessary proof of possession of its private key.
+
+2. Buffer Boundary Check:
+   - After the mutual authentication check, the repair confirms that the incoming data won’t overflow the expected total buffer size by checking if (inOutIdx[0] + size + ssl.keys.padSz > totalSz). This protects against buffer over-read vulnerabilities.
+
+3. Finished Message Handling:
+   - The function computes the Finished message MAC using a helper, ensuring that the integrity of the handshake messages is verified.
+   - A constant-time comparison then checks if the computed MAC matches the expected MAC stored in ssl.expectedFinishedMac. This is crucial to avoiding timing attacks that might reveal secret data.
+
+4. Safe State Progression:
+   - Upon successful verification, the function calculates the total processed size (finishedSz) and updates the inOutIdx pointer accordingly.
+   - The function then logs the completion of the Finished message processing and returns the correct processed size.
+
+By explicitly enforcing a check for the presence of a valid Certificate Verify message when mutual authentication is required, the repair fixes the logical vulnerability. It ensures that an attacker cannot bypass client certificate requirements by omitting the Certificate Verify message; if the message is missing or invalid, the handshake immediately fails. This prevents unauthorized access by enforcing strict TLS v1.3 protocol compliance, thereby securing the communication channel between the client and the server.

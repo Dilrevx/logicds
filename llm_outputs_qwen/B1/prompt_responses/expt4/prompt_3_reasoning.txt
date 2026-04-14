@@ -1,0 +1,33 @@
+The provided repair addresses a critical vulnerability in the `ssl3_get_cert_verify` function, which is part of the OpenSSL library responsible for handling SSL/TLS handshakes. The vulnerability stems from the fact that the function does not properly enforce the requirement for a `CertificateVerify` message when a client presents a certificate based on the Diffie-Hellman (DH) key exchange algorithm. This oversight allows an attacker to bypass the intended authentication process, potentially gaining unauthorized access to the server.
+
+### Understanding the Vulnerability
+
+In the context of SSL/TLS, the `CertificateVerify` message is used by the client to prove possession of the private key corresponding to the public key included in its `Certificate` message. This step is crucial for ensuring that the client is who it claims to be, especially when using asymmetric cryptographic algorithms like RSA or DH.
+
+However, the original code snippet fails to check for the presence of a `CertificateVerify` message when the client's certificate is based on DH. This omission means that an attacker could present a DH certificate without providing a valid `CertificateVerify`, thus bypassing the authentication mechanism designed to verify the client's identity.
+
+### Analysis of the Original Code
+
+The original code checks if the received message type is `SSL3_MT_CERTIFICATE_VERIFY`. If not, it proceeds under the assumption that no `CertificateVerify` message is expected, which is correct in scenarios where the client does not use a signing-capable certificate (e.g., RSA certificates used only for encryption). However, this logic does not account for the case where the client uses a DH certificate, which inherently requires a `CertificateVerify` message to prove possession of the corresponding private key.
+
+### Proposed Repair
+
+The repair introduces an additional check to ensure that a `CertificateVerify` message is required when the client's certificate is based on the DH algorithm. Here’s how the repair works:
+
+1. **Check Message Type**: The code first checks if the received message type is `SSL3_MT_CERTIFICATE_VERIFY`. If not, it proceeds to the next step.
+
+2. **Check for Peer Certificate and Signing Capability**: It then checks if there is a peer certificate (`peer != NULL`) and if the certificate is capable of signing (`type & EVP_PKT_SIGN`). This condition is already present in the original code and ensures that a `CertificateVerify` message is expected for signing-capable certificates.
+
+3. **Additional Check for DH Certificates**: The repair adds an else-if condition to check if the public key associated with the peer certificate (`pkey`) is of type DH (`EVP_PKEY_base_id(pkey) == EVP_PKEY_DH`). If this condition is true, it indicates that the certificate is based on the DH algorithm.
+
+4. **Handle Missing CertificateVerify for DH Certificates**: When the peer certificate is based on DH but no `CertificateVerify` message is received, the code sets an alert level (`al`) to `SSL_AD_HANDSHAKE_FAILURE` and logs an error message indicating that a `CertificateVerify` message is missing for a DH certificate. It then jumps to the error handling section (`f_err`) to terminate the handshake process.
+
+5. **Continue Normal Flow**: If none of the above conditions are met (i.e., the message type is `SSL3_MT_CERTIFICATE_VERIFY`, or the certificate is not signing-capable and not based on DH), the function sets `ret` to 1 and proceeds to the end of the function, allowing the handshake to continue normally.
+
+### Security Implications
+
+By enforcing the requirement for a `CertificateVerify` message when a DH certificate is presented, the repair effectively mitigates the risk of unauthorized access through crafted TLS handshake messages. This change ensures that the authentication process remains robust and secure, even when using key exchange algorithms that rely on digital signatures for client authentication.
+
+### Conclusion
+
+The proposed repair is a targeted modification that addresses a specific vulnerability in the SSL/TLS handshake process. By adding a check for DH certificates, it ensures that the `CertificateVerify` message is correctly enforced, thereby maintaining the integrity and security of the authentication mechanism. This kind of patch is essential for protecting systems against sophisticated attacks that exploit protocol weaknesses.

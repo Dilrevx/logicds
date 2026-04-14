@@ -1,0 +1,74 @@
+<repair>
+	if (pkey == NULL) {
+		al = SSL_AD_HANDSHAKE_FAILURE;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_NO_PUBLICKEY);
+		goto err;
+	}
+
+	p = s->init_msg;
+	n = s->init_num;
+
+	i = *p++;
+	n--;
+
+	if ((peer->ex_flags & EXFLAG_CA) && (type & EVP_PKEY_RSA)) {
+		type = EVP_PKEY_RSA;
+	} else if (!(type & EVP_PKEY_RSA)) {
+		al = SSL_AD_ILLEGAL_PARAMETER;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_SIGNATURE_FOR_NON_RSA_CERTIFICATE);
+		goto err;
+	}
+
+	j = EVP_PKEY_size(pkey);
+	if ((n != j) || (n <= 0)) {
+		al = SSL_AD_DECODE_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_WRONG_SIGNATURE_LENGTH);
+		goto err;
+	}
+
+	if (SSL_USE_SIGALGS(s)) {
+		int sigalg = tls12_get_sigid(pkey);
+		if (sigalg == -1) {
+			al = SSL_AD_INTERNAL_ERROR;
+			SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_UNKNOWN_DIGEST);
+			goto err;
+		}
+		sigalg &= ~TLSEXT_signature_anonymous;
+		if (tls12_check_peer_sigalg(&md, s, sigalg, p, n) <= 0) {
+			al = SSL_AD_DECODE_ERROR;
+			SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_WRONG_SIGNATURE_TYPE);
+			goto err;
+		}
+		p += 2;
+		n -= 2;
+	} else {
+		md = EVP_sha1();
+	}
+
+	if (EVP_DigestVerifyInit(&mctx, NULL, md, NULL, pkey) <= 0) {
+		al = SSL_AD_INTERNAL_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_EVP_LIB);
+		goto err;
+	}
+
+	if (!ssl3_finish_mac(s, s->init_buf->data, s->init_num)) {
+		al = SSL_AD_INTERNAL_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, ERR_R_INTERNAL_ERROR);
+		goto err;
+	}
+
+	s->state = SSL3_ST_SR_CERT_VRFY_C;
+
+	if (EVP_DigestVerifyFinal(&mctx, p, (size_t)n) <= 0) {
+		al = SSL_AD_DECRYPT_ERROR;
+		SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_BAD_SIGNATURE);
+		goto err;
+	}
+
+	ret = 1;
+
+err:
+	EVP_PKEY_free(pkey);
+	EVP_MD_CTX_cleanup(&mctx);
+	return ret;
+}</repair>

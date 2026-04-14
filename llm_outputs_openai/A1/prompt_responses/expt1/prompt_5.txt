@@ -1,0 +1,72 @@
+<repair>
+    if (ctx->algctx == NULL) {
+        ctx->algctx = ctx->cipher->newctx(ossl_provider_ctx(cipher->prov));
+        if (ctx->algctx == NULL) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+    }
+
+    /* 
+     * FIX: Validate key and IV lengths from the OSSL_PARAM array against the
+     * lengths established in the EVP_CIPHER_CTX. This ensures that a caller
+     * cannot supply parameters that would lead to unintended truncation or
+     * overruns.
+     */
+    if (params != NULL) {
+        size_t param_keylen = 0, param_ivlen = 0;
+        const OSSL_PARAM *p_key = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_KEYLEN);
+        const OSSL_PARAM *p_iv  = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_IVLEN);
+
+        if (p_key != NULL && !OSSL_PARAM_get_size_t(p_key, &param_keylen)) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+        if (p_iv != NULL && !OSSL_PARAM_get_size_t(p_iv, &param_ivlen)) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+        if (param_keylen != 0 && param_keylen != EVP_CIPHER_CTX_get_key_length(ctx)) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_KEY_LENGTH);
+            return 0;
+        }
+        if (param_ivlen != 0 && param_ivlen != EVP_CIPHER_CTX_get_iv_length(ctx)) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_IV_LENGTH);
+            return 0;
+        }
+    }
+
+    if ((ctx->flags & EVP_CIPH_NO_PADDING) != 0) {
+        /*
+         * If this context was already set up for no padding then we need to tell
+         * the new cipher about it.
+         */
+        if (!EVP_CIPHER_CTX_set_padding(ctx, 0))
+            return 0;
+    }
+
+    if (enc) {
+        if (ctx->cipher->einit == NULL) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+        return ctx->cipher->einit(ctx->algctx,
+                                  key,
+                                  key == NULL ? 0 : EVP_CIPHER_CTX_get_key_length(ctx),
+                                  iv,
+                                  iv == NULL ? 0 : EVP_CIPHER_CTX_get_iv_length(ctx),
+                                  params);
+    } else {
+        if (ctx->cipher->dinit == NULL) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+        return ctx->cipher->dinit(ctx->algctx,
+                                  key,
+                                  key == NULL ? 0 : EVP_CIPHER_CTX_get_key_length(ctx),
+                                  iv,
+                                  iv == NULL ? 0 : EVP_CIPHER_CTX_get_iv_length(ctx),
+                                  params);
+    }
+}
+</repair>

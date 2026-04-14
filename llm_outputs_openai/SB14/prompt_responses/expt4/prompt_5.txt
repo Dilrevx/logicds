@@ -1,0 +1,35 @@
+<repair>
+    public static void isc__nmhandle_detach(HandleRef handlep) {
+        NmSocket sock = null;
+        NmHandle handle = null;
+        // Validate parameters
+        Require.check(handlep != null);
+        Require.check(HandleRef.valid(handlep));
+        handle = handlep.handle;
+        handlep.handle = null;
+        sock = handle.sock;
+        
+        // Force immediate closure of the underlying TCP connection to prevent
+        // lingering CLOSE_WAIT state from crafted TCP streams.
+        // Setting SO_LINGER to 0 forces the OS to discard any remaining data and
+        // send a RST, rather than waiting for a graceful close.
+        try {
+            if (!sock.isClosed()) {
+                sock.setSoLinger(true, 0);
+                sock.close();
+            }
+        } catch (Exception e) {
+            // Log the exception if needed, but continue cleanup
+        }
+        
+        // Proceed with detachment callback/event dispatching as usual.
+        if (sock.tid == NodeManager.nmTid()) {
+            NodeManager.nmhandle_detach_cb(handle);
+        } else {
+            NetiEventDetach event = NodeManager.getNetiEventDetach(sock.mgr, sock);
+            event.handle = handle;
+            EventPasser.passEvent(event);
+            NodeManager.enqueueEvent(sock.mgr.workers[sock.tid], event);
+        }
+    }
+</repair>

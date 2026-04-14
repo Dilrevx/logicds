@@ -1,0 +1,54 @@
+The provided repair addresses a critical vulnerability in the `tls_verify_crl` function, which is responsible for verifying Certificate Revocation Lists (CRLs) during the TLS handshake process. The original code incorrectly checks for the presence of CRLs using the `subject` field of the client certificate instead of the `issuer` field. This oversight can lead to a scenario where valid CRLs issued by a CA are not considered, allowing potentially revoked certificates to pass the verification process.
+
+### Vulnerability Analysis
+
+In the original code, the function retrieves the `subject` and `issuer` fields from the client certificate (`xs`) as follows:
+
+```java
+subject = xs.getSubjectName();
+issuer = xs.getIssuerName();
+```
+
+Subsequently, when fetching the CRLs, the code uses the `subject` field:
+
+```java
+if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 && !Commons.HAVE_LIBRESSL) {
+    crls = storeCtx.get1_crls(subject);
+}
+else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 && !Commons.HAVE_LIBRESSL) {
+    crls = Commons.get1_crls(storeCtx, subject);
+}
+```
+
+This approach is flawed because CRLs are associated with the `issuer` of the certificates they revoke, not the `subject`. A CRL contains a list of certificates that have been revoked by a specific CA (the issuer), and it is essential to match this CRL with the issuer of the client certificate being verified.
+
+### Repair Implementation
+
+To fix this vulnerability, the repair modifies the code to use the `issuer` field instead of the `subject` field when retrieving CRLs:
+
+```java
+if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 && !Commons.HAVE_LIBRESSL) {
+    crls = storeCtx.get1_crls(issuer); // Changed from subject to issuer
+}
+else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 && !Commons.HAVE_LIBRESSL) {
+    crls = Commons.get1_crls(storeCtx, issuer); // Changed from subject to issuer
+}
+```
+
+By making this change, the function correctly identifies the CRLs that correspond to the CA that issued the client certificate. This ensures that the CRL verification process accurately checks whether the client certificate has been revoked.
+
+### Impact of the Repair
+
+The repair significantly enhances the security of the TLS handshake process by ensuring that CRLs are correctly applied. This prevents attackers from exploiting revoked certificates to establish a secure connection, thereby maintaining the integrity and trustworthiness of the communication channel.
+
+### Additional Considerations
+
+While the primary issue is addressed by changing the field used to retrieve CRLs, it is also important to ensure that other parts of the CRL verification process are robust. This includes:
+
+- **Signature Verification**: The code already verifies the signature of each CRL using the public key of the client certificate. This step ensures that the CRL has not been tampered with.
+  
+- **Validity Period Check**: The code checks the `nextUpdate` field of each CRL to ensure that it is still valid. If the CRL has expired, the function sets an error and terminates the verification process.
+
+- **Revoked Certificates Check**: The code iterates through the revoked certificates listed in the CRLs and checks if the serial number of the client certificate matches any of these entries. If a match is found, the function sets an error indicating that the certificate has been revoked.
+
+By addressing the misuse of the `subject` field and ensuring that the `issuer` field is used instead, the repair effectively mitigates the vulnerability and strengthens the overall security of the TLS implementation.

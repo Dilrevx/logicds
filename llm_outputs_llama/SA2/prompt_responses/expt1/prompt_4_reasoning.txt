@@ -1,0 +1,56 @@
+The original code snippet contains a logical vulnerability in the handling of the `X509_PCY_TREE_INVALID` return value from the `X509PolicyChecker.check(ctx)` method. The vulnerability arises from the fact that the loop that checks for invalid policy extensions in the certificate chain starts from index 1, skipping the first certificate in the chain.
+
+The repair addresses this vulnerability by changing the loop to start from index 0, ensuring that all certificates in the chain are checked for invalid policy extensions. Additionally, the condition inside the loop is modified to continue to the next iteration if the certificate is not null and does not have the `EXFLAG_INVALID_POLICY` flag set.
+
+Here's a breakdown of the changes:
+
+1.  **Loop starting index**: The original loop starts from index 1, which means the first certificate in the chain is skipped. This is problematic because the first certificate is likely to be the end-entity certificate, which should be checked for invalid policy extensions. By starting the loop from index 0, we ensure that all certificates in the chain are checked.
+
+2.  **Null check and flag check**: The original code checks if the certificate is null or has the `EXFLAG_INVALID_POLICY` flag set using the bitwise AND operator (`&`). However, this check is not sufficient because it will evaluate to true if the certificate is null, which is not the intended behavior. The repair modifies this check to first verify that the certificate is not null before checking the flag. If the certificate is null, the `cbFailIf` method is called with the appropriate error code.
+
+3.  **Early continue**: The repair adds a continue statement to skip the rest of the loop body if the certificate is not null and does not have the `EXFLAG_INVALID_POLICY` flag set. This optimization reduces unnecessary calls to the `cbFailIf` method.
+
+The repaired code ensures that all certificates in the chain are checked for invalid policy extensions, and the `cbFailIf` method is called only when a certificate is null or has the `EXFLAG_INVALID_POLICY` flag set. This fix addresses the logical vulnerability in the original code and provides a more robust implementation for handling invalid policy extensions in X.509 certificates.
+
+Here's the complete function with the repair:
+
+```java
+public static int checkPolicy(X509StoreCtx ctx) {
+    int ret;
+
+    if (ctx.parent) {
+        return 1;
+    }
+
+    if (ctx.bareTaSigned &&!pushNullCert(ctx.chain)) {
+        raiseError(X509Error.ERR_R_CRYPTO_LIB);
+        return -1;
+    }
+
+    ret = X509PolicyChecker.check(ctx);
+
+    if (ctx.bareTaSigned) {
+        popCert(ctx.chain);
+    }
+
+    if (ret == X509PolicyChecker.X509_PCY_TREE_INTERNAL) {
+        raiseError(X509Error.ERR_R_X509_LIB);
+        return -1;
+    }
+
+    if (ret == X509PolicyChecker.X509_PCY_TREE_INVALID) {
+        for (int i = 0; i < ctx.chain.size(); i++) {
+            X509Certificate x = ctx.chain.get(i);
+
+            if (x!= null && (x.hashCode() & EXFLAG_INVALID_POLICY) == 0) {
+                continue;
+            }
+
+            cbFailIf(x == null || (x.hashCode() & EXFLAG_INVALID_POLICY)!= 0
+                   , ctx, x, i, X509Error.X509_V_ERR_INVALID_POLICY_EXTENSION);
+        }
+
+        return 1;
+    }
+}
+```

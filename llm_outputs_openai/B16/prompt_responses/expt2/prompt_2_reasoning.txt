@@ -1,0 +1,22 @@
+The repair adds additional checks to ensure that a DNS reply is accepted only if it comes through the correct network socket used to send the original query. Previously, the code only verified the query identifier and, optionally, a hash value, which made it easier for an attacker to forge replies if they could match those parameters. Here’s how each part of the repair mitigates the vulnerability:
+
+1. Identification and Hash Matching:
+   The code first checks whether the reply corresponds to a pending query by verifying:
+   • The query is marked as sent (f->sentto is non-null).
+   • The query identifier (f->new_id) matches the reply's id.
+   • If a hash is provided, it is compared with the stored hash (f->hash).
+   This ensures that only queries that appear to be valid based on these criteria are further processed.
+
+2. Socket File Descriptor Checks:
+   After passing the initial checks, the repair introduces three conditions by comparing file descriptors:
+   
+   • For IPv4 Queries: If the query was sent over IPv4 (as indicated by f->addr.ss_family being AF_INET), the repair checks that the file descriptor for the IPv4 socket used by the query (f->udp_fd_ipv4) matches the file descriptor from which the reply was received (reply_fd). This ensures the reply comes from the anticipated IPv4 channel.
+   
+   • For IPv6 Queries: Similarly, if the query was sent over IPv6 (f->addr.ss_family equals AF_INET6), it checks for a match between the IPv6 socket’s file descriptor (f->udp_fd_ipv6) and reply_fd. This avoids accepting a forged reply that might have been sent on a different IPv6 channel.
+   
+   • Upstream Interface Binding: An additional check is in place for cases where the query is sent from a socket that is bound to a specific upstream interface. If f->upstream_fd is set, the repair confirms that reply_fd also matches this file descriptor, thereby ensuring that the reply stems from the same communication channel.
+
+3. Overall Security Improvement:
+   By tying the reply acceptance to the exact network socket from which the query was sent, the patch effectively minimizes the attack surface. An attacker would need to know or be able to control the exact file descriptor used for the outgoing query, greatly increasing the difficulty of successfully forging a reply. This validation method brings the implementation more in line with RFC5452, requiring that multiple attributes – including the query identifier, hash, and network socket – all match expected values before a reply is accepted.
+
+Thus, the repair reinforces the query-to-reply matching process and significantly reduces the risk of DNS cache poisoning attacks by ensuring that only replies from the correct network channel are accepted.

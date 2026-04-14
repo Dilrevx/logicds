@@ -1,0 +1,15 @@
+The fix adds an explicit check in the TLS_ASYNC_BUILD state that compares the signature algorithm obtained (from the certificate_verify message) against the expected algorithm based on the peer’s certificate. Here’s a walkthrough of the repair:
+
+1. In the TLS_ASYNC_BUILD block, after decoding the signature algorithm with DecodeTls13SigAlg(), the repair inserts additional checks. For each supported key type (e.g., ECC, ED25519, ED448, RSA, and PQC), the code now verifies that the signature algorithm (args->sigAlgo) matches the expected algorithm for that key type. For example, if an ECC certificate is present (ssl->peerEccDsaKeyPresent is true) but the decoded signature algorithm isn’t the one designated for ECC (ecc_dsa_sa_algo), the code logs the mismatch and aborts by setting ret to SIG_VERIFY_E.
+
+2. Similar checks are added for ED25519, ED448, and RSA:
+   - For RSA, only RSA-PSS is considered valid for TLS 1.3. If a RSA certificate is present but the sigAlgo is not as expected (rsa_pss_sa_algo), the certificate_verify is treated as invalid.
+   - For Falcon (a type of post-quantum cryptography), the repair ensures that the sigAlgo is one of the two allowed Falcon levels when the corresponding key is present.
+
+3. These added conditional checks ensure that any discrepancy between the certificate’s public key type (which indicates a specific signature algorithm) and the signature algorithm declared in the certificate_verify message is immediately detected and handled as an error. This prevents an attacker from supplying a mismatched (and potentially insecure) signature algorithm to bypass certificate verification.
+
+4. The additional checks use the existing logging (WOLFSSL_MSG) and error reporting mechanism (setting ret to SIG_VERIFY_E and jumping to exit_dcv) so that if there is any mismatch, the certificate verification fails, meaning the handshake is aborted.
+
+5. The rest of the code remains unchanged, so if the check passes, the process continues with reading the signature length, copying the signature data, and later verifying the signature using the appropriate cryptographic function based on the key type. 
+
+In summary, the repair fixes the vulnerability by ensuring that the signature algorithm used in the certificate_verify message must match the algorithm declared by the server’s certificate. This prevents an attacker from using an inconsistent signature algorithm to bypass a proper certificate check, thus reinforcing the TLS 1.3 handshake security.

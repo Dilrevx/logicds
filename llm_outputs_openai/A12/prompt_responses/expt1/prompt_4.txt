@@ -1,0 +1,56 @@
+<repair>
+int DoTls13Finished(WOLFSSL* ssl, const byte* input, word32* inOutIdx,
+                    word32 size, word32 totalSz, int sniff)
+{
+    int    ret;
+    word32 finishedSz = 0;
+    byte*  secret;
+    byte   mac[WC_MAX_DIGEST_SIZE];
+
+    WOLFSSL_START(WC_FUNC_FINISHED_DO);
+    WOLFSSL_ENTER("DoTls13Finished");
+
+    /* check that we have enough room in the buffer, including any pad */
+    if ((*inOutIdx + size + ssl->keys.padSz) > totalSz) {
+        return BUFFER_E;
+    }
+
+    /* Determine which finished secret to derive based on handshake state.
+       If handshake is complete we are processing our own Finished; otherwise,
+       if this is the client expecting to verify the server's Finished, we need
+       to derive and use the server's finished secret. */
+    if (ssl->options.handShakeDone) {
+        ret = DeriveFinishedSecret(ssl, ssl->clientSecret,
+                                   ssl->keys.client_write_MAC_secret);
+        if (ret != 0)
+            return ret;
+        secret = ssl->keys.client_write_MAC_secret;
+    }
+    else if (ssl->options.side == WOLFSSL_CLIENT_END) {
+        ret = DeriveFinishedSecret(ssl, ssl->serverSecret,
+                                   ssl->keys.server_write_MAC_secret);
+        if (ret != 0)
+            return ret;
+        secret = ssl->keys.server_write_MAC_secret;
+    }
+    else {
+        WOLFSSL_MSG("DoTls13Finished: Invalid state");
+        return BAD_FUNC_ARG;
+    }
+
+    /* Calculate Finished MAC using the derived secret */
+    ret = FinishedVerify(secret, mac, ssl->specs.hashId, ssl->hashSZ, input, size, sniff);
+    if (ret < 0)
+        return ret;
+    finishedSz = (word32)ret;
+
+    /* Ensure we do not write more than the buffer allows */
+    if ((*inOutIdx + finishedSz) > totalSz)
+        return BUFFER_E;
+
+    XMEMCPY((void*)&input[*inOutIdx], (const void*)mac, finishedSz);
+    *inOutIdx += finishedSz;
+
+    return finishedSz;
+}
+</repair>

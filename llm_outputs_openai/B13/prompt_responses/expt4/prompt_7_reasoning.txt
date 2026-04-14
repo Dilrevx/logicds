@@ -1,0 +1,13 @@
+The repair adds an extra validation step when processing a TSIG record. In the original code, after extracting the TSIG data, it would simply clone the signer name from the key in msg->tsigkey without verifying that the TSIG record’s own key name (contained in tsig.signer) matches the expected key identity. This omission could allow an attacker, if they can manipulate TSIG requests during an AXFR or NOTIFY, to supply a forged TSIG record. By making the TSIG record’s signer name irrelevant, the attacker might bypass additional access control checks that depend on a verified identity.
+
+In the repaired code the following changes were made:
+
+1. After extracting the TSIG data structure from the TSIG record, the repair explicitly checks that the TSIG record’s signer name (tsig.signer) matches the expected identity from the TSIG key configuration (obtained via dns_tsigkey_identity(msg->tsigkey)). This is done using the function dns_name_equal. If they do not match, the function returns DNS_R_TSIGVERIFYFAILURE immediately. This ensures that the TSIG record is actually coming from the legitimate source.
+
+2. The repair also rearranges the sequence slightly so that the check is performed before later actions such as cloning the name. This makes sure that no further processing is done with an improperly validated key and reinforces the requirement that the TSIG key name in the record must exactly match the trusted configuration.
+
+3. The code retains the checks for errors in the TSIG status and the error field in the TSIG record. If any of these indicate a problem, it sets failure results accordingly. This ensures that even if the key names match, other aspects of the TSIG authentication are still scrutinized.
+
+By verifying the identity’s match, the repair mitigates a vulnerability where an attacker could craft messages with a valid TSIG key name known to them but supply arbitrary or manipulated key names within the TSIG record. With this fix, even if the attacker sends AXFR/NOTIFY messages to a server relying solely on TSIG for authenticity, the mismatch between tsig.signer and the expected identity will cause the verification to fail. This adds an additional layer of security, ensuring that even if an attacker can manipulate some parts of the TSIG authentication process, they cannot bypass the proper identity verification.
+
+Overall, this repair strengthens the validation logic against an attack that relies on sending forged messages to bypass TSIG authentication, thereby reducing the risk of unauthorized zone transfers or bogus notifications.

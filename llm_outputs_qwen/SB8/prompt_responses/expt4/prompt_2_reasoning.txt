@@ -1,0 +1,65 @@
+Certainly! The repair introduced aims to address a critical vulnerability in the handling of TLS 1.3 sessions within the wolfSSL library, particularly focusing on scenarios where neither a Pre-Shared Key (PSK) extension nor a Key Share Extension (KSE) is received from a server during the TLS handshake process. This oversight could lead to the use of a default, predictable buffer as the Input Keying Material (IKM), which an attacker could exploit to compromise the security of the session.
+
+### Initial PSK Handling
+
+The existing code first checks for the presence of the PSK extension. If found, it iterates through the list of PSKs until it finds one that has been chosen by the server. If no chosen PSK is found, it resets the PSK-related options and clears the PSK key array. This step ensures that any residual data from a previous session does not inadvertently influence the current session setup.
+
+```java
+if (extMsgType[0] == CommonsConstants.server_hello) {
+    PreSharedKey psk = null;
+    TlsExtension ext = TLSX.find(ssl.extensions, CommonsConstants.TLSX_PRE_SHARED_KEY);
+    if (ext != null)
+        psk = (PreSharedKey) ext.data;
+    while (psk != null && !psk.chosen)
+        psk = psk.next;
+    if (psk == null) {
+        ssl.options.resuming = false;
+        ssl.arrays.psk_keySz = 0;
+        for (int i = 0; i < ssl.arrays.psk_key.length; i++)
+            ssl.arrays.psk_key[i] = 0;
+    }
+```
+
+### Handling No PSK
+
+If no suitable PSK is available, the code sets `ssl.options.pskNegotiated` to `false`, indicating that no PSK was negotiated. It also zeroes out the PSK key size and the PSK key array to prevent any residual data from being used inadvertently. This ensures that the system does not rely on stale or incorrect PSK information.
+
+```java
+    else {
+        ret = SetupPskKey(ssl, psk, 0);
+        if (ret != 0)
+            return ret;
+        ssl.options.pskNegotiated = true;
+    }
+```
+
+### Introduction of Named Group Check
+
+After the PSK handling logic, the repair code introduces a new condition: `if (!ssl.options.pskNegotiated && ssl.session.namedGroup == 0)`. This condition checks whether a PSK was not negotiated (`!ssl.options.pskNegotiated`) and if the named group (related to the Key Share Extension) is unset (`ssl.session.namedGroup == 0`). The named group is essential for establishing a secure key exchange using ephemeral Diffie-Hellman (ECDHE) or similar mechanisms.
+
+The named group is a crucial component of the TLS 1.3 key exchange process. It specifies the elliptic curve or finite field to be used for the key exchange. If this value is zero, it indicates that no valid key share mechanism was provided by the server, leaving the client without a means to securely establish a shared secret.
+
+### Returning Error for Missing Extensions
+
+If both conditions are met—meaning neither a valid PSK nor a valid key share mechanism is available—the function returns `CommonsConstants.EXT_MISSING`. This action halts the handshake process and signals an error, preventing the establishment of a session based on a predictable IKM. By returning an error, the system avoids proceeding with a handshake that could result in an insecure session.
+
+```java
+    // Check if neither PSK nor KSE is present
+    if (!ssl.options.pskNegotiated && ssl.session.namedGroup == 0) {
+        return CommonsConstants.EXT_MISSING;
+    }
+```
+
+### Continuation of Handshake
+
+If either a PSK is negotiated or a valid named group is present, the handshake continues as usual. The encryption is turned on (`ssl.keys.encryptionOn = true`), and the server state is updated to reflect the completion of the ServerHello phase (`ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE`). This ensures that the session proceeds only when at least one of the required key exchange mechanisms is properly established.
+
+```java
+    ssl.keys.encryptionOn = true;
+    ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE;
+}
+```
+
+### Conclusion
+
+By adding this validation step, the repair ensures that the TLS 1.3 session cannot proceed unless at least one of the required key exchange mechanisms is properly established. This change effectively prevents the use of a default, predictable IKM, thereby mitigating the risk of session key compromise and ensuring the integrity and confidentiality of the communication channel. The repair enhances the robustness of the TLS 1.3 implementation in wolfSSL by enforcing strict checks on the presence of necessary cryptographic parameters before proceeding with session establishment.

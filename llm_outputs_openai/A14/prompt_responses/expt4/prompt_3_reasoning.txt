@@ -1,0 +1,17 @@
+The repair adds an early check to determine whether a ChangeCipherSpec (CCS) message has already been processed. Here’s a step-by-step walkthrough:
+
+1. Detection of Duplicate CCS:  
+   The vulnerability arises because the original code did not restrict repeated processing of CCS messages. An attacker could craft a second CCS message during a handshake, which could force the connection to execute the cipher state change again, potentially causing the use of an incorrect (zero-length) master key. The repair begins by checking if the flag (s->s3->change_cipher_spec) is already set. If it is, this means a CCS message has already been received and processed, so the code immediately sets an error (SSL_AD_UNEXPECTED_MESSAGE) and jumps to error handling. This prevents a second CCS from being processed.
+
+2. Validating the CCS Record:  
+   After ensuring that no duplicate CCS is received, the code validates the content of the record. It confirms that the CCS record’s length is exactly one byte, that the offset is correct, and that the byte has the expected value (SSL3_MT_CCS). If any of these conditions are not met, the code flags an illegal parameter error. This step secures the protocol by ensuring the payload integrity of the single CCS message.
+
+3. Checking for a Valid New Cipher:  
+   The repair then checks the state of the session to ensure that a new_cipher exists. Without an appropriate cipher, processing a CCS message could be unexpected and dangerous. If no new_cipher is set, the code flags the unexpected message and aborts processing. This ensures that CCS is only accepted in the right context, which is crucial to preventing early or out-of-order processing that might be exploited.
+
+4. Finalizing the Change:  
+   Once the record is validated, its length is set to 0 to signify that its content has been fully consumed and to avoid any accidental reuse or misinterpretation later. If a message callback is registered, it is notified with the CCS message. Finally, the change_cipher_spec flag is set to inform the rest of the system that a cipher change is in progress, and the actual transition is attempted by calling ssl3_do_change_cipher_spec(). If this transition fails, proper error handling ensues.
+
+By performing the added preliminary check against duplicate CCS messages, the repair directly addresses the CCS injection vulnerability. This prevents a man-in-the-middle attacker from tricking the SSL/TLS handshake into processing an additional CCS message, which could have resulted in the use of an insecure cryptographic state (i.e., a zero-length master key) and potentially allowed session hijacking or information disclosure.
+
+Overall, the repair ensures that only one valid CCS message is processed per handshake, thereby strengthening the protocol's resilience against malicious intervention.

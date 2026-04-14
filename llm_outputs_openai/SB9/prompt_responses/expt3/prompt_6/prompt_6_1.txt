@@ -1,0 +1,147 @@
+Below is an example of a corrected C-style implementation. In this snippet, the new design initializes a unified flag (valid_flag) and then selects the proper check for each possible signature algorithm. The RSA PKCS#1.5 case is immediately rejected. Finally, after the algorithm‐specific checks, if valid_flag remains false the code logs an error and returns a failure. This structure closes the vulnerability where a mismatched signature algorithm might bypass the certificate verification.
+
+---------------------------------------------------------------
+/* Example corrected code snippet assuming C */
+
+#include <stdbool.h>
+#include <stdio.h>
+
+/* Example definitions for TLS alerts and signature algorithm identifiers */
+#define TLS_ALERT_HANDSHAKE_FAILURE -1
+
+typedef enum {
+    SIG_ALG_ED25519,
+    SIG_ALG_ED448,
+    SIG_ALG_ECDSA,      // For ECC DSA
+    SIG_ALG_FALCON_1,
+    SIG_ALG_FALCON_5,
+    SIG_ALG_RSA_PSS,    // RSA PKCS#1.5 (should be immediately rejected)
+    SIG_ALG_UNKNOWN
+} signature_algorithm;
+
+/* Example structure representing extracted certificate keys. 
+   In practice, these pointers would be valid key structures or NULL if absent.
+*/
+struct peer_certificate {
+    void *ed25519_key;
+    void *ed448_key;
+    void *ecdsa_key;
+    void *falcon1_key;
+    void *falcon5_key;
+    void *rsa_pss_key;  // Not used in TLS 1.3; kept for completeness.
+};
+
+/* Example logging functions */
+void log_info(const char *msg) {
+    printf("INFO: %s\n", msg);
+}
+
+void log_error(const char *msg) {
+    printf("ERROR: %s\n", msg);
+}
+
+/*
+ * validate_peer_certificate: verifies that the peer's certificate contains the
+ * appropriate key corresponding to the signature algorithm given.
+ *
+ * Parameters:
+ *   cert    - Pointer to a structure containing parsed peer certificate information.
+ *   sig_alg - The signature algorithm extracted from the CertificateVerify message.
+ *
+ * Return Value:
+ *   0 on success; TLS_ALERT_HANDSHAKE_FAILURE on failure.
+ */
+int validate_peer_certificate(const struct peer_certificate *cert, signature_algorithm sig_alg) {
+    bool valid_flag = false;
+    
+    switch (sig_alg) {
+        case SIG_ALG_ED25519:
+            log_info("Signature algorithm is ED25519");
+            if (cert->ed25519_key != NULL) {
+                valid_flag = true;
+            }
+            break;
+            
+        case SIG_ALG_ED448:
+            log_info("Signature algorithm is ED448");
+            if (cert->ed448_key != NULL) {
+                valid_flag = true;
+            }
+            break;
+            
+        case SIG_ALG_ECDSA:
+            log_info("Signature algorithm is ECC DSA (ECDSA)");
+            if (cert->ecdsa_key != NULL) {
+                valid_flag = true;
+            }
+            break;
+            
+        case SIG_ALG_FALCON_1:
+            log_info("Signature algorithm is Falcon Level 1");
+            if (cert->falcon1_key != NULL) {
+                valid_flag = true;
+            }
+            break;
+            
+        case SIG_ALG_FALCON_5:
+            log_info("Signature algorithm is Falcon Level 5");
+            if (cert->falcon5_key != NULL) {
+                valid_flag = true;
+            }
+            break;
+            
+        case SIG_ALG_RSA_PSS:
+            /* In TLS 1.3, RSA PKCS#1.5 (or RSA PSS if misapplied) is not allowed. */
+            log_error("Invalid signature algorithm: RSA PSS is not supported in TLS 1.3.");
+            return TLS_ALERT_HANDSHAKE_FAILURE;
+            
+        default:
+            log_error("Unsupported signature algorithm provided.");
+            return TLS_ALERT_HANDSHAKE_FAILURE;
+    }
+    
+    /* Final aggregated check: ensure that the signature algorithm corresponds to a valid certificate key. */
+    if (!valid_flag) {
+        log_error("Certificate does not contain the expected public key for the specified signature algorithm.");
+        return TLS_ALERT_HANDSHAKE_FAILURE;
+    }
+    // All checks passed.
+    return 0;
+}
+
+/* Example usage */
+int main(void) {
+    struct peer_certificate cert = {0};
+    
+    /* Simulate a certificate with only an ED25519 key */
+    int dummy_key;
+    cert.ed25519_key = &dummy_key;
+    
+    /* Attempt to validate with ECDSA algorithm, which should fail */
+    if (validate_peer_certificate(&cert, SIG_ALG_ECDSA) != 0) {
+        log_error("Certificate validation failed.");
+    } else {
+        log_info("Certificate validation succeeded.");
+    }
+    
+    /* Now test with the correct ED25519 algorithm */
+    if (validate_peer_certificate(&cert, SIG_ALG_ED25519) != 0) {
+        log_error("Certificate validation failed.");
+    } else {
+        log_info("Certificate validation succeeded.");
+    }
+    
+    return 0;
+}
+
+---------------------------------------------------------------
+
+Explanation of Key Improvements:
+
+1. Unified Flag: A single bool variable (valid_flag) accumulates the result of checking whether the certificate includes the key matching the given signature algorithm.
+
+2. Immediate Rejection: The case for SIG_ALG_RSA_PSS immediately returns an error without further processing, disallowing a deprecated algorithm in TLS 1.3.
+
+3. Final Check: After all the algorithm-specific checks, the code enforces a final verification using the flag. If it remains false, the function logs an error and returns a handshake failure.
+
+This repair ensures that if a TLS v1.3 server sends a mismatched CertificateVerify signature algorithm (e.g., one that does not correspond to any key in the certificate), the client will correctly terminate the handshake without accepting the connection.

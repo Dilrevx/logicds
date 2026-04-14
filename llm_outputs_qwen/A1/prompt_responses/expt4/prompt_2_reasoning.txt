@@ -1,0 +1,25 @@
+The repair implemented addresses a critical vulnerability in the initialization of symmetric ciphers, specifically focusing on how key and initialization vector (IV) lengths are handled. This vulnerability can lead to serious security issues, such as truncation or overruns, which can compromise the confidentiality and integrity of encrypted data. Here's a detailed explanation of the repair and its rationale:
+
+### Contextual Setup Check
+
+The first part of the repair ensures that the cipher context (`ctx`) is correctly configured regarding padding settings. If the context has been set up to operate without padding (`EVP_CIPH_NO_PADDING`), the code explicitly sets the new cipher algorithm to also operate without padding by calling `EVP_CIPHER_CTX_set_padding(ctx, 0)`. This step is crucial because changing the padding behavior mid-operation can lead to inconsistencies and potential security flaws. If the padding setting fails, the function immediately returns an error, halting further execution.
+
+### Preprocessing Parameters for Key and IV Lengths
+
+The core of the repair involves preprocessing the parameters that define the key and IV lengths before they are passed to the cipher initialization functions. This preprocessing is done outside the FIPS module (`#ifndef FIPS_MODULE`) because the FIPS module handles these parameters differently internally. The FIPS module has its own mechanisms for ensuring parameter validity and consistency, making the additional preprocessing unnecessary and potentially problematic in that context.
+
+### Locating Key and IV Length Parameters
+
+Within the conditional block, an array of `OSSL_PARAM` structures (`param_lens`) is created to temporarily hold the parameters related to key and IV lengths. This array is designed to accommodate up to three parameters, although typically only one or two will be relevant. The code searches for parameters named `OSSL_CIPHER_PARAM_KEYLEN` (key length) and `OSSL_CIPHER_PARAM_IVLEN` (IV length) within the provided `params` array using `OSSL_PARAM_locate_const()`. If either parameter is found, it is copied into the `param_lens` array. This copying process ensures that the lengths are extracted and stored separately for further processing.
+
+### Setting Processed Parameters
+
+After locating and copying the relevant parameters, the code checks if any valid parameters were found (`if (q != param_lens)`). If so, it calls `EVP_CIPHER_CTX_set_params(ctx, param_lens)` to apply these parameters to the cipher context. This step is crucial because it sets the correct lengths for the key and IV before the main initialization function (`einit`) is called. If setting the parameters fails, an error is raised using `ERR_raise()` with the error code `EVP_R_INVALID_LENGTH`, and the function returns an error status to indicate the failure.
+
+### Cipher Initialization
+
+Once the key and IV lengths have been correctly set through the preprocessed parameters, the code proceeds to initialize the cipher context using the `einit` function. This function is responsible for setting up the cipher with the provided key, IV, and other parameters. The initialization process includes passing the algorithm context (`ctx->algctx`), key, key length, IV, IV length, and the original `params` array. By this point, the critical lengths have already been processed and set, mitigating the risk of truncation or overrun vulnerabilities.
+
+### Conclusion
+
+The repair ensures that the key and IV lengths are correctly interpreted and applied before any encryption or decryption operations commence. This preprocessing step is essential for maintaining the integrity and security of the cryptographic operations, particularly in environments where strict compliance with cryptographic standards is necessary. The conditional exclusion of the fix for the FIPS module demonstrates a thoughtful approach to handling different contexts and ensuring compatibility across various cryptographic providers. By addressing this vulnerability, the repair enhances the robustness of the cryptographic library, protecting against potential security breaches that could arise from improper handling of key and IV lengths.

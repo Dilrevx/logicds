@@ -1,0 +1,37 @@
+The provided repair addresses the "CCS Injection" vulnerability, which is a critical security flaw in how certain versions of OpenSSL handle the ChangeCipherSpec (CCS) message during a TLS handshake. This vulnerability can allow an attacker to inject a CCS message into a handshake process, leading to the use of a zero-length master key and potentially hijacking the session or obtaining sensitive information.
+
+### Vulnerability Overview
+
+In a typical TLS handshake, the CCS message is used to signal the transition from one set of cryptographic parameters to another, specifically indicating that the parties involved are ready to use the newly negotiated keys. Normally, this message should only be sent after the ServerHelloDone message from the server, ensuring that all necessary key exchange and negotiation steps have been completed before the transition occurs. The CCS Injection vulnerability arises when the client improperly accepts a CCS message too early in the handshake process, before the ServerHelloDone message has been received.
+
+### Analysis of the Buggy Code
+
+The original code snippet checks that the CCS message is correctly formatted (a single byte with a specific value) and that a new cipher is available to switch to. However, it lacks a check to ensure that the CCS message is received at the appropriate time in the handshake sequence. An attacker could exploit this by injecting a CCS message prematurely, bypassing intended security measures.
+
+### Implementation of the Repair
+
+The repair introduces a new condition to verify that the CCS message is received at the correct point in the handshake sequence:
+
+```c
+/* Ensure that the CCS message is received after the ServerHelloDone */
+if (!s->s3->change_cipher_spec_ok)
+    {
+    al=SSL_AD_UNEXPECTED_MESSAGE;
+    SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_CCS_RECEIVED_EARLY);
+    goto f_err;
+    }
+```
+
+This additional check ensures that the `change_cipher_spec_ok` flag is set before the CCS message is processed. The `change_cipher_spec_ok` flag is typically set after the ServerHelloDone message has been successfully processed, indicating that the handshake is at the stage where a CCS message is expected. If the flag is not set, the code treats the CCS message as unexpected and terminates the handshake with an error, thus preventing the CCS Injection attack.
+
+### Benefits of the Repair
+
+1. **Prevents Premature CCS Processing**: By checking the `change_cipher_spec_ok` flag, the code ensures that the CCS message is only processed after the ServerHelloDone message, aligning with the intended TLS protocol flow.
+   
+2. **Enhances Security**: This change effectively mitigates the CCS Injection vulnerability, protecting against attacks that could lead to session hijacking or unauthorized access to sensitive data.
+
+3. **Maintains Compliance**: Ensuring that the CCS message is processed only at the correct stage in the handshake helps maintain compliance with the TLS protocol specifications, reducing the risk of other potential vulnerabilities.
+
+4. **Minimal Impact on Performance**: The added check is straightforward and should have minimal impact on the performance of the TLS handshake process.
+
+In summary, the repair addresses a critical security vulnerability by enforcing the proper sequence of events during the TLS handshake, thereby enhancing the security of OpenSSL implementations against CCS Injection attacks.

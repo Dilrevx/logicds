@@ -1,0 +1,51 @@
+<repair>
+    public int write_pdu(int lcid, UniqueByteBuffer pdu) {
+        // Validate the input buffer to avoid null-pointer issues and inadvertent processing of empty data.
+        if (pdu == null || pdu.get() == null || pdu.N_bytes <= 0) {
+            logger.error("Received null or empty PDU for lcid: %d", lcid);
+            return SRSRAN_ERROR;
+        }
+        // Store the underlying buffer reference so that we use a consistent state throughout processing.
+        byte[] pduData = pdu.get();
+        
+        int status = SRSRAN_SUCCESS;
+        int pd = 0;
+        int msg_type = 0;
+        int sec_hdr_type = 0;
+        logger.info(pdu.msg, pdu.N_bytes, "DL %s PDU", rrc.getRbName(lcid));
+        RefHolder pdHolder = new RefHolder();
+        RefHolder secHdrHolder = new RefHolder();
+
+        // Parse security header from the fixed buffer copy.
+        LiblteMme.parseMsgSecHeader(pduData, pdHolder, secHdrHolder);
+        sec_hdr_type = secHdrHolder.value;
+        switch (sec_hdr_type) {
+            case LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS:
+            case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT:
+            case LIBLTE_MME_SECURITY_HDR_TYPE_SERVICE_REQUEST:
+                break;
+            case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY:
+            case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED:
+                if (integrity_check(pduData)) {
+                    if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED) {
+                        cipher_decrypt(pduData);
+                    }
+                    break;
+                } else {
+                    logger.error("Not handling NAS message with integrity check error");
+                    return SRSRAN_ERROR;
+                }
+            default:
+                logger.error("Not handling NAS message with SEC_HDR_TYPE=%02X", sec_hdr_type);
+                return SRSRAN_ERROR;
+        }
+        if (pcap != null) {
+            pcap.writeNas(pdu.msg, pdu.N_bytes);
+        }
+        RefHolder msgTypeHolder = new RefHolder();
+        LiblteMme.parseMsgHeader(pduData, pdHolder, msgTypeHolder);
+        msg_type = msgTypeHolder.value;
+        logger.info(pdu.msg, pdu.N_bytes, "DL %s Decrypted PDU", rrc.getRbName(lcid));
+        // ... rest of function.
+    }
+</repair>

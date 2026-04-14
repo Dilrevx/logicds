@@ -1,0 +1,18 @@
+The repair addresses the vulnerability by adding a set of additional checks that verify whether the DNS reply was received on the same network socket that was used to send the corresponding query. Originally, the code only checked if the reply’s identifier (and optionally a hash) matched an outstanding query. This was too permissive because it allowed an attacker to forge a reply with the correct identifier and hash from any source socket, thereby facilitating a DNS cache poisoning attack.
+
+Here’s a step-by-step explanation of how the repair works:
+
+1. First, after the initial check for a matching query identifier and hash, the code performs additional validations that depend on how the DNS query was sent. This is based on the fact that when sending DNS queries, different network sockets may be used:
+   - For queries sent via a specifically bound upstream socket,
+   - For queries sent over IPv4,
+   - For queries sent over IPv6.
+
+2. The repair introduces a new variable or assumption, reply_fd, which represents the file descriptor on which the reply was received. This value is then compared with the corresponding file descriptor stored in the forwarded query structure (represented by f).
+
+3. If the query was sent from a bound upstream socket (indicated by f->bound_fd being non-negative), then the repair checks that reply_fd is identical to f->bound_fd. This ensures that if the DNS query was sent from a specific socket, any reply claiming to be for that query must come through that particular channel.
+
+4. For queries sent over IPv4 (determined by f->sock_family equal to AF_INET), the repair verifies that the reply was received on the IPv4 socket (f->fd_ipv4). Likewise, for IPv6 (f->sock_family equal to AF_INET6), it checks that the reply came through the IPv6 socket (f->fd_ipv6). This further prevents an attacker from exploiting the query by sending forged replies through an incorrect network channel.
+
+5. If none of these conditions is met (for instance, if the reply is received on a socket that does not match the stored socket), the function returns NULL, meaning the reply is rejected. This additional strict matching ensures that even if an attacker manages to guess the correct identifier and hash, they still cannot forge a reply unless they have control over the exact network socket that was originally used.
+
+In summary, by incorporating a socket file descriptor check, the repair aligns the verification process more closely with the requirements suggested by RFC5452. It makes it mandatory for the reply not only to have the correct id and hash but also to come from the expected network channel. This comprehensive matching process significantly increases the difficulty for an attacker to forge a valid reply, thereby mitigating the risk of DNS cache poisoning attacks.

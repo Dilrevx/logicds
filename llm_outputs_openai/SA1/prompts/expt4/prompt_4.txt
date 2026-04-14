@@ -1,0 +1,69 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+The implementation of PEAP in wpa_supplicant through 2.10 allows authentication bypass. For a successful attack, wpa_supplicant must be configured to not verify the network's TLS certificate during Phase 1 authentication, and an eap_peap_decrypt vulnerability can then be abused to skip Phase 2 authentication. The attack vector is sending an EAP-TLV Success packet instead of starting Phase 2. This allows an adversary to impersonate Enterprise Wi-Fi networks.
+</vulnerability_description>
+Source code:
+Context code:
+<context_code>
+### src/CipherInitializer.java ###
+public class CipherInitializer {
+    private static boolean OPENSSL_NO_ENGINE = false;
+    private static boolean FIPS_MODULE = false;
+
+    public static void setOpenSslNoEngine(boolean value) {
+        OPENSSL_NO_ENGINE = value;
+    }
+
+    public static void setFipsModule(boolean value) {
+        FIPS_MODULE = value;
+    }
+
+    public static boolean initializeCipher(
+            CipherContext ctx, Cipher cipher, Engine impl,
+            byte[] key, byte[] iv, int enc, CipherParams params) {
+
+        int n;
+        Engine tmpImpl = null;
+
+............
+
+</context_code>
+Buggy source code:
+
+<buggy_code>
+        if (ctx.hasNoPadding()) {
+            if (!ctx.setPadding(0)) {
+                return false;
+            }
+        }
+
+        if (enc == 1) {
+            if (!cipher.hasEncryptInit()) {
+                throw new IllegalStateException("Initialization error: encryption function missing");
+            }
+            return cipher.encryptInit(ctx.getAlgCtx(), key,
+                    key == null ? 0 : ctx.getKeyLength(),
+                    iv, iv == null ? 0 : ctx.getIvLength(), params);
+        }
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair begins by preserving the original padding functionality. It checks whether the context is using “no padding” mode and, if so, forces a padding of zero. This behavior remains unchanged, ensuring that the initial state of the cryptographic context conforms to expected parameters.
+
+Next, the repair introduces an entirely new block of logic before the encryption initialization that addresses potential parameter misconfiguration. The new code first checks that the system is not in FIPS (Federal Information Processing Standard) mode and that additional parameters are provided. This ensures that the extra validation is only applied in environments where security policies allow it and that there are parameters to validate.
+
+Once these conditions are met, a dedicated container (conceptually, “Cipher Parameters”) is created. This container is used to extract and isolate specific security-related parameters from the input, particularly the key length and initialization vector (IV) length. The repair code then checks if these parameters exist in the original input parameters. Physically, if the input contains a key length specification, this value is extracted and stored in the new parameter container. Likewise, if an IV length is supplied, it too is captured.
+
+After building this container of relevant parameters, the repair code verifies that the container isn’t empty. This check prevents unnecessary processing when no key or IV length information is provided. If the container holds any data, the repair then attempts to update the cryptographic context with these new validated parameters by calling a method designed to safely apply them. This step is critical: it acts as a safeguard to ensure that any length-related specifications aren’t arbitrary. They must be acceptable within the context’s requirements.
+
+If the attempt to set these parameters fails—likely because the provided lengths do not match expected valid values or are otherwise deemed insecure—the code promptly throws an exception. This exception interrupts further processing and prevents the code from continuing with potentially dangerous, misconfigured parameters. By doing so, the repair effectively blocks one of the attack vectors that would otherwise allow a malicious user to bypass an important part of the authentication process.
+
+Finally, after the new parameter validation step has successfully executed, the code proceeds with its original function: initializing encryption. It checks if the cipher supports encryption initialization and, if not, throws an appropriate error. It then calls the encryption initialization function, passing all the previous and possibly now more secure parameters.
+
+In summary, the repair enhances the original implementation by introducing an intermediate validation phase that checks and tightly controls the parameters influencing key and IV lengths. This additional step ensures that potentially manipulated or maliciously crafted parameters are not accepted without validation. Such a safeguard is critical for avoiding scenarios where an attacker might otherwise be able to bypass authentication by exploiting flaws related to improper certificate or parameter handling.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

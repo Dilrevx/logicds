@@ -1,0 +1,63 @@
+<repair>
+public static int checkChainExtensions(X509StoreCtx ctx) {
+    // First verify that required context objects are not null.
+    if (ctx == null || ctx.chain == null || ctx.param == null) {
+        return 0;
+    }
+    int num = ctx.chain.size();
+    int plen = 0;
+    int proxy_path_length = 0;
+    int must_be_ca = -1;
+    int ret = 1;
+
+    for (int i = 0; i < num; i++) {
+        X509 x = ctx.chain.get(i);
+        if (x == null) {
+            // If any certificate is null, we have a problem.
+            ret = 0;
+            break;
+        }
+
+        // Determine whether we should enforce strict checks.
+        boolean strict = (ctx.param.flags & X509Flags.X509_V_FLAG_X509_STRICT) != 0;
+
+        // IMPORTANT: Pass the certificate object and the strict flag to verifyCA.
+        // This fixes the vulnerability where verifyCA() was being called without context.
+        ret = Util.verifyCA(x, strict);
+        if (ret == 0) {
+            // The certificate did not pass CA verification.
+            break;
+        }
+
+        // Example: Process proxy certificate extensions if applicable.
+        if (x.isProxyCertificate()) {
+            proxy_path_length++;
+            if (ctx.param.maxProxyPathLength >= 0 && proxy_path_length > ctx.param.maxProxyPathLength) {
+                // Exceeded allowed proxy path length.
+                ret = 0;
+                break;
+            }
+        } else {
+            // If we encounter a non-proxy certificate, reset the proxy path length.
+            proxy_path_length = 0;
+        }
+
+        // Check for basic constraints, ensuring the certificate is allowed to be a CA.
+        if (x.hasBasicConstraints()) {
+            int bc = x.getBasicConstraints();
+            if (bc < 0) {
+                // Negative basic constraints indicates that the certificate is not a CA.
+                ret = 0;
+                break;
+            }
+            // If must_be_ca has not been set and bc indicates CA capability, set it.
+            if (must_be_ca < 0 && bc > 0) {
+                must_be_ca = bc;
+            }
+        }
+        // Additional extension checks can be inserted here as needed.
+    }
+
+    return ret;
+}
+</repair>

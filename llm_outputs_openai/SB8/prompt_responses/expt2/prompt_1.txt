@@ -1,0 +1,41 @@
+<repair>
+    if (extMsgType[0] == CommonsConstants.server_hello) {
+        PreSharedKey psk = null;
+        /* Lookup PSK extension */
+        TlsExtension pskExt = TLSX.find(ssl.extensions, CommonsConstants.TLSX_PRE_SHARED_KEY);
+        if (pskExt != null) {
+            psk = (PreSharedKey)pskExt.data;
+            while (psk != null && !psk.chosen)
+                psk = psk.next;
+        }
+
+        /* Also lookup Key Share extension */
+        TlsExtension kseExt = TLSX.find(ssl.extensions, CommonsConstants.TLSX_KEY_SHARE);
+
+        /* If neither a PSK nor a Key Share is present then the IKM cannot be derived securely.
+           Abort the handshake instead of using a default predictable key. */
+        if (psk == null && kseExt == null) {
+            /* Return an error to abort the TLS 1.3 handshake.
+             * Error code TLS13_ERR_NO_SHARED_SECRET should be defined appropriately.
+             */
+            return TLS13_ERR_NO_SHARED_SECRET;
+        }
+
+        if (psk == null) {
+            /* When no PSK is provided, clear out the PSK key buffer to avoid using any default value.
+               Note: if a Key Share extension is present then the handshake should proceed (e.g. using ECDHE).
+               Otherwise the handshake aborted above already. */
+            ssl.options.resuming = false;
+            ssl.arrays.psk_keySz = 0;
+            for (int i = 0; i < ssl.arrays.psk_key.length; i++)
+                ssl.arrays.psk_key[i] = 0;
+        } else {
+            int ret = SetupPskKey(ssl, psk, 0);
+            if (ret != 0)
+                return ret;
+            ssl.options.pskNegotiated = true;
+        }
+        ssl.keys.encryptionOn = true;
+        ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE;
+    }
+</repair>

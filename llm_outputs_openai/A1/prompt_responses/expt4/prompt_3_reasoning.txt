@@ -1,0 +1,11 @@
+The repair works by reordering the processing of the parameter array so that any adjustments to the key or IV lengths are applied before the cipher’s initialization function uses these values. Here’s a breakdown of the changes:
+
+1. Before the actual cipher initialization (i.e. before invoking ctx->cipher->einit), the code now checks whether a parameter set (OSSL_PARAM array) has been provided. This is critical because developers have found that processing these parameters after key/IV values are established introduces a risk of inadvertent truncation or misconfiguration. By setting the parameters early, we ensure that any length modifications happen while the context is still in its pre-initialized state.
+
+2. The function EVP_CIPHER_CTX_set_params(ctx, params) is called with the provided parameters. This call adjusts the context based on the supplied parameters. If this call fails, the function returns 0, halting the initialization. This ensures that a misconfiguration or failure when setting parameters does not let the cipher initialization proceed with unsupported or incorrectly truncated values.
+
+3. After setting the parameters, the code then “clears” the params variable (by assigning NULL) so that when the cipher initialization function (einit) is later called, it does not try to reprocess the parameters. This prevents any duplicated or overlapping configuration that might again cause an issue with key or IV lengths.
+
+4. Finally, if the context is in encryption mode (enc != 0), it calls the cipher’s einit function with the key and IV values. Since the parameters have already been processed, the correct lengths (and any modifications specified by the parameters) are now in effect. This sequence avoids processing parameters that might alter key or IV lengths after they have been used to set up the cipher, thereby addressing the vulnerability where an IV truncation (or overrun) might occur.
+
+In summary, the vulnerability was due to the fact that parameters affecting key and IV lengths were being processed after those values had already been established. This repair rectifies that by applying the parameters first, so the cipher’s initialization function gets the correctly adjusted lengths, thereby reducing the risk of non-unique IVs or incorrectly truncated keys that might compromise confidentiality.

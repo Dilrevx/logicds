@@ -1,0 +1,33 @@
+The provided repair addresses a critical vulnerability related to how the `ssl_verify_cert_chain` function handles errors returned by the `X509_STORE_CTX.verify_cert()` method. The vulnerability stems from the fact that `X509_verify_cert()` can return a negative value to indicate an internal error, such as an out-of-memory condition. However, the original code does not properly handle these negative return values, which can lead to unexpected behavior in applications using the library.
+
+### Original Vulnerability Analysis
+
+In the original code snippet, the return value `i` from `X509_STORE_CTX.verify_cert(ctxStore)` is not checked for negative values. If `X509_STORE_CTX.verify_cert()` encounters an error and returns a negative value, the code continues as if the verification process was successful. This can result in the `verify_result` being set incorrectly, potentially leading to the application believing that the certificate chain is valid when it is not.
+
+Furthermore, the vulnerability description mentions that `SSL_get_error()` might return `SSL_ERROR_WANT_RETRY_VERIFY`, which is an unexpected return value in typical scenarios where no custom certificate verification callback is set. This can confuse applications and lead to incorrect handling of the SSL/TLS connection state.
+
+### Repair Explanation
+
+The repair involves adding a check for negative return values from `X509_STORE_CTX.verify_cert(ctxStore)`. If a negative value is detected, it indicates an internal error during the certificate verification process. In this case, the repair code sets `s.verify_result` to `SSL_ERROR_SSL`, which is a more appropriate error code for indicating a general SSL/TLS error. The verified chain is cleared, and the function returns `0` to indicate that the certificate verification failed.
+
+Here’s a detailed breakdown of the changes:
+
+1. **Error Checking**: After calling `X509_STORE_CTX.verify_cert(ctxStore)`, the code checks if `i` is less than `0`. This check is crucial because it identifies cases where an internal error occurred during the certificate verification process.
+
+2. **Setting Appropriate Error Code**: If a negative return value is detected, `s.verify_result` is set to `SSL_ERROR_SSL`. This error code is more suitable for indicating that a generic SSL/TLS error occurred, rather than `SSL_ERROR_WANT_RETRY_VERIFY`, which is only expected when a custom certificate verification callback is used.
+
+3. **Clearing Verified Chain**: Upon detecting an error, the `verified_chain` is cleared. This step ensures that the application does not mistakenly use an incomplete or invalid certificate chain.
+
+4. **Resource Management**: The `ctxStore` is freed before returning from the function. This is a standard practice to prevent resource leaks and ensure that all allocated resources are properly released.
+
+5. **Returning Failure Indicator**: The function returns `0` to indicate that the certificate verification process failed. Returning `0` is consistent with the typical usage of this function, where a non-zero return value indicates success.
+
+### Benefits of the Repair
+
+- **Prevents Misleading Error Codes**: By setting `s.verify_result` to `SSL_ERROR_SSL` instead of `SSL_ERROR_WANT_RETRY_VERIFY`, the repair prevents applications from misinterpreting the error condition, which could lead to incorrect handling of the SSL/TLS connection state.
+
+- **Ensures Proper Resource Management**: Clearing the `verified_chain` and freeing `ctxStore` ensures that the application does not inadvertently use invalid data and that resources are properly managed.
+
+- **Maintains Consistent Behavior**: Returning `0` to indicate failure aligns with the expected behavior of the function, making it easier for developers to understand and handle the return values consistently.
+
+In summary, the repair effectively addresses the vulnerability by ensuring that internal errors during certificate verification are correctly identified and handled, thus preventing potential security issues and improving the robustness of the application.

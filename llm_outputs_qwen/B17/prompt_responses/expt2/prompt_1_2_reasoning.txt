@@ -1,0 +1,55 @@
+The vulnerability described in the provided code snippet pertains to the incorrect handling of Certificate Revocation Lists (CRLs) during the TLS certificate verification process. Specifically, the issue arises from the misuse of the `subject` variable when fetching CRLs, which should instead use the `issuer` variable. This oversight can lead to a scenario where valid CRLs are not considered, allowing revoked certificates to pass validation checks and potentially enabling malicious actors to establish secure connections.
+
+### Understanding the Vulnerability
+
+In Public Key Infrastructure (PKI), CRLs are used to identify certificates that have been revoked by their issuers but have not yet expired. During the TLS handshake process, the client or server must verify the validity of the presented certificate chain. This includes checking against CRLs to ensure none of the certificates in the chain have been revoked.
+
+The function `X509_STORE_CTX_get1_crls` (for OpenSSL versions 1.1.x and later) and `X509_STORE_get1_crls` (for OpenSSL versions 1.0.x) are designed to retrieve the relevant CRLs based on the issuer of the certificate. The correct parameter to pass to these functions is the `issuer` of the certificate, not the `subject`. By passing the `subject`, the function may fail to find the correct CRLs, leading to incomplete revocation checking.
+
+### The Buggy Code
+
+The original code snippet contains a conditional compilation block that checks the version of OpenSSL being used:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, subject);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, subject);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+In both branches of the conditional compilation, the `subject` variable is incorrectly passed to the functions responsible for retrieving CRLs. This mistake means that the functions are looking for CRLs based on the wrong criteria, potentially missing out on valid CRLs that could indicate a certificate has been revoked.
+
+### The Repair
+
+To address this vulnerability, the code needs to be modified to pass the `issuer` variable instead of the `subject` variable when calling the functions to retrieve CRLs. Here is the corrected code:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, issuer);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+### Explanation of the Repair
+
+1. **Correct Parameter Usage**: By changing the parameter from `subject` to `issuer`, the functions now correctly fetch CRLs based on the issuer of the certificate. This ensures that the system checks against the correct CRLs, thereby accurately verifying whether any certificates in the chain have been revoked.
+
+2. **Maintaining Compatibility**: The repair maintains the structure of the conditional compilation block, ensuring that the correct function is called based on the OpenSSL version. This compatibility is crucial as different versions of OpenSSL may have different APIs for handling CRLs.
+
+3. **Security Enhancement**: The primary benefit of this repair is the enhancement of security. By correctly validating CRLs, the system can prevent revoked certificates from being accepted, thus mitigating the risk of man-in-the-middle attacks and other security breaches.
+
+4. **Upgrading OpenSSL**: The comment in the else clause advises upgrading OpenSSL if it is before version 1.0.0. This is important because older versions of OpenSSL may contain numerous security vulnerabilities. Upgrading to a more recent version not only fixes this specific issue but also addresses other potential security concerns.
+
+In conclusion, the repair involves a straightforward change in the parameter passed to the CRL retrieval functions, ensuring that the TLS certificate verification process correctly checks for revoked certificates. This simple modification significantly enhances the security of systems relying on this code for TLS certificate validation.

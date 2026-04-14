@@ -1,0 +1,33 @@
+Below is one example of how you might patch the problem. The original issue was that whenever the OCSP response carried a certificate with the NoCheck extension (indicating “trust for the lifetime”), the code would disable all OCSP verification—even if that responder’s certificate wasn’t actually part of the chain being verified. A safer repair is to narrow this “shortcut” to only the expected OCSP responder certificate (or one that is known to be in the chain). For example:
+
+--------------------------------------------------
+#ifdef HAVE_OCSP
+    /* Only disable further OCSP verification if the responder’s
+       certificate carrying the NoCheck extension is in fact part of
+       the validated chain. The helper function is_ocsp_responder_in_chain()
+       should check that association. */
+    if (verify == VERIFY_OCSP && cert->ocspNoCheckSet) {
+        if (is_ocsp_responder_in_chain(cert, chain)) {
+            /* trust for the lifetime of the responder's cert */
+            verify = NO_VERIFY;
+        } else {
+            /* The certificate with NoCheck is not related to the chain.
+               Keep doing full validation. */
+            verify = VERIFY_OCSP;
+        }
+    }
+#endif
+--------------------------------------------------
+
+Step by step explanation:
+1. We first verify that we are in the OCSP verification phase.
+2. Next we check if the certificate carries the NoCheck extension.
+3. Rather than immediately disabling OCSP verification, we call a helper (here named is_ocsp_responder_in_chain()) that confirms whether the certificate is actually part of the certificate chain.
+4. Only if the responder certificate is verified to be in the chain do we disable further OCSP checks by setting verify = NO_VERIFY.
+5. Otherwise, we fall back to continuing OCSP verification.
+
+This approach avoids the vulnerability where an attacker could supply an OCSP response with a NoCheck extension for an unrelated certificate, thereby bypassing important validation checks.
+
+Note: You will need to implement or use an existing function similar to is_ocsp_responder_in_chain() to ensure the responder’s certificate is actually part of the validated chain.
+
+This patch limits the NoCheck “shortcut” only to valid OCSP responder certificates, fixing the vulnerability described.

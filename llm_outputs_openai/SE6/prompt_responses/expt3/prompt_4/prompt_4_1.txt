@@ -1,0 +1,40 @@
+Below is one possible repair. The issue was that messages protected by the “integrity protected and ciphered with new EPS security context” header type were being accepted without verifying the integrity. To fix the vulnerability, you can modify the switch so that this header type is handled along with the other types that require an integrity check.
+
+For example, you might combine the two cases that require integrity checking into one:
+
+------------------------------------------------------------
+/* Fixed code */
+switch (sec_hdr_type) {
+    case LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS:
+    case LIBLTE_MME_SECURITY_HDR_TYPE_SERVICE_REQUEST:
+        /* These header types require no integrity verification */
+        break;
+
+    /* These header types require an integrity check (and decryption if ciphered) */
+    case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY:
+    case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED:
+    case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT:
+        if (integrity_check(pdu.get())) {
+            /* If the message is ciphered, perform decryption */
+            if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED ||
+                sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT) {
+                cipher_decrypt(pdu.get());
+            }
+        } else {
+            logger.error("Not handling NAS message with integrity check error");
+            return;
+        }
+        break;
+
+    default:
+        logger.error("Not handling NAS message with SEC_HDR_TYPE=%02X", sec_hdr_type);
+        return;
+}
+------------------------------------------------------------
+
+Explanation of the fix:
+1. We now include LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT in the same group as other header types requiring integrity verification.
+2. Only after a successful integrity_check is the cipher_decrypt (if needed) performed.
+3. If integrity_check fails, the message is rejected.
+
+This repair ensures that NAS messages using the new EPS security context must correctly pass the integrity check before further processing.

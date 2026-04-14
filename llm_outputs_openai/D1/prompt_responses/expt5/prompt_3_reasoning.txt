@@ -1,0 +1,15 @@
+The repair fixes the vulnerability by reordering the operations to preserve the SRTP crypto policies before stopping the transport. In the original code, the policy variables (tx_policy and rx_policy) were captured after calling pjmedia_transport_srtp_stop(). However, stopping the SRTP transport can reset or modify internal state—including the roll-over counters and possibly other parameters essential for reinitialization. Retrieving the policies at that point might produce incomplete or altered values, leading to improperly configured SRTP upon restart. This could result in falling back to basic RTP, which transmits media insecurely.
+
+Here’s a breakdown of the repair:
+
+1. First, before calling the function to stop the SRTP transport, the current transmit and receive policies are saved into local variables (tx and rx). This guarantees that the original, valid crypto policies are preserved no matter what state changes occur when stopping the transport.
+
+2. The repair then calls pjmedia_transport_srtp_stop() to halt the current SRTP session. This action might reset or clear internal state, but the necessary crypto parameters have already been safely stored.
+
+3. With the preserved policies in hand, the code restarts the SRTP transport using pjmedia_transport_srtp_start(), explicitly passing the saved tx and rx structures as parameters. This ensures that the restart utilizes the proper unmodified crypto configuration.
+
+4. Lastly, the code checks whether the restart succeeded. If the restart fails, an error is logged with details from get_libsrtp_errstr(), which helps during troubleshooting. If the restart is successful and SRTP remains active (indicated by the bypass flag), the incoming packet is then processed using srtp_unprotect().
+
+By preserving the crypto policies before any modifications are done to the SRTP context, the repair ensures that SRTP is reinitialized with consistent, secure settings. This ordering prevents the inadvertent downgrading from secure SRTP to basic RTP, which could happen if essential parameters are lost or altered during the stop operation. As a result, media remains protected under SRTP, even when temporary replay errors trigger a restart sequence.
+
+In summary, the core improvement is moving the policy retrieval ahead of any call that might alter critical SRTP state. This safeguards against the vulnerability that could otherwise lead to the resumption of an insecure media transmission mode.

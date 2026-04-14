@@ -1,0 +1,22 @@
+The repair changes the behavior when no ACL entries are available. In the original code:
+
+  if(!security_opts->acl_list && !security_opts->acl_patterns){
+   return MOSQ_ERR_PLUGIN_DEFER;
+  }
+
+if both acl_list and acl_patterns are absent, it meant that either no ACL file was provided or that an ACL file exists but has no rules (i.e., it's empty or contains only comments/blank lines). However, deferring (MOSQ_ERR_PLUGIN_DEFER) lets Mosquitto use a default allow policy when no ACLs are defined.
+
+This is problematic because if the ACL file is intentionally left empty to explicitly deny all access, the default allow policy contradicts the configuration administrator’s intention. The new repair explicitly handles the case where an ACL file is provided but is effectively empty. Instead of deferring to a default allow, it returns a denial error (MOSQ_ERR_ACL_DENIED). This error code ensures that access is denied, matching the behavior that one would expect from an empty ACL: nothing is allowed unless explicitly specified.
+
+In the revised code within the <repair> tags:
+
+  if(!security_opts->acl_list && !security_opts->acl_patterns){
+   /* An ACL file was specified but no rules were loaded (empty, comments, or blank lines).
+    * Deny all access instead of deferring to the default allow policy.
+    */
+   return MOSQ_ERR_ACL_DENIED;
+  }
+
+This change makes it clear that an empty ACL situation should not revert to the default allow policy. The error code MOSQ_ERR_ACL_DENIED is used to enforce a strict deny-all policy when any ACL file is present but does not contain any active rules. This behavior is safer as it avoids unintentionally allowing access in the absence of ACL entries.
+
+By making this change, the vulnerability is mitigated because it prevents an attacker or a misconfiguration from unintentionally opening up MQTT broker access when the ACL file was deliberately intended to be restrictive.

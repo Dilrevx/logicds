@@ -1,0 +1,30 @@
+The key fix in the repair was to ensure that a proper random client_random value is generated for both DTLS and non-DTLS sessions.
+
+In the buggy code, the generation of randomness was guarded by an overly strict conditional:
+
+  if (!(session->internals.hsk_flags & HSK_HRR_RECEIVED) &&
+    !(IS_DTLS(session) && session->internals.dtls.hsk_hello_verify_requests == 0)) {
+    ret = _gnutls_gen_client_random(session);
+    ...
+  }
+
+For DTLS sessions that did not have any hello-verify requests (i.e. when session->internals.dtls.hsk_hello_verify_requests == 0), this conditional would evaluate to false and _gnutls_gen_client_random was not called. This resulted in the client_random remaining at its default value (likely 32 null bytes), rendering the DTLS handshake vulnerable since no randomness was contributed to the DTLS negotiation.
+
+The repair simplifies the check by removing the DTLS-specific condition. It now only checks whether the Handshake Retry Request (HRR) flag is set:
+
+  if (!(session->internals.hsk_flags & HSK_HRR_RECEIVED)) {
+    ret = _gnutls_gen_client_random(session);
+    if (ret < 0) {
+     gnutls_assert();
+     goto cleanup;
+    }
+  }
+
+This ensures that for every new handshake (whether DTLS or TLS), the client_random is always generated. By always calling _gnutls_gen_client_random in the absence of an HRR flag, the code ensures that the randomness is populated correctly. This change fixes the vulnerability by eliminating the possibility that a DTLS client would use a fixed, weak (all-zero) client_random, which could be exploited to predict key material and thus compromise the security of DTLS.
+
+Other parts of the code remain unchanged, so the overall handshake flow (including construction of the client hello message with versions, ciphersuites, session IDs, extensions, and additional parameters) continues to function as intended. The only critical adjustment is ensuring that every session, including DTLS ones, benefits from proper randomness generation, thereby restoring the required security guarantees of the DTLS protocol.
+
+In summary, the repair fixes the vulnerability by:
+ • Removing the faulty DTLS-specific condition that prevented random generation.
+ • Invoking _gnutls_gen_client_random for all new handshakes (except when an HRR has been received).
+ • Guaranteeing that client_random always contains cryptographically secure randomness, which is essential for the integrity and confidentiality of the DTLS negotiation.

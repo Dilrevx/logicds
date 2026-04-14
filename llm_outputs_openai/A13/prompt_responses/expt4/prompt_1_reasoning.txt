@@ -1,0 +1,13 @@
+The repair removes the conditional check that only called the zone transfer permission function (dns_dlzallowzonexfr) when the dlz_searched list was non‐empty. In the buggy code, the call to dns_dlzallowzonexfr was wrapped inside an "if (! ISC_LIST_EMPTY(client->view->dlz_searched))" block. That meant that if the list was empty – which could happen for writable DLZ zones – the proper zone transfer permission check was bypassed, potentially allowing transfers that should have been denied.
+
+In the repaired code, we eliminate that condition and always call dns_dlzallowzonexfr regardless of the state of client->view->dlz_searched. This ensures that every zone transfer request (including those for writable DLZ zones) goes through the same permission check logic. 
+
+Here’s what happens in the repaired code:
+1. When the zone table lookup fails (result != ISC_R_SUCCESS), we immediately invoke dns_dlzallowzonexfr. This function is now unconditionally used to check if the transfer should be allowed.
+2. If dns_dlzallowzonexfr returns ISC_R_NOPERM, the code formats the zone name and class, logs an error mentioning that the zone transfer is denied, and then sets the result to DNS_R_REFUSED before jumping to the failure routine.
+3. Any failure value (other than a successful result) leads to a call to FAILQ and indicates a non-authoritative zone, which properly denies unauthorized requests.
+4. Finally, a flag (is_dlz) is set to true, marking the zone as a DLZ zone that has been processed for zone transfer control.
+
+The key fix is that by removing the check for an empty dlz_searched list, we force the system to always validate the transfer permissions by calling dns_dlzallowzonexfr – ensuring that even writable DLZ zones (which might not be in the dlz_searched list) are properly validated before a transfer is allowed. This repair directly addresses the vulnerability by ensuring that the appropriate method is invoked for all zones, closing the gap that previously allowed unauthorized zone transfers in certain cases.
+
+Overall, the change improves security by ensuring consistent and comprehensive enforcement of zone transfer rules across all types of zones.

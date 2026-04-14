@@ -1,0 +1,12 @@
+The repair first checks if the current cipher context is using RC4-MD5 by calling EVP_CIPHER_nid(ctx->cipher) and comparing it to NID_rc4_md5. Since RC4-MD5 is known to incorrectly use the AAD (Additional Authenticated Data) as the MAC key, this check helps us identify when the vulnerable cipher is in use.
+
+If the cipher is indeed RC4-MD5, the code raises an error via ERR_raise with a specific error code (CIPHER_R_RC4_MD5_AEAD_NOT_ALLOWED) to make it clear that using AEAD TLS1 AAD with RC4-MD5 is not allowed. Following the error raise, the function returns 0, effectively aborting further processing with this insecure configuration. This early return is the key part of the fix, as it prevents any further operations that could lead to potential man-in-the-middle attacks where an attacker might exploit this vulnerability to tamper with data while still passing the MAC integrity check.
+
+If the cipher is not RC4-MD5, the repair proceeds to retrieve the AEAD TLS1 AAD parameter using OSSL_PARAM_locate_const. This means that for all other (non-vulnerable) ciphers, the operation proceeds as expected.
+
+By adding this conditional check, we ensure that when RC4-MD5 is the active cipher, the potentially dangerous behavior (where AAD is used as the MAC key) is entirely bypassed. The vulnerability is thereby mitigated because:
+1. No further processing occurs that could mistakenly use the insecure AAD value.
+2. The error explicitly notifies the application/library caller of the unsupported configuration, prompting them to use a secure cipher or take corrective action.
+3. The integrity of the cryptographic process is maintained by preventing the predictable MAC key issue, which could be exploited for man-in-the-middle attacks.
+
+In summary, this repair fixes the vulnerability by proactively detecting the use of a problematic cipher (RC4-MD5) and aborting the operation, rather than allowing a mechanism that would otherwise derive a MAC key in a manner exploitable by an attacker.

@@ -1,0 +1,37 @@
+The repair implemented in the code addresses a significant security vulnerability in the wolfSSL library, specifically related to the handling of TLS 1.3 sessions when neither a Pre-Shared Key (PSK) extension nor a Key Share Extension (KSE) is provided by the server. This scenario poses a serious threat as it can lead to the use of a default, predictable Initial Keying Material (IKM) value, which can be exploited by attackers to deduce the session master secret, compromising the security of the entire TLS session.
+
+### Contextual Understanding
+
+In the original code snippet, the library checks for the presence of a PSK extension during the TLS 1.3 handshake process. If a valid PSK is not found, it resets certain flags and clears any existing PSK data. Subsequently, it sets the encryption flag and updates the server state, assuming that other mechanisms, such as the Key Share Extension, might have handled the IKM generation. However, the code fails to verify whether a Key Share Extension (KSE) was also provided, leading to a potential security breach if both extensions are absent.
+
+### Identification of Vulnerability
+
+The core issue lies in the assumption that the presence of a PSK or the subsequent setting of encryption flags ensures a secure IKM. In reality, TLS 1.3 mandates that at least one of the following must be present to securely derive the IKM:
+1. A valid Pre-Shared Key (PSK).
+2. A Key Share Extension (KSE) containing a key share from the server.
+
+If neither of these is provided, the system defaults to using a predictable IKM, which can be easily guessed by an attacker, leading to the reconstruction of the session master secret. This can result in unauthorized access to the encrypted communication, allowing eavesdropping or even manipulation of the message contents.
+
+### Introduction of Sanity Check
+
+To mitigate this risk, the repair introduces a "sanity check" after the PSK negotiation logic. This check ensures that at least one of the required extensions (PSK or KSE) has been successfully negotiated before proceeding with further handshake operations. This additional verification step is crucial in preventing the use of a predictable IKM when neither a PSK nor a KSE is available.
+
+### Conditional Check for PSK and KSE
+
+The sanity check is conditionally compiled based on the configuration options (`HAVE_SESSION_TICKET` and `NO_PSK`). It first checks if a PSK has been negotiated (`ssl->options.pskNegotiated == 0`). If no PSK is negotiated, it then looks for the presence of a Key Share Extension (KSE) by searching for the `TLSX_KEY_SHARE` extension in the list of extensions received from the server. If the `TLSX_KEY_SHARE` extension is not found (`kseExt == NULL`), indicating the absence of a KSE, the function immediately returns an error code (`EXT_MISSING`).
+
+The named group, which is a key component of the Key Share Extension, signifies that the server has provided a key share. Its absence signals that the server did not provide a key share, which is essential for generating a secure IKM. By enforcing this check, the code prevents the use of a default, predictable IKM when neither a PSK nor a KSE is available.
+
+### Preventing Default IKM Usage
+
+The primary goal of this repair is to prevent the use of a default, predictable IKM. Instead of proceeding with the handshake when both extensions are missing, the function halts the handshake process early by returning an error. This action ensures that the session remains secure and prevents any potential exploitation of the vulnerability.
+
+### Maintaining Security and Compatibility
+
+The repair does not alter the behavior of the code when either a PSK or a KSE is present, thus maintaining compatibility with standard TLS 1.3 handshakes. It only intervenes when both extensions are missing, thereby ensuring that the session master secret is always derived through the proper negotiation of either a PSK or a KSE. This change significantly enhances the security of TLS 1.3 sessions, especially in environments where the client cannot control both sides of the connection.
+
+### Ensuring Secure Session Establishment
+
+With this modification, the wolfSSL library now enforces stricter requirements for the TLS 1.3 handshake, ensuring that a secure IKM is always generated through the proper negotiation of either a PSK or a KSE. This change not only mitigates the specific vulnerability described but also reinforces the overall security posture of the library, making it more resilient against various types of attacks that exploit weaknesses in the TLS handshake process.
+
+In summary, the repair introduces a critical sanity check to ensure that at least one of the required extensions (PSK or KSE) is present during the TLS 1.3 handshake. This step prevents the use of a predictable IKM, enhancing the security of the session and protecting against potential attacks that could exploit this vulnerability.

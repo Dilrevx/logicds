@@ -1,0 +1,23 @@
+The core issue of this vulnerability lies in improperly validating the TLS handshake for clients using Diffie-Hellman (DH) certificates. In the original code snippet, verification of the client’s authentication isn’t applied universally. Instead, it checks for a specific flag (EVP_PKT_SIGN) on the peer’s certificate. If that flag isn’t set—as is the case with DH certificates—the function inadvertently permits the handshake to proceed without the required CertificateVerify message. This means that an attacker exploiting this vulnerability could craft TLS handshake messages that bypass the authentication step, potentially gaining unauthorized access.
+
+The repair addresses this by removing the condition that checks for the EVP_PKT_SIGN flag. Instead of making the invocation of the error branch contingent on the certificate’s signing capabilities, the modified code unconditionally treats the missing CertificateVerify message as an invalid state whenever a peer certificate exists. This is critical because even if a client certificate is based on Diffie-Hellman, the protocol requires a CertificateVerify message. The CertificateVerify message is essential because it provides cryptographic evidence that the client holds the private key corresponding to the public key in its certificate, which reinforces the integrity and authenticity of the handshake.
+
+In the original code, the conditional check (if (peer != null && (type & Constants.EVP_PKT_SIGN) != 0)) made the error handling dependent on the certificate’s signing attribute. Under this logic, when the client’s certificate didn’t have signing capabilities, the code would return success without triggering an alert or error. This created a security hole where clients with DH certificates could successfully complete TLS handshakes without proving possession of the private key, thus undermining the authentication mechanism.
+
+The repair code simplifies this by unconditionally flagging a missing CertificateVerify message as a fatal error if a peer certificate exists. The new block reads:
+
+  if (s.s3.tmp.message_type != Constants.SSL3_MT_CERTIFICATE_VERIFY) {
+   s.s3.tmp.reuse_message = 1;
+   if (peer != null) {
+    al = Constants.SSL_AD_UNEXPECTED_MESSAGE;
+    Helper.SSLerr(Constants.SSL_F_SSL3_GET_CERT_VERIFY,
+      Constants.SSL_R_MISSING_VERIFY_MESSAGE);
+    Helper.ssl3_send_alert(s, Constants.SSL3_AL_FATAL, al);
+    return ret;
+   }
+   return 1;
+  }
+
+This change ensures that regardless of the certificate type—whether it supports signing operations or not—the absence of the CertificateVerify message is always treated as a protocol violation. In the context of TLS, the CertificateVerify message is not a redundant or optional step even for DH-based authentication; it is a critical piece that guarantees the integrity of the handshake process by confirming that the client is indeed in possession of the required private key.
+
+By always sending an alert and returning an error code when CertificateVerify is missing, the fix guarantees a consistent and secure behavior that upholds protocol expectations. Although the initial design might have considered certificate-specific capabilities, this decision ultimately weakens the protocol’s overall security posture. The repair thus reinforces the necessity of proper authentication regardless of certificate type, mitigating the attack vector that previously existed.

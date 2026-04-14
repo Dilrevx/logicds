@@ -1,0 +1,102 @@
+The provided repair addresses several critical security and functionality issues within the `ssl3_get_cert_verify` function, which is responsible for handling the certificate verification process in an SSL/TLS handshake. Below is an explanation of the key changes made:
+
+### 1. **Public Key Check**
+```c
+if (pkey == NULL) {
+    al = SSL_AD_HANDSHAKE_FAILURE;
+    SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_NO_PUBLICKEY);
+    goto f_err;
+}
+```
+**Reasoning:** Before proceeding with signature verification, it's essential to ensure that the public key (`pkey`) extracted from the peer's certificate is not `NULL`. If no public key is available, the function should terminate early with an appropriate alert level (`SSL_AD_HANDSHAKE_FAILURE`) and error message (`SSL_R_NO_PUBLICKEY`). This prevents further processing with a missing key, which would lead to undefined behavior or security vulnerabilities.
+
+### 2. **Message Length Validation**
+```c
+if (n < 2) {
+    al = SSL_AD_DECODE_ERROR;
+    SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_LENGTH_TOO_SHORT);
+    goto f_err;
+}
+```
+**Reasoning:** The initial two bytes of the received message indicate the message type and length of the certificate verify data. Ensuring that the message length (`n`) is at least 2 bytes prevents buffer over-reads and underflows when accessing these fields. If the message is too short, the function should fail with a decode error (`SSL_AD_DECODE_ERROR`) and the corresponding error code (`SSL_R_LENGTH_TOO_SHORT`).
+
+### 3. **Message Type Check**
+```c
+if ((i == SSL3_MT_CERTIFICATE_VERIFY) && (n > 0)) {
+    al = SSL_AD_DECODE_ERROR;
+    SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_WRONG_MESSAGE_TYPE);
+    goto f_err;
+}
+```
+**Reasoning:** The message type (`i`) should not be `SSL3_MT_CERTIFICATE_VERIFY` if there is any data following it (`n > 0`). This check ensures that the message structure adheres to the expected format. If the message type is incorrect, the function should fail with a decode error (`SSL_AD_DECODE_ERROR`) and the error code (`SSL_R_WRONG_MESSAGE_TYPE`).
+
+### 4. **Signature Length Validation**
+```c
+if ((n != EVP_PKEY_size(pkey)) || (n <= 0)) {
+    al = SSL_AD_DECODE_ERROR;
+    SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_LENGTH_MISMATCH);
+    goto f_err;
+}
+```
+**Reasoning:** The length of the signature (`n`) must match the size of the public key (`EVP_PKEY_size(pkey)`). This validation step ensures that the signature is neither too long nor too short, which could indicate a malformed message or an attempt to exploit a buffer overflow. If the lengths do not match, the function should fail with a decode error (`SSL_AD_DECODE_ERROR`) and the error code (`SSL_R_LENGTH_MISMATCH`).
+
+### 5. **Protocol Version Handling**
+```c
+if (s->version >= TLS1_VERSION) {
+    ...
+} else {
+    al = SSL_AD_INTERNAL_ERROR;
+    SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_UNSUPPORTED_PROTOCOL);
+    goto f_err;
+}
+```
+**Reasoning:** The code specifically handles TLS 1.0 and later versions (`s->version >= TLS1_VERSION`). For older SSL versions, the function should terminate with an internal error (`SSL_AD_INTERNAL_ERROR`) and the error code (`SSL_R_UNSUPPORTED_PROTOCOL`). This ensures that the function does not attempt to process unsupported protocol versions, maintaining security and compatibility.
+
+### 6. **Digest Algorithm Lookup**
+```c
+if (!ssl_cert_lookup_by_nid(OBJ_obj2nid(pkey->type), &md, NULL)) {
+    al = SSL_AD_INTERNAL_ERROR;
+    SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_UNKNOWN_PKEY_TYPE);
+    goto f_err;
+}
+```
+**Reasoning:** The digest algorithm (`md`) used for signature verification must be determined based on the public key type. If the public key type is unknown or unsupported, the function should fail with an internal error (`SSL_AD_INTERNAL_ERROR`) and the error code (`SSL_R_UNKNOWN_PKEY_TYPE`). This prevents using an inappropriate digest algorithm, which could compromise the integrity of the signature verification process.
+
+### 7. **Signature Verification**
+```c
+if (!EVP_VerifyInit_ex(&mctx, md, NULL)) {
+    ...
+}
+if (!ssl3_take_mac(s, &mctx)) {
+    ...
+}
+if (!EVP_VerifyUpdate(&mctx, s->s3->handshake_buffer->data, s->s3->handshake_buffer->length)) {
+    ...
+}
+i = EVP_VerifyFinal(&mctx, p, (unsigned int)n, pkey);
+if (i < 0) {
+    ...
+}
+if (i == 0) {
+    al = SSL_AD_ILLEGAL_PARAMETER;
+    SSLerr(SSL_F_SSL3_GET_CERT_VERIFY, SSL_R_BAD_SIGNATURE);
+    goto f_err;
+}
+ret = 1;
+```
+**Reasoning:** These steps perform the actual signature verification:
+- `EVP_VerifyInit_ex` initializes the verification context with the appropriate digest algorithm.
+- `ssl3_take_mac` processes the handshake messages into a MAC, which is part of the signature data.
+- `EVP_VerifyUpdate` updates the verification context with the handshake data.
+- `EVP_VerifyFinal` finalizes the verification process and checks if the signature is valid.
+If any step fails, the function should terminate with an appropriate alert level and error message. Only if the signature is successfully verified (`i == 1`) does the function set `ret = 1`, indicating success.
+
+### 8. **Cleanup**
+```c
+EVP_PKEY_free(pkey);
+EVP_MD_CTX_cleanup(&mctx);
+return ret;
+```
+**Reasoning:** After processing, it's crucial to free any allocated resources (`pkey` and the `EVP_MD_CTX` structure) to prevent memory leaks. Finally, the function returns the result of the verification process (`ret`), indicating whether the signature was successfully verified.
+
+By implementing these changes, the `ssl3_get_cert_verify` function becomes more robust, secure, and resilient against various types of attacks, such as buffer overflows, malformed messages, and unsupported protocols.

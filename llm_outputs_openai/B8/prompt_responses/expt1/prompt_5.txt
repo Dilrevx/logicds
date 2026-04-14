@@ -1,0 +1,39 @@
+<repair>
+    if (*extMsgType == server_hello) {
+    #if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
+        PreSharedKey* psk = NULL;
+        TLSX* ext = TLSX_Find(ssl->extensions, TLSX_PRE_SHARED_KEY);
+        if (ext != NULL)
+            psk = (PreSharedKey*)ext->data;
+        /* Verify that a valid PSK (or key share) extension is present.
+         * If no chosen PSK is found, abort the handshake instead of using a
+         * predictable default IKM value.
+         */
+        while (psk != NULL && !psk->chosen)
+            psk = psk->next;
+        if (psk == NULL) {
+            WOLFSSL_MSG("No valid PSK extension found; aborting handshake to prevent insecure key derivation");
+            SendAlert(ssl, alert_fatal, wolfssl_alert_handshake_failure);
+            return INVALID_PARAMETER;
+        }
+        else {
+            if ((ret = SetupPskKey(ssl, psk, 0)) != 0)
+                return ret;
+            ssl->options.pskNegotiated = 1;
+        }
+    #endif
+
+        ssl->keys.encryptionOn = 1;
+        ssl->options.serverState = SERVER_HELLO_COMPLETE;
+    }
+    else {
+        ssl->options.tls1_3 = 1;
+        ssl->options.serverState = SERVER_HELLO_RETRY_REQUEST_COMPLETE;
+        ret = RestartHandshakeHash(ssl);
+        if (ret != 0)
+            return ret;
+    }
+    
+    WOLFSSL_LEAVE("DoTls13ServerHello", ret);
+    return ret;
+</repair>

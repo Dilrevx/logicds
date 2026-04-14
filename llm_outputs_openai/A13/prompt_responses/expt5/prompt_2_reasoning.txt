@@ -1,0 +1,13 @@
+The repair adds an extra call to the DLZ transfer permission check (dns_dlzallowzonexfr) when a match is found in the normal zone table. In the buggy code, if the normal zone table lookup succeeded (result == ISC_R_SUCCESS), the DLZ check was entirely skipped, meaning that for zones served by DLZ modules—especially writable ones—the transfer permissions were not properly verified. This omission could allow unauthorized zone transfers.
+
+Here's a walkthrough of the repair:
+
+1. In the first branch (when result != ISC_R_SUCCESS), the code still checks if the DLZ lookup should be attempted. If so, it calls dns_dlzallowzonexfr. If that call returns ISC_R_NOPERM, it logs an error and aborts. This part remains similar to the buggy version, ensuring that if the zone is found only in the DLZ module, the proper permission check is done.
+
+2. The critical change is in the "else" branch where the normal zone table had a match (result == ISC_R_SUCCESS). The fix now adds an additional DLZ check here as well. Even though a match was found in the zone table, if DLZ support is configured (i.e., the DLZ list is not empty), the code calls dns_dlzallowzonexfr. This invocation ensures that for any zones managed by DLZ modules—especially those that are writable—the method responsible for verifying zone transfer permissions is executed regardless of a normal zone match.
+
+3. If the additional dlz check in the else branch returns ISC_R_NOPERM, the same refusal procedure is executed: a log is generated, an error message is prepared, and the process aborts the transfer by jumping to the failure label.
+
+4. Finally, by inserting this DLZ check in both branches, the repair ensures that the transfer controls specified by the allowzonexfr method are always enforced. This fix mitigates the vulnerability by ensuring that even if a zone is present in the traditional zone table, any additional DLZ transfer permission checks are not bypassed.
+
+In summary, the repair fixes the vulnerability by ensuring that the DLZ zone transfer control (dns_dlzallowzonexfr) is always invoked when appropriate—whether the zone is found via the normal zone table or via the DLZ mechanism. This guarantees adherence to the intended security policy for writable DLZ zones, preventing unauthorized zone transfers due to an incomplete permission check.

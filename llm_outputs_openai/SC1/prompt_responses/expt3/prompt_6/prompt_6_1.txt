@@ -1,0 +1,53 @@
+Below is an example patch that implements the repair. In the default certificate verification path (when the application has not provided a custom verify callback), the code calls the internal X509_verify_cert() function. Immediately after that call, the patch checks if the return value is negative and, if so, resets it to zero. This prevents the negative value from propagating and causing the SSL_ERROR_WANT_RETRY_VERIFY error.
+
+For example, consider a snippet from the OpenSSL certificate verification function:
+
+---------------------------------------------------------
+/* Original (buggy) code */
+int ssl_verify_cert(SSL *s, X509_STORE_CTX *ctx)
+{
+    int ret;
+
+    /* If an application-specific callback is provided, use it */
+    if (s->ctx->app_verify_callback != NULL) {
+        ret = s->ctx->app_verify_callback(s, ctx);
+    } else {
+        /* Use the default certificate verification */
+        ret = X509_verify_cert(ctx);
+    }
+
+    return ret;
+}
+---------------------------------------------------------
+
+Below is the patched version that implements the fix:
+
+---------------------------------------------------------
+int ssl_verify_cert(SSL *s, X509_STORE_CTX *ctx)
+{
+    int ret;
+
+    /* If an application-specific callback is provided, use it */
+    if (s->ctx->app_verify_callback != NULL) {
+        ret = s->ctx->app_verify_callback(s, ctx);
+    } else {
+        /* Use the default certificate verification */
+        ret = X509_verify_cert(ctx);
+
+        /* PATCH: If X509_verify_cert() returns a negative value due to an internal error,
+           reset the return value to zero so that handshake functions do not get an unexpected error */
+        if (ret < 0)
+            ret = 0;
+    }
+
+    return ret;
+}
+---------------------------------------------------------
+
+Explanation of the patch:
+1. The code first checks whether an application-specific verification callback has been registered. If so, it calls that callback, leaving its behavior intact.
+2. In the default case, the internal X509_verify_cert() function is called.
+3. Immediately after the verification function returns, the patch checks if the returned value is negative (indicating an internal error such as an out-of-memory condition).
+4. If a negative value is detected, the patch resets it to zero before the value is passed back to the handshake functions. This prevents the higher-level code (e.g., SSL_connect() or SSL_do_handshake()) from misinterpreting the negative value as SSL_ERROR_WANT_RETRY_VERIFY.
+
+By making this change, the patch ensures that internal errors do not leak into the SSL error-handling routines, thereby preserving the expected contract between the certificate verification function and the handshake process.

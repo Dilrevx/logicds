@@ -1,0 +1,19 @@
+The repair introduces explicit checks to ensure that any certificate being added to the chain truly qualifies as a Certificate Authority by validating its Basic Constraints (specifically, its cA flag). Here’s how the changes fix the vulnerability:
+
+1. Trusted Issuer Check:
+ • In the segment where the code calls ctx.get_issuer(x) under the X509_V_FLAG_TRUSTED_FIRST flag, once an issuer is found (ok > 0), the repair immediately verifies that the found issuer (Helper.lastIssuer) has the proper CA attributes by invoking Helper.isValidCA. This function checks the Basic Constraints to ensure the certificate is permitted to act as a CA.
+ • If the issuer fails the Basic Constraints check, it is freed and not accepted. This prevents a malicious certificate masquerading as a CA (via a spoofed leaf certificate) from being inadvertently trusted.
+
+2. Untrusted Issuer Search:
+ • When searching among the untrusted certificates (using Helper.find_issuer), the repair validates each candidate issuer by calling Helper.isValidCA.
+ • If a candidate issuer does not meet the CA criteria, it is removed from the candidate list (sktmp) and skipped. This move aborts accepting and adding a certificate that could lead to an alternative chain forged by an attacker.
+
+3. Chain Building via get_issuer:
+ • Later, during chain extension (inside the for loop after processing self-signed certificates), when a new issuer is obtained via ctx.get_issuer(x), the repair adds a check to ensure the obtained issuer certificate is a valid CA as per its Basic Constraints.
+ • Again, if the certificate does not have the appropriate certificate authority usage (i.e., it lacks the correct Basic Constraints), the certificate is freed and the chain building process is halted at that point, which prevents the formation of a chain that includes an improperly authorized issuer.
+
+4. Handling Alternative Chains:
+ • In handling alternative certificate chains (the block which tests for X509_V_FLAG_NO_ALT_CHAINS), before switching to an alternative issuer, the repair checks that the issuer certificate from the alternative chain has valid CA usage.
+ • This reinforces that even alternative paths will be scrutinized for valid Basic Constraints, nullifying attempts by an attacker to inject an invalid intermediate certificate that might pass other less strict checks.
+
+Overall, by rigorously validating that every certificate purporting to be a CA actually has the appropriate Basic Constraints (via the Helper.isValidCA function), the repair prevents certificates with spoofed CA attributes from being accepted. This eliminates the vulnerability that originally could allow a leaf certificate to improperly trigger certification authority verifications and form an illicit chain.

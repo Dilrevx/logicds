@@ -1,0 +1,26 @@
+The repair addresses the vulnerability by explicitly correcting the certificate serial number’s length before making any comparisons. In the buggy code, the serial numbers from the certificate and the OCSP response are compared, but the length of the certificate serial number isn’t reliably set. This oversight could lead to extra trailing bytes (from previous memory allocations) being inadvertently compared against the OCSP response, potentially allowing an attacker to bypass certificate validation by manipulating these extra bytes.
+
+To fix this, the repair introduces a new step:
+1. Updating the certificate serial number’s length explicitly from a trusted source. In the code snippet, this is represented by the assignment:
+
+  cserial.size = (size_t)trusted_serial.size;
+
+This line ensures that the expected certificate serial number length is set based on a reference value (trusted_serial.size) that contains the accurate length. By doing so, any leftover or extra bytes from earlier memory allocations (which might have been included inadvertently due to incorrect length) are disregarded during the comparison.
+
+2. Once the certificate serial number’s size is corrected, the function then checks if the serial number obtained from the OCSP response (rserial) is of the same length as the now-trusted certificate serial number (cserial). The code does this by a simple size comparison:
+
+  if (rserial.size != cserial.size …
+
+If the sizes do not match, the function immediately returns an error, preventing any further potentially unsafe processing.
+
+3. Only after confirming that the sizes match does the function use a memory comparison function Helper.memcmp on the relevant number of bytes as defined by the adjusted cserial.size. This comparison ensures that the actual contents of the two serial numbers are identical across the exact expected number of bytes. If any differences are found, an error is again returned:
+
+  … || Helper.memcmp(cserial.data, rserial.data, cserial.size)) {
+    return ErrorCodes.GNUTLS_E_OCSP_RESPONSE_ERROR;
+  }
+
+Overall, the fix mitigates the vulnerability by guaranteeing that:
+- Only the intended bytes (as determined by a trusted value) are compared.
+- Any unexpected extra bytes that could have made the validation unsafe (due to potential memory leftovers) are explicitly trimmed out by setting the correct length.
+
+Thus, the certificate validation becomes stricter and is no longer subject to the risk introduced by potential memory artifacts. This precise control over the length of the data being compared is critical to ensure that the certificate verification mechanism remains robust, effectively blocking a class of exploitation that could allow attackers to bypass security checks.

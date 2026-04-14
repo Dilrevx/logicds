@@ -1,0 +1,31 @@
+The repaired code reorders and supplements the certificate chain processing to ensure that errors during leaf certificate verification aren’t lost. Here’s a step-by-step walkthrough:
+
+1. Initialization and Depth Calculation:
+   • The code starts by retrieving the last and leaf certificates from the chain and calculating the number of certificates. If the depth is positive, it adjusts it by subtracting one, which establishes the correct index for error tracking.
+
+2. Checking Chain Limits and Clearing Specific Errors:
+   • Before proceeding, the function checks whether the context has reached its maximum chain count and returns an error if that limit is exceeded.
+   • It also clears the error X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY for the root certificate. This error may be benign in the context of a self-signed root, ensuring it doesn’t propagate incorrectly.
+
+3. Validating the Legacy Chain:
+   • The legacy chain validation is performed next. This keeps backward compatibility and ensures that any established issues in the legacy path result in an early return.
+
+4. Verifying Leaf Certificate Validity and Hostname:
+   • The major change comes here: the code now verifies the leaf certificate’s validity and hostname before duplicating the entire certificate chain. By doing so early, it ensures that any errors generated during this verification can be captured.
+   • If either x509_verify_cert_valid or x509_verify_cert_hostname fails during verification, the code checks whether an error has been set in the context (and isn’t simply the previously cleared error). If so, it records this error in the chain’s error array at the appropriate depth index. This prevents the error from being lost if the process continues, especially if a verification callback allowed continuation on an invalid certificate.
+
+5. Duplicating the Chain:
+   • Only after confirming that the leaf certificate is valid does the function proceed to duplicate the certificate chain. If the duplication fails (e.g., due to memory issues), the function returns an out-of-memory error while still preserving the error context from the earlier leaf check.
+   
+6. Finalizing the Context:
+   • Finally, the chain counter is incremented, and the context error is cleared (set to success). The error depth is updated to reflect where in the chain the errors were captured.
+
+The key fixes addressing the vulnerability are:
+
+• Early Verification: By switching the order and first verifying the leaf certificate (both its validity and hostname), the function ensures that any error from that verification is captured before potentially masking it with later actions.
+  
+• Error Capturing: The repair explicitly checks whether any error from the leaf certificate verification should be stored in the certificate chain’s error list. This makes sure that errors are preserved even if a verification callback advises continuation.
+
+• Robust Error Handling: The chain duplication (which may fail due to memory issues) now happens after critical error handling, so any earlier detected error isn’t inadvertently replaced by a memory allocation error.
+
+Overall, these changes ensure that any error occurring during the leaf certificate verification stage is explicitly captured, stored, and propagated. This helps maintain accurate error reporting and avoids the scenario where an invalid certificate’s error is overridden or lost, thereby fixing the vulnerability.

@@ -1,0 +1,51 @@
+To address the vulnerability described, we need to ensure that the key and initialization vector (IV) lengths are handled correctly when initializing the cipher context. The issue here is that the key and IV lengths are being passed directly from `EVP_CIPHER_CTX_get_key_length(ctx)` and `EVP_CIPHER_CTX_get_iv_length(ctx)` without checking if the provided key and IV match these expected lengths. This can lead to truncation or overruns.
+
+We should validate the lengths of the provided key and IV against what the cipher expects before passing them to the initialization function. Here's how you can modify the code to include these checks:
+
+```c
+if ((ctx->flags & EVP_CIPH_NO_PADDING) != 0) {
+    /*
+     * If this ctx was already set up for no padding then we need to tell
+     * the new cipher about it.
+     */
+    if (!EVP_CIPHER_CTX_set_padding(ctx, 0))
+        return 0;
+}
+
+if (enc) {
+    if (ctx->cipher->einit == NULL) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+        return 0;
+    }
+
+    // Check if the provided key length matches the expected key length
+    size_t expected_key_length = EVP_CIPHER_CTX_get_key_length(ctx);
+    if (key != NULL && EVP_CIPHER_CTX_get_key_length(ctx) != expected_key_length) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_KEY_LENGTH);
+        return 0;
+    }
+
+    // Check if the provided IV length matches the expected IV length
+    size_t expected_iv_length = EVP_CIPHER_CTX_get_iv_length(ctx);
+    if (iv != NULL && EVP_CIPHER_CTX_get_iv_length(ctx) != expected_iv_length) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_IV_LENGTH);
+        return 0;
+    }
+
+    return ctx->cipher->einit(ctx->algctx,
+                              key,
+                              key == NULL ? 0 : expected_key_length,
+                              iv,
+                              iv == NULL ? 0 : expected_iv_length,
+                              params);
+}
+```
+
+### Explanation:
+1. **Key Length Validation**: Before initializing the cipher, we check if the provided key (`key`) matches the expected key length (`expected_key_length`). If not, an error is raised using `ERR_raise()` with the error code `EVP_R_INVALID_KEY_LENGTH`.
+
+2. **IV Length Validation**: Similarly, we check if the provided IV (`iv`) matches the expected IV length (`expected_iv_length`). If not, an error is raised using `ERR_raise()` with the error code `EVP_R_INVALID_IV_LENGTH`.
+
+3. **Passing Correct Lengths**: After validation, we pass the validated lengths (`expected_key_length` and `expected_iv_length`) to the initialization function instead of recalculating them.
+
+This approach ensures that the key and IV lengths are correctly verified before they are used, preventing truncation or overruns and thus mitigating the vulnerability.

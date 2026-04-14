@@ -1,0 +1,15 @@
+The repair adds explicit checks to confirm that any candidate used as an issuer must have CA privileges (i.e. its Basic Constraints indicate CA:TRUE). In the original code, a leaf certificate might be exploited to forge a certification path by manipulating alternative chains. The fix ensures that before any candidate certificate is added to the chain (or used as an alternate issuer), it is validated as a proper CA certificate.
+
+Key changes include:
+
+1. When retrieving an issuer using ctx->get_issuer in the "TRUSTED_FIRST" block, after obtaining the candidate (xtmp), the repair now checks if X509_check_ca(xtmp) returns true. If not, the candidate is freed and ignored. This directly stops a non-CA certificate from being incorrectly accepted as a valid issuer during the trusted-first search.
+
+2. In the block where the untrusted certificate chain is used (using find_issuer), after finding a candidate certificate xtmp, the repair performs a similar check using X509_check_ca(xtmp). If the candidate lacks the proper CA basic constraints, it is disposed of rather than being pushed onto the certificate chain. This prevents an attacker from injecting a certificate masquerading as an issuer if it does not have the authority to sign other certificates.
+
+3. In the loop where the chain is being built from the trusted store (after the self-signed check), the repair again validates the candidate issuer (returned by get_issuer) with X509_check_ca(xtmp) before using it. If the check fails, the candidate is freed and not added to the chain. This ensures that any issuer added from the trusted store is indeed allowed to act as a CA.
+
+4. During the alternate chain search, after a candidate issuer is retrieved, the fix also confirms that the candidate passes the Basic Constraints check by calling X509_check_ca(xtmp). If it fails, that candidate is freed and the search continues without accepting it into the new chain.
+
+By integrating these checks at multiple points, the fix ensures that only certificates with the proper CA flag set in their Basic Constraints can be used to build a certification chain. This directly addresses the vulnerability where an attacker could use a valid leaf certificate in an alternative chain to spoof a certification authority role. The vulnerability arose from the lack of strict verification of the Basic Constraints field in candidate issuer certificates. 
+
+In summary, the repair intercepts the certificate chain building process at key decision points. It ensures that each candidate certificate intended to act as an issuer is verified using X509_check_ca before being accepted. If a certificate fails this check, it is either discarded or causes the chain-building process to break out of that path. These modifications enforce the intended CA/issuer relationship and prevent potential spoofing of certification authorities via improperly validated alternative chains.

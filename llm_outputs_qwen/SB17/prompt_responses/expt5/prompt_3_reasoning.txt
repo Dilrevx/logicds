@@ -1,0 +1,45 @@
+The provided repair addresses a critical vulnerability in the `tls_verify_crl` function by ensuring that the CRL verification process correctly checks the issuer of the CRL against the expected issuer rather than incorrectly checking the subject twice. This misalignment can lead to security issues where revoked certificates might still be considered valid, allowing unauthorized access to secure connections.
+
+### Original Vulnerability Analysis
+
+In the original buggy code snippet, the function retrieves CRLs based on the `subject` parameter instead of the `issuer`. This is problematic because the CRL's validity is determined by who issued it, not who the CRL is about (the subject). The CRL (Certificate Revocation List) is a list of certificates that have been revoked by their issuer before their natural expiration. Therefore, verifying the issuer ensures that the CRL is indeed from a trusted authority that has the right to revoke certificates.
+
+The vulnerability description specifies that the code should verify the issuer field in the CRL matches either the `cRLIssuer` in the Distribution Point (DP) or, in its absence, the certificate issuer. By checking the subject instead of the issuer, the code fails to perform this crucial validation step, which can lead to acceptance of invalid CRLs and thus compromised security.
+
+### Specification Compliance
+
+The specification outlines detailed steps for verifying both the complete CRL and delta CRLs:
+
+1. **Complete CRL Verification:**
+   - If the DP includes a `cRLIssuer`, verify that the CRL issuer matches `cRLIssuer` and that the CRL contains an issuing distribution point extension with the `indirectCRL` boolean asserted.
+   - Otherwise, verify that the CRL issuer matches the certificate issuer.
+   - Additional checks are required if the CRL includes an issuing distribution point (IDP) extension, including verifying the distribution point name, the types of certificates covered (user or CA), and ensuring attribute certificates are not included unless explicitly allowed.
+
+2. **Delta CRL Verification:**
+   - Verify that the delta CRL issuer matches the complete CRL issuer.
+   - If the complete CRL includes an IDP extension, ensure the delta CRL also contains a matching IDP extension. If the complete CRL lacks an IDP extension, the delta CRL should similarly lack one.
+
+### Repair Explanation
+
+The repair modifies the code to pass the `issuer` parameter instead of the `subject` when retrieving CRLs:
+
+```java
+if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 && !Commons.HAVE_LIBRESSL) {
+    crls = storeCtx.get1_crls(issuer);
+}
+else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 && !Commons.HAVE_LIBRESSL) {
+    crls = Commons.get1_crls(storeCtx, issuer);
+}
+```
+
+This change ensures that the CRL retrieval process checks the correct field (the issuer) for validating the CRL. By doing so, the code adheres more closely to the specification, which emphasizes the importance of verifying the issuer to establish trust in the CRL.
+
+### Additional Considerations
+
+While the repair focuses on correcting the immediate issue of using the wrong parameter (`issuer` vs. `subject`), it is important to ensure that other parts of the CRL verification process comply with the specification. This includes:
+
+- **Checking the Issuing Distribution Point Extension:** Ensure that if the CRL includes an IDP extension, all relevant checks (distribution point name, types of certificates covered, etc.) are performed.
+- **Handling Delta CRLs:** Verify that delta CRLs are correctly matched with their corresponding complete CRLs, including matching IDP extensions where applicable.
+- **Library Version Compatibility:** The repair maintains compatibility with different versions of OpenSSL by conditionally calling the appropriate method (`storeCtx.get1_crls` or `Commons.get1_crls`) based on the OpenSSL version number.
+
+By addressing the misuse of the `subject` parameter and ensuring the CRL verification process aligns with the specified requirements, the repair significantly enhances the security of the TLS verification process, preventing the acceptance of invalid CRLs and protecting against potential man-in-the-middle attacks and other security threats.

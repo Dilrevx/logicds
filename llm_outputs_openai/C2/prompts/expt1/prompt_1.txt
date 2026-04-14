@@ -1,0 +1,75 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags.
+Your code should be until the end of the function.
+static int check_chain_extensions(X509_STORE_CTX *ctx)
+{
+    int i, must_be_ca, plen = 0;
+    X509 *x;
+    int proxy_path_length = 0;
+    int purpose;
+    int allow_proxy_certs;
+    int num = sk_X509_num(ctx->chain);
+
+    /*-
+     *  must_be_ca can have 1 of 3 values:
+     * -1: we accept both CA and non-CA certificates, to allow direct
+     *     use of self-signed certificates (which are marked as CA).
+     * 0:  we only accept non-CA certificates.  This is currently not
+     *     used, but the possibility is present for future extensions.
+     * 1:  we only accept CA certificates.  This is currently used for
+     *     all certificates in the chain except the leaf certificate.
+     */
+    must_be_ca = -1;
+
+    /* CRL path validation */
+    if (ctx->parent) {
+        allow_proxy_certs = 0;
+        purpose = X509_PURPOSE_CRL_SIGN;
+    } else {
+        allow_proxy_certs =
+            ! !(ctx->param->flags & X509_V_FLAG_ALLOW_PROXY_CERTS);
+        purpose = ctx->param->purpose;
+    }
+
+    for (i = 0; i < num; i++) {
+        int ret;
+        x = sk_X509_value(ctx->chain, i);
+        if (!(ctx->param->flags & X509_V_FLAG_IGNORE_CRITICAL)
+            && (x->ex_flags & EXFLAG_CRITICAL)) {
+            if (!verify_cb_cert(ctx, x, i,
+                                X509_V_ERR_UNHANDLED_CRITICAL_EXTENSION))
+                return 0;
+        }
+        if (!allow_proxy_certs && (x->ex_flags & EXFLAG_PROXY)) {
+            if (!verify_cb_cert(ctx, x, i,
+                                X509_V_ERR_PROXY_CERTIFICATES_NOT_ALLOWED))
+                return 0;
+        }
+        ret = X509_check_ca(x);
+        switch (must_be_ca) {
+        case -1:
+            if ((ctx->param->flags & X509_V_FLAG_X509_STRICT)
+                && (ret != 1) && (ret != 0)) {
+                ret = 0;
+                ctx->error = X509_V_ERR_INVALID_CA;
+            } else
+                ret = 1;
+            break;
+        case 0:
+            if (ret != 0) {
+                ret = 0;
+                ctx->error = X509_V_ERR_INVALID_NON_CA;
+            } else
+                ret = 1;
+            break;
+        default:
+            /* X509_V_FLAG_X509_STRICT is implicit for intermediate CAs */
+            if ((ret == 0)
+                || ((i + 1 < num || ctx->param->flags & X509_V_FLAG_X509_STRICT)
+                    && (ret != 1))) {
+                ret = 0;
+                ctx->error = X509_V_ERR_INVALID_CA;
+            } else
+                ret = 1;
+            break;
+        }

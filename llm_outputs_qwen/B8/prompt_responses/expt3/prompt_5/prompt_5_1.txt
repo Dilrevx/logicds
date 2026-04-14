@@ -1,0 +1,68 @@
+Certainly! Let's address the vulnerability in the provided code snippet by incorporating the suggested repair steps. The goal is to ensure that the TLS 1.3 handshake does not proceed if neither a PSK nor a KSE is provided, thus preventing the use of a default, predictable IKM value.
+
+### Step-by-Step Repair Implementation
+
+1. **Check for PSK Negotiation:**
+   - The existing code already checks if a PSK was negotiated. We need to extend this check to include a check for the presence of a KSE.
+
+2. **Check for Key Share Extension (KSE):**
+   - We need to determine if a KSE was provided by the server. This can be done by checking if the `namedGroup` is set in the SSL structure, as the named group is a crucial part of the KSE.
+
+3. **Enforce the Sanity Check:**
+   - If neither a PSK nor a KSE is present, the handshake should fail with an appropriate error code.
+
+### Modified Code Snippet
+
+Below is the modified version of the code snippet incorporating the necessary checks:
+
+```c
+if (*extMsgType == server_hello) {
+#if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
+    PreSharedKey* psk = NULL;
+    TLSX* ext = TLSX_Find(ssl->extensions, TLSX_PRE_SHARED_KEY);
+    if (ext != NULL)
+        psk = (PreSharedKey*)ext->data;
+    while (psk != NULL && !psk->chosen)
+        psk = psk->next;
+    if (psk == NULL) {
+        ssl->options.resuming = 0;
+        ssl->arrays->psk_keySz = 0;
+        XMEMSET(ssl->arrays->psk_key, 0, MAX_PSK_KEY_LEN);
+    }
+    else {
+        if ((ret = SetupPskKey(ssl, psk, 0)) != 0)
+            return ret;
+        ssl->options.pskNegotiated = 1;
+    }
+#endif
+
+    // Check if KSE (Key Share Extension) is present
+    TLSX_KeyShareEntry* keyShareEntry = NULL;
+    TLSX* keyShareExt = TLSX_Find(ssl->extensions, TLSX_KEY_SHARE);
+    if (keyShareExt != NULL)
+        keyShareEntry = (TLSX_KeyShareEntry*)keyShareExt->data;
+
+    // Enforce sanity check: at least one of PSK or KSE must be present
+    if (!ssl->options.pskNegotiated && keyShareEntry == NULL) {
+        WOLFSSL_MSG("Neither PSK nor KSE provided by the server");
+        return EXT_MISSING; // Assuming EXT_MISSING is an appropriate error code
+    }
+
+    ssl->keys.encryptionOn = 1;
+    ssl->options.serverState = SERVER_HELLO_COMPLETE;
+}
+else {
+    ssl->options.tls1_3 = 1;
+    ssl->options.serverState = SERVER_HELLO_RETRY_REQUEST_COMPLETE;
+
+    ret = RestartHandshakeHash(ssl);
+}
+```
+
+### Explanation of Changes
+
+- **PSK Check:** The existing logic for checking the PSK remains unchanged. It verifies if a valid PSK is negotiated.
+- **KSE Check:** A new check is added to see if a KSE is present by looking for a non-null `keyShareEntry`.
+- **Sanity Check:** After both checks, a sanity check ensures that at least one of `pskNegotiated` or `keyShareEntry` is true. If neither is true, the function returns `EXT_MISSING`, which indicates that the necessary extensions are missing.
+
+This modification ensures that the TLS 1.3 handshake process fails if neither a PSK nor a KSE is provided, thus preventing the use of a default, predictable IKM value and mitigating the described vulnerability.

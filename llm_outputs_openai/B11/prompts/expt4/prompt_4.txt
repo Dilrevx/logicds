@@ -1,0 +1,87 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+OCSP verification issue when response is for a certificate with no relation to the chain in question BUT that response contains the NoCheck extension which effectively disables ALL verification of that one cert. 
+</vulnerability_description>
+Source code:
+Context code:
+<context_code>
+### wolfcrypt/src/asn.c ###
+int ParseCertRelative(DecodedCert* cert, int type, int verify, void* cm)
+{
+    int    ret = 0;
+    int    checkPathLen = 0;
+    int    decrementMaxPathLen = 0;
+    word32 confirmOID = 0;
+#if defined(WOLFSSL_RENESAS_TSIP)
+    int    idx = 0;
+#endif
+    byte*  tsip_encRsaKeyIdx;
+#ifdef WOLFSSL_CERT_REQ
+    int    len = 0;
+#endif
+
+............
+#ifdef _MSC_VER
+    /* 4996 warning to use MS extensions e.g., strcpy_s instead of XSTRNCPY */
+    #pragma warning(disable: 4996)
+#endif
+
+#define ERROR_OUT(err, eLabel) { ret = (err); goto eLabel; }
+
+#if !defined(NO_SKID) && (!defined(HAVE_FIPS) || !defined(HAVE_FIPS_VERSION))
+    #if !defined(HAVE_SELFTEST) || (defined(HAVE_SELFTEST) && \
+                                   (!defined(HAVE_SELFTEST_VERSION) || \
+                                    HAVE_SELFTEST_VERSION < 2))
+    #ifndef WOLFSSL_AES_KEY_SIZE_ENUM
+    #define WOLFSSL_AES_KEY_SIZE_ENUM
+    enum Asn_Misc {
+        AES_IV_SIZE         = 16,
+        AES_128_KEY_SIZE    = 16,
+        AES_192_KEY_SIZE    = 24,
+        AES_256_KEY_SIZE    = 32
+    };
+    #endif
+    #endif /* HAVE_SELFTEST */
+#endif
+#ifdef WOLFSSL_RENESAS_TSIP_TLS
+void tsip_inform_key_position(const word32 key_n_start,
+                const word32 key_n_len, const word32 key_e_start,
+                const word32 key_e_len);
+int tsip_tls_CertVerify(const byte *cert, word32 certSz,
+                        const byte *signature, word32 sigSz,
+                        word32 key_n_start, word32 key_n_len,
+                        word32 key_e_start, word32 key_e_len,
+                        byte *tsip_encRsaKeyIdx);
+#endif
+
+............
+
+</context_code>
+Buggy source code:
+
+<buggy_code>
+        #ifdef HAVE_OCSP
+            /* trust for the lifetime of the responder's cert*/
+            if (cert->ocspNoCheckSet && verify == VERIFY_OCSP)
+                verify = NO_VERIFY;
+        #endif
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair begins by rethinking how the code responds to the presence of a certificate’s NoCheck extension during OCSP verification. In the original implementation, if a certificate had the NoCheck extension and the verification mode was set for OCSP, the code would switch to a mode that effectively disabled verification for that certificate. This created a security hole because it allowed an OCSP response for an unrelated certificate to bypass the necessary checks solely because it included the NoCheck marker.
+
+The revised repair introduces a more nuanced decision-making process. First, it checks whether the verification context is specifically intended for an OCSP verification of a certificate. Instead of unconditionally assuming that the presence of a NoCheck extension should bypass all forms of checking, it now distinguishes between different verification scenarios. This initial check ensures that the subsequent logic only applies when the process involves verifying a certificate via OCSP.
+
+Once the condition that the verification is targeting an OCSP certificate is confirmed, the code then looks at whether the certificate carries the NoCheck extension. This extension indicates that the responder’s certificate could be trusted for the duration of its validity rather than undergoing a full chain of trust checks. However, rather than outright disabling all verification, the repair adopts a strategy that selectively alters the verification mode. If the NoCheck extension is present, the verification mode is downgraded from performing an OCSP-specific certificate verification to performing a standard certificate verification. This downgrade ensures that even though the NoCheck extension is acknowledged, it does not lead to complete trust without any further checks. In essence, the certificate will still undergo normal trust verification across the overall chain rather than being exempted entirely.
+
+On the other hand, if the NoCheck extension is absent, the process continues with the OCSP-specific verification. This way, certificates that are not marked with NoCheck are still validated with all the OCSP-related security measures intact. This clear split in paths ensures that the security posture is maintained: the NoCheck extension does not universally grant trust but only influences the level of verification performed on the certificate under certain conditions.
+
+By explicitly checking for a specific verification mode (one meant for OCSP certificate validation) before considering the NoCheck flag, the repair prevents misuse of the extension. The logic now confines the relaxed verification to the narrow context in which it is appropriate, while ensuring that all certificates remain subject to a proper chain of verification either by OCSP methods or by standard trust validation.
+
+Ultimately, the repair addresses the vulnerability by reintroducing a necessary level of oversight in the verification process. It resolves the issue where the NoCheck extension could be exploited to bypass critical verification checks for certificates not belonging to the expected chain, ensuring that every certificate is adequately scrutinized based on its context and attributes.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

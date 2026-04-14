@@ -1,0 +1,57 @@
+Below is one acceptable fix. In previous versions the code would “fall back” to a zero‐filled (predictable) buffer for deriving the key if neither a PSK extension nor a key share extension was provided. To fix this you must require that at least one of the two offer valid key material. In other words, if neither a valid PSK (including one that is “chosen”) nor a key share (KSE) extension is received, the handshake should be aborted rather than generating a session master key from a predictable IKM.
+
+One repair approach is to look up the key share extension (here assumed to be identified by CommonsConstants.TLSX_KEY_SHARE) in addition to the PSK extension. Then, if both are missing (or the PSK provided is not “chosen”), immediately return an error rather than zeroing out ssl.arrays.psk_key. For example, you might patch the code as follows:
+
+--------------------------------------------------
+/* Example patched code snippet */
+if (extMsgType[0] == CommonsConstants.server_hello) {
+
+    PreSharedKey psk = null;
+    /* Look for the PSK extension */
+    TlsExtension extPsk = TLSX.find(ssl.extensions, CommonsConstants.TLSX_PRE_SHARED_KEY);
+    if (extPsk != NULL)
+        psk = (PreSharedKey) extPsk.data;
+    /* If a PSK extension was found, see if a valid (chosen) PSK exists */
+    while (psk != NULL && !psk.chosen)
+        psk = psk.next;
+
+    /* Look for the key share extension */
+    TlsExtension extKeyShare = TLSX.find(ssl.extensions, CommonsConstants.TLSX_KEY_SHARE);
+
+    /* If neither a valid PSK nor a key share extension is present, abort handshake.
+       This prevents falling back to a default insecure IKM. */
+    if (psk == NULL && extKeyShare == NULL) {
+        /* Optionally log the error before aborting */
+        SSL_FATAL("No valid PSK or Key Share extension provided in ServerHello");
+        return SSL_FATAL_ERROR_HANDSHAKE_FAILURE;
+    }
+
+    /* If we found a valid PSK extension, use it */
+    if (psk != NULL) {
+        int ret = SetupPskKey(ssl, psk, 0);
+        if (ret != 0)
+            return ret;
+        ssl.options.pskNegotiated = true;
+    }
+    else {
+        /* Key share handling code should go here.
+           That may include extracting the server’s key share and computing
+           the shared secret using the client’s private key. */
+        ret = SetupKeyShare(ssl, extKeyShare);
+        if (ret != 0)
+            return ret;
+    }
+
+    ssl.keys.encryptionOn = true;
+    ssl.options.serverState = CommonsConstants.SERVER_HELLO_COMPLETE;
+}
+--------------------------------------------------
+
+Notes on the repair:
+
+1. The fix first attempts to retrieve both a PSK extension and the key share extension.
+2. If neither extension is present (or if the PSK extension doesn’t have a “chosen” PSK), the handshake is aborted by returning a fatal error.
+3. If a valid PSK is present, it continues as before (with SetupPskKey); otherwise, it must process key share material (here represented by a new function SetupKeyShare).
+4. In this way, the code no longer falls back to using a default and predictable buffer (such as a zero–filled array) when no secure key material is provided.
+
+This repair ensures the IKM used to derive the session master secret is always based on proper (non–predictable) key exchange material, defending against an eavesdropper’s reconstruction of session keys.

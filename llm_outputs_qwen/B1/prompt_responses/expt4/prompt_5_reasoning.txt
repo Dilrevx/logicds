@@ -1,0 +1,48 @@
+The vulnerability in the `ssl3_get_cert_verify` function pertains to the handling of Diffie-Hellman (DH) certificates during the TLS handshake process. Specifically, the issue arises because the function does not require a `CertificateVerify` message when a client presents a DH certificate. This allows an attacker to bypass the mutual authentication mechanism by sending a crafted TLS Handshake Protocol message without providing a valid signature, thus gaining unauthorized access.
+
+### Understanding the Vulnerability
+
+In a typical TLS handshake, when a server requests client authentication, the client must send its certificate along with a `CertificateVerify` message. This message contains a digital signature created using the client's private key over the handshake messages up to that point. The purpose of this signature is to prove to the server that the client possesses the private key corresponding to the public key in the certificate, thereby ensuring the authenticity of the client.
+
+However, in the buggy implementation, if the client provides a certificate that uses a DH key exchange algorithm, the server does not enforce the presence of a `CertificateVerify` message. This is problematic because DH keys are typically used for key exchange rather than signing, and thus do not inherently include a mechanism for proving possession of the private key through a signature. By omitting the check for the `CertificateVerify` message in the case of DH certificates, the server incorrectly assumes the client's identity without proper verification.
+
+### The Repair
+
+To address this vulnerability, the repair modifies the logic within the `ssl3_get_cert_verify` function to ensure that a `CertificateVerify` message is always required, regardless of the type of key used in the client's certificate. Here’s how the repair is implemented:
+
+1. **Check for `CertificateVerify` Message:**
+   The original code checks if the received message type is `SSL3_MT_CERTIFICATE_VERIFY`. If not, it proceeds under the assumption that no `CertificateVerify` is needed, especially if the peer certificate is not a signing certificate (`!(type & EVP_PKT_SIGN)`). The repair modifies this logic to ensure that a `CertificateVerify` is required even if the certificate is associated with a key exchange algorithm like DH.
+
+2. **Ensure Signature Requirement:**
+   The repair introduces a new condition to check if the certificate type includes `EVP_PKT_EXCHANGE`, which would indicate a key exchange algorithm like DH. If such a certificate is present and no `CertificateVerify` message is received, the function should fail with an appropriate alert.
+
+3. **Modified Code Segment:**
+   The relevant part of the modified code is as follows:
+
+   ```c
+   if (s->s3->tmp.message_type != SSL3_MT_CERTIFICATE_VERIFY)
+   {
+       s->s3->tmp.reuse_message=1;
+       // Ensure that a CertificateVerify message is required for DH certificates
+       if ((peer != NULL) && (type & EVP_PKT_EXCHANGE))
+       {
+           al=SSL_AD_UNEXPECTED_MESSAGE;
+           SSLerr(SSL_F_SSL3_GET_CERT_VERIFY,SSL_R_MISSING_VERIFY_MESSAGE);
+           goto f_err;
+       }
+       if ((peer != NULL) && (type & EVP_PKT_SIGN))
+       {
+           al=SSL_AD_UNEXPECTED_MESSAGE;
+           SSLerr(SSL_F_SSL3_GET_CERT_VERIFY,SSL_R_MISSING_VERIFY_MESSAGE);
+           goto f_err;
+       }
+       ret=1;
+       goto end;
+   }
+   ```
+
+   In this segment, the check for `EVP_PKT_EXCHANGE` ensures that a `CertificateVerify` message is required even for certificates that use key exchange algorithms. This prevents the server from accepting a client's certificate without a corresponding signature, thereby mitigating the vulnerability.
+
+### Conclusion
+
+By enforcing the requirement for a `CertificateVerify` message regardless of the type of key used in the client's certificate, the repair ensures that the TLS handshake remains secure and robust against attacks that exploit the omission of this critical step. This change aligns with the security principles of mutual authentication and integrity, making the server more resilient to unauthorized access attempts.

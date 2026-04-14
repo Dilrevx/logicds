@@ -1,0 +1,17 @@
+The repair makes two important changes to address potential vulnerabilities:
+
+1. Error and Length Validation after Unprotection:
+   • Immediately after calling srtp_unprotect, the code now checks if the function returned an error (i.e., err is not srtp_err_status_ok) or if the resulting length (len) is invalid (either ≤ 0 or greater than the original packet size). A packet that fails these checks could otherwise be processed further, potentially leading to undefined behavior or memory corruption.
+   • By releasing the mutex and logging the error with a clear message, the fix prevents maliciously crafted packets from being processed. This is particularly important since encryption/authentication operations must validate that the packet remains within expected bounds after decryption.
+
+2. RTP Sequence Number Verification (Replay/Restart Check):
+   • Under the PJMEDIA_SRTP_CHECK_RTP_SEQ_ON_RESTART flag, the repair adds logic to check the RTP sequence number. Specifically, it compares the newly received sequence number (converted from network to host order) with the last known sequence number stored in srtp->last_seq.
+   • If the difference between the current and last sequence number indicates an unexpected large jump (using the 0x8000 threshold), it suggests that the RTP stream’s sequence has been reset or replayed, which could be an attempt by an attacker to replay or manipulate packets. The code then logs this incident and drops the packet.
+   • This check helps prevent replay attacks where an adversary could inject old or manipulated packets into the stream, adversely affecting the call quality or security.
+
+Additional aspects of the repair include:
+   • Always releasing the mutex before returning, ensuring that no deadlock conditions occur.
+   • Updating the length parameter in the callback invocation so that the non-protected callback functions receive the correctly deprotected packet and its valid length.
+   • Maintaining and updating the last processed sequence number, which is critical for integrity in environments where sequence continuity is expected.
+
+Together, these changes ensure that any SRTP packet undergoing processing is verified for proper decryption and authentication and that anomalies in the RTP sequence numbers (which might be exploited for replay attacks) are caught early. This significantly tightens the security of the SRTP processing pipeline by preventing the use of potentially unsafe or maliciously crafted packets.

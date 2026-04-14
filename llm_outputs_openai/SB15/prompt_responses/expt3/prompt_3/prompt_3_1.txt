@@ -1,0 +1,41 @@
+Below is one example of a repaired version of the snippet. In the original code, the cases for DNS_R_PARTIALMATCH and ISC_R_NOTFOUND unconditionally set the overall result to “success” even though the received data didn’t fully validate. This “happy path” lets mirror‐zone fallback occur even when the DNSSEC validation has not completely succeeded. An attacker who is “on‐path” can take advantage of that to substitute bogus data. In the repair the code no longer “hides” a partial match or missing key by converting them into a success; instead, it returns the error so that the caller (that provides the fallback to traditional recursion) knows that the mirror zone data are not validated. (Alternatively, a complete fix might take extra measures such as ensuring the insecure data is not used even when fall back is attempted.) 
+
+The fixed code now looks like this:
+
+------------------------------------------------
+        Keynode keynode = knOut[0];
+        switch (result) {
+            case Commons.ISC_R_SUCCESS:
+                // The data validated properly.
+                Keytable.dns_keytable_detachkeynode(vctx.secroots, new Keynode[] { keynode });
+                Rdataset.dns_rdataset_settrust(vctx.keyset, Commons.dns_trust_secure);
+                Rdataset.dns_rdataset_settrust(vctx.keysigs, Commons.dns_trust_secure);
+                goodkey[0] = true;
+                break;
+
+            case Commons.DNS_R_PARTIALMATCH:
+            case Commons.ISC_R_NOTFOUND:
+                // Do not override result to success if the incoming zone/key data
+                // do not match completely. This ensures that the mirror zone data are
+                // not accepted as valid and that fallback to traditional recursion is
+                // triggered.
+                break;
+
+            default:
+                break;
+        }
+        Dst.dst_key_free(keyOut);
+        return result;
+------------------------------------------------
+
+Step by step explanation:
+
+1. In the original code, even when the response was only a partial match (or a key was not found) the result was unconditionally set to ISC_R_SUCCESS. This means that erroneous (or forged) mirror zone data might be used.
+
+2. In the repaired code the error cases are left unchanged so the caller sees a failure in mirror zone validation. That forces the higher‐level logic to fall back to traditional recursive resolution (or other safe handling), ensuring that only fully validated zone data receive the “secure” flag.
+
+3. The removal of “result = ISC_R_SUCCESS;” for the partial match / not found cases is the critical fix that prevents an attacker from substituting forged data and having it accepted.
+
+This change addresses the vulnerability described by ensuring that only correctly validated mirror zone data are trusted, while invalid or incomplete data cause a fall back rather than silent acceptance.
+
+Note: Depending on the broader code context, you might also consider adding proper logging or error handling in these cases. This example focuses on the change from overriding the result to preserving error status.

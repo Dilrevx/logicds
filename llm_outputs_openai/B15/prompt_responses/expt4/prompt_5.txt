@@ -1,0 +1,78 @@
+<repair>
+static isc_result_t
+check_dnskey_sigs(vctx_t *vctx, const dns_rdata_dnskey_t *dnskey,
+                  dns_rdata_t *rdata, bool is_ksk)
+{
+    unsigned char *active_keys, *standby_keys;
+    dns_keynode_t *keynode = NULL;
+    bool *goodkey;
+    dst_key_t *key = NULL;
+    isc_result_t result;
+
+    active_keys = (is_ksk ? vctx->ksk_algorithms : vctx->zsk_algorithms);
+    standby_keys = (is_ksk ? vctx->standby_ksk : vctx->standby_zsk);
+    goodkey = (is_ksk ? &vctx->goodksk : &vctx->goodzsk);
+
+    /*
+     * Check if the DNSKEY RRset is self-signed or signed by the SOA;
+     * update counters accordingly.
+     */
+    if (dns_dnssec_selfsigns(rdata, vctx->origin, &vctx->keyset,
+                             &vctx->keysigs, false, vctx->mctx))
+    {
+        if (active_keys[dnskey->algorithm] != 255)
+            active_keys[dnskey->algorithm]++;
+    } else if (!is_ksk &&
+               dns_dnssec_signs(rdata, vctx->origin, &vctx->soaset,
+                                &vctx->soasigs, false, vctx->mctx))
+    {
+        if (active_keys[dnskey->algorithm] != 255)
+            active_keys[dnskey->algorithm]++;
+    } else {
+        if (standby_keys[dnskey->algorithm] != 255)
+            standby_keys[dnskey->algorithm]++;
+    }
+
+    /*
+     * If no trust anchor table is configured, we fall back to simply
+     * accepting a correctly self-signed DNSKEY RRset.
+     */
+    if (vctx->secroots == NULL) {
+        *goodkey = true;
+        return (ISC_R_SUCCESS);
+    }
+
+    /*
+     * With a configured trust anchor table, we must explicitly verify that
+     * the key appears there.  If it does not, we reject the mirror zone data.
+     */
+    result = dns_dnssec_keyfromrdata(vctx->origin, rdata, vctx->mctx, &key);
+    if (result != ISC_R_SUCCESS)
+        return (result);
+
+    result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+                                      dst_key_alg(key), dst_key_id(key),
+                                      &keynode);
+    if (result == ISC_R_SUCCESS) {
+        /*
+         * The key is found in the trust anchor table.
+         * Mark the DNSKEY and its signatures as secure.
+         */
+        dns_keytable_detachkeynode(vctx->secroots, &keynode);
+        dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+        dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+        *goodkey = true;
+    } else {
+        /*
+         * The key is not present in the trust anchor table (or a lookup error
+         * occurred).  Do not allow the mirror zone to be used since it cannot
+         * be cryptographically validated against a known trust anchor.
+         */
+        *goodkey = false;
+        result = ISC_R_FAILURE;
+    }
+
+    dst_key_free(&key);
+    return (result);
+}
+</repair>

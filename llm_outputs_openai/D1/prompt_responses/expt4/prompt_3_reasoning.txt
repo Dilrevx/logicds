@@ -1,0 +1,21 @@
+The repair adds two main security measures to address the vulnerability:
+
+1. It ensures that if restarting the SRTP session fails, the code does not fallback to insecure basic RTP. Previously, after a restart failure, the code would continue processing—which might lead to insecure transmission. Now, if pjmedia_transport_srtp_start() returns an error, the code logs this and immediately returns, effectively dropping the packet rather than falling back to SRTP bypass mode. This prevents an attacker from forcing the media stream into an unprotected state.
+
+2. It explicitly forces SRTP mode by setting srtp->bypass_srtp to false. Even if the previous condition might have allowed SRTP bypass, this assignment guarantees that the media stream remains encrypted. This measure ensures that the call to srtp_unprotect() will only be executed for packets processed under SRTP, preventing any unintended switch to basic RTP.
+
+Step by step, here's how the repair works:
+
+• Upon detecting replay-related errors (srtp_err_status_replay_old or srtp_err_status_replay_fail) during packet processing, the code recognizes that the SRTP context might be in a problematic state.
+
+• The repair code stops the current SRTP session by calling pjmedia_transport_srtp_stop(). This is important because stopping SRTP clears the current state, including any roll-over counters or sequence numbers that might have been mismanaged leading to replay detection errors.
+
+• It then attempts to restart SRTP with the provided policies (tx_policy and rx_policy) using pjmedia_transport_srtp_start(). Restarting SRTP ensures that the new session starts with a clean cryptographic state, ideally resetting the parameters that initially led to the vulnerability.
+
+• After this, the code checks whether the SRTP restart was successful. If it wasn't (status != PJ_SUCCESS), the code logs an error message and, crucially, returns immediately. This prevents any further packet processing under an insecure state, so media will not be sent over basic RTP.
+
+• If the restart is successful, the code explicitly sets srtp->bypass_srtp to false. This enforces that all subsequent media packets are handled using SRTP and not bypassed to basic RTP.
+
+• Finally, the code attempts to unprotect the packet using srtp_unprotect(). This means that even if replay errors are detected again, the system continues to process the packet securely as part of the re-established SRTP session.
+
+In summary, the repair focuses on preventing the automatic fallback from SRTP to basic RTP. By ensuring a failed SRTP restart causes immediate packet drop and forcing SRTP mode upon success, the code prevents insecure media transmission, thereby mitigating the vulnerability described.

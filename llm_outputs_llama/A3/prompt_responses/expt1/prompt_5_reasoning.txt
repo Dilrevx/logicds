@@ -1,0 +1,38 @@
+The provided repair addresses a logical vulnerability in the OpenSSL code snippet. The vulnerability arises from the incorrect handling of custom ciphers passed to the EVP_EncryptInit_ex2(), EVP_DecryptInit_ex2(), and EVP_CipherInit_ex2() functions. Specifically, when a custom cipher is created using the EVP_CIPHER_meth_new() function and associated function calls, OpenSSL versions 3.0.0 to 3.0.5 incorrectly try to fetch an equivalent cipher from the available providers instead of using the custom cipher directly.
+
+The issue occurs when the NID (Numerical ID) passed to EVP_CIPHER_meth_new() is set to NID_undef. In this case, the OpenSSL encryption/decryption initialization function will match the NULL cipher as being equivalent and will fetch this from the available providers. This can lead to a situation where the plaintext is emitted as the ciphertext, effectively rendering the encryption useless.
+
+The repair addresses this vulnerability by adding a check to ensure that the cipher is not NULL and its NID is not set to NID_undef. If either of these conditions is true, an error is raised, and the function returns 0.
+
+Here's a step-by-step breakdown of the repair:
+
+1.  The first part of the repair checks if the cipher is NULL or its NID is set to NID_undef. This is done to prevent the incorrect handling of custom ciphers with an undefined NID.
+
+    ```c
+if (cipher == NULL || cipher->nid == NID_undef) {
+    ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_CIPHER);
+    return 0;
+}
+```
+
+    If the cipher is NULL or its NID is NID_undef, an error is raised with the code EVP_R_INVALID_CIPHER, and the function returns 0. This prevents the incorrect handling of custom ciphers and ensures that the function does not proceed with an invalid cipher.
+
+2.  The second part of the repair checks if an ENGINE is reserved for the job. This is done to determine if the legacy handling should be used.
+
+    ```c
+if (ctx->engine!= NULL
+#if!defined(OPENSSL_NO_ENGINE) &&!defined(FIPS_MODULE)
+    || tmpimpl!= NULL
+#endif
+    || impl!= NULL) {
+    if (ctx->cipher == ctx->fetched_cipher)
+        ctx->cipher = NULL;
+    EVP_CIPHER_free(ctx->fetched_cipher);
+    ctx->fetched_cipher = NULL;
+    goto legacy;
+}
+```
+
+    If an ENGINE is reserved for the job, the function proceeds with the legacy handling. This involves freeing the previously fetched cipher and setting it to NULL. The function then jumps to the legacy label, which is not shown in the provided code snippet.
+
+In summary, the repair addresses the logical vulnerability in the OpenSSL code snippet by adding a check to ensure that the cipher is not NULL and its NID is not set to NID_undef. If either of these conditions is true, an error is raised, and the function returns 0. Additionally, the repair checks if an ENGINE is reserved for the job and proceeds with the legacy handling if necessary.

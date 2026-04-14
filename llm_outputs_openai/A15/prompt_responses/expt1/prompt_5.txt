@@ -1,0 +1,58 @@
+<repair>
+		if (result_tlv) {
+			int status, resp_status;
+			wpa_hexdump(MSG_DEBUG, "EAP-TLV: Result TLV",
+				    result_tlv, result_tlv_len);
+			if (result_tlv_len < 2) {
+				wpa_printf(MSG_INFO, "EAP-TLV: Too short Result TLV "
+					   "(len=%lu)",
+					   (unsigned long) result_tlv_len);
+				return -1;
+			}
+			status = WPA_GET_BE16(result_tlv);
+			/*
+			 * Fix: Do not allow a success TLV to be used to bypass Phase 2
+			 * unless it is accompanied by a valid Cryptobinding TLV. This
+			 * prevents an attacker from sending an EAP-TLV Success packet
+			 * to force a premature Phase 2 completion.
+			 */
+			if (status == EAP_TLV_RESULT_SUCCESS) {
+				wpa_printf(MSG_INFO, "EAP-TLV: TLV Result - Success - EAP-TLV/Phase2 Completed");
+				/*
+				 * Reject success if no valid cryptobinding is present.
+				 * Even if crypto_binding is optionally disabled (i.e., set to NO_BINDING)
+				 * a success TLV without an accompanying Cryptobinding TLV could be used
+				 * to bypass proper Phase 2 processing.
+				 */
+				if (crypto_tlv == NULL) {
+					wpa_printf(MSG_INFO, "EAP-TLV: Missing Cryptobinding TLV; "
+						   "rejecting success result to prevent authentication bypass");
+					ret->decision = DECISION_FAIL;
+					return -1;
+				}
+				if (force_failure) {
+					wpa_printf(MSG_INFO, "EAP-TLV: Earlier failure - force failed Phase 2");
+					resp_status = EAP_TLV_RESULT_FAILURE;
+					ret->decision = DECISION_FAIL;
+				} else {
+					resp_status = EAP_TLV_RESULT_SUCCESS;
+					ret->decision = DECISION_UNCOND_SUCC;
+				}
+			} else if (status == EAP_TLV_RESULT_FAILURE) {
+				wpa_printf(MSG_INFO, "EAP-TLV: TLV Result - Failure");
+				resp_status = EAP_TLV_RESULT_FAILURE;
+				ret->decision = DECISION_FAIL;
+			} else {
+				wpa_printf(MSG_INFO, "EAP-TLV: Unknown TLV Result value: %d", status);
+				ret->decision = DECISION_FAIL;
+				return -1;
+			}
+			*resp = eap_tlv_build_response(eap_get_id(req), resp_status,
+							 crypto_tlv, crypto_tlv_len);
+			if (*resp == NULL)
+				return -1;
+		} else if (force_failure) {
+			ret->decision = DECISION_FAIL;
+		}
+		return 0;
+</repair>

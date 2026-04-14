@@ -1,0 +1,71 @@
+Certainly! To implement the repair described in the `repair_description`, we need to modify the provided `buggy_code` snippet accordingly. Here's how we can do it:
+
+### Step-by-Step Implementation
+
+1. **Define the Flag**: First, we need to define the `SSL3_FLAGS_CCS_OK` flag if it hasn't been defined already. Typically, this would be done in the header file where other flags are defined, but for the sake of this example, we'll assume it's available in the scope of our function.
+
+2. **Check the Flag Before Processing CCS**: We'll add a check to see if the `SSL3_FLAGS_CCS_OK` flag is set before processing the CCS message.
+
+3. **Set/Reset the Flag Appropriately**: We'll ensure that the flag is set at the appropriate point in the handshake where a CCS message is expected and reset after processing the CCS message.
+
+### Modified Code
+
+Let's integrate these changes into the provided code snippet:
+
+```c
+// Assuming SSL3_FLAGS_CCS_OK is defined somewhere in the SSL library headers
+#define SSL3_FLAGS_CCS_OK 0x80000000  // Example definition, adjust as per actual implementation
+
+if (rr->type == SSL3_RT_CHANGE_CIPHER_SPEC)
+{
+    /* Check if it is appropriate to receive a CCS message */
+    if (!(s->s3->flags & SSL3_FLAGS_CCS_OK)) {
+        al = SSL_AD_UNEXPECTED_MESSAGE;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+        goto f_err;
+    }
+
+    /* 'Change Cipher Spec' is just a single byte, so we know
+     * exactly what the record payload has to look like */
+    if ((rr->length != 1) || (rr->off != 0) ||
+        (rr->data[0] != SSL3_MT_CCS))
+    {
+        al = SSL_AD_ILLEGAL_PARAMETER;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_BAD_CHANGE_CIPHER_SPEC);
+        goto f_err;
+    }
+
+    /* Check we have a cipher to change to */
+    if (s->s3->tmp.new_cipher == NULL)
+    {
+        al = SSL_AD_UNEXPECTED_MESSAGE;
+        SSLerr(SSL_F_SSL3_READ_BYTES, SSL_R_CCS_RECEIVED_EARLY);
+        goto f_err;
+    }
+
+    rr->length = 0;
+
+    if (s->msg_callback)
+        s->msg_callback(0, s->version, SSL3_RT_CHANGE_CIPHER_SPEC, rr->data, 1, s, s->msg_callback_arg);
+
+    s->s3->change_cipher_spec = 1;
+    if (!ssl3_do_change_cipher_spec(s))
+        goto err;
+    else
+    {
+        // Reset the flag after processing the CCS message
+        s->s3->flags &= ~SSL3_FLAGS_CCS_OK;
+        goto start;
+    }
+}
+```
+
+### Additional Considerations
+
+- **Setting the Flag**: Ensure that the `SSL3_FLAGS_CCS_OK` flag is set at the appropriate point in the handshake where a CCS message is expected. This typically happens after the server has sent its `Finished` message and before any application data is exchanged.
+  
+- **Error Handling**: The error handling remains consistent with the original code, logging an error and terminating the connection if the CCS message is received out of order.
+
+- **Testing**: Thoroughly test the modified code to ensure that it behaves correctly under both normal and attack scenarios. This includes testing the handshake flow and ensuring that the CCS message is only accepted at the correct time.
+
+By following these steps and making the necessary modifications, you can effectively mitigate the CCS Injection vulnerability in the OpenSSL library.

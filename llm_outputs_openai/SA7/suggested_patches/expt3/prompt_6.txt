@@ -1,0 +1,168 @@
+package main;
+
+import commons.X509;
+import commons.X509_VERIFY_PARAM;
+import commons.X509_STORE_CTX;
+import commons.VerifyCallback;
+import commons.Helper;
+import commons.Constants;
+import java.util.List;
+import java.util.ArrayList;
+
+public class X509CertVerifier {
+    public static int X509_verify_cert(X509_STORE_CTX ctx) {
+        X509 x, xtmp, xtmp2, chain_ss = null;
+        int bad_chain = 0;
+        X509_VERIFY_PARAM param = ctx.param;
+        int depth, i, ok = 0;
+        int num, j, retry;
+        VerifyCallback cb = ctx.verify_cb;
+        List<X509> sktmp = null;
+        if (ctx.cert == null) {
+            Helper.raiseError("X509_R_NO_CERT_SET_FOR_US_TO_VERIFY");
+            return -1;
+        }
+        if (ctx.chain == null) {
+            ctx.chain = new ArrayList<X509>();
+            ctx.chain.add(ctx.cert);
+            ctx.last_untrusted = 1;
+        }
+        if (ctx.untrusted != null) {
+            sktmp = new ArrayList<X509>(ctx.untrusted);
+        }
+        num = ctx.chain.size();
+        x = ctx.chain.get(num - 1);
+        depth = param.depth;
+        for (;;) {
+            if (depth < num) break;
+            if (Helper.cert_self_signed(x)) break;
+            if ((param.flags & Constants.X509_V_FLAG_TRUSTED_FIRST) != 0) {
+                ok = ctx.get_issuer(x);
+                if (ok < 0) return ok;
+                if (ok > 0) {
+                    Helper.free(x);
+                    break;
+                }
+            }
+            if (ctx.untrusted != null) {
+                xtmp = Helper.find_issuer(ctx, sktmp, x);
+                if (xtmp != null) {
+                    ctx.chain.add(xtmp);
+                    ctx.last_untrusted++;
+                    x = xtmp;
+                    num++;
+                    sktmp.remove(xtmp);
+                    continue;
+                }
+            }
+            break;
+        }
+        j = num;
+
+    // Ensure variables are properly initialized.
+    int i, num = ctx.chain.size(), j = num;
+    boolean retry;
+    X509 x, chain_ss, xtmp2;
+    int ok;
+    do {
+        // Check that the chain is not empty.
+        num = ctx.chain.size();
+        if (num <= 0) {
+            // If the chain is empty then we can’t proceed.
+            return Constants.ERROR_EMPTY_CHAIN;
+        }
+        i = num;
+        x = ctx.chain.get(i - 1);
+        if (Helper.cert_self_signed(x)) {
+            if (num == 1) {
+                ok = ctx.get_issuer(x);
+                if (ok <= 0 || !Helper.equals(x, Helper.lastIssuer)) {
+                    ctx.error = Constants.X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT;
+                    ctx.current_cert = x;
+                    ctx.error_depth = i - 1;
+                    if (ok == 1) {
+                        Helper.free(Helper.lastIssuer);
+                        // Prevent use-after-free by resetting lastIssuer.
+                        Helper.lastIssuer = null;
+                    }
+                    bad_chain = 1;
+                    ok = cb.call(0, ctx);
+                    if (!Helper.booleanOk(ok))
+                        return ok;
+                } else {
+                    Helper.free(x);
+                    // Avoid using a pointer that may have been freed.
+                    x = Helper.lastIssuer;
+                    ctx.chain.set(i - 1, x);
+                    ctx.last_untrusted = 0;
+                }
+            } else {
+                // Remove the last certificate from the chain.
+                chain_ss = ctx.chain.remove(ctx.chain.size() - 1);
+                ctx.last_untrusted--;
+                num--;
+                j--; // Keep alternative chain index in sync.
+                // Verify that after removal we still have a certificate.
+                if (num <= 0) {
+                    return Constants.ERROR_EMPTY_CHAIN;
+                }
+                x = ctx.chain.get(num - 1);
+            }
+        }
+        // Build the chain by obtaining issuers until limits are reached.
+        for (;;) {
+            if (depth < num)
+                break;
+            if (Helper.cert_self_signed(x))
+                break;
+            ok = ctx.get_issuer(x);
+            if (ok < 0)
+                return ok;
+            if (ok == 0)
+                break;
+            x = Helper.lastIssuer;
+            ctx.chain.add(x);
+            num++;
+        }
+        i = Helper.check_trust(ctx);
+        if (i == Constants.X509_TRUST_REJECTED)
+            break;
+        retry = false;
+        // Only try alternative chaining if flags allow and if chain length permits.
+        if (i != Constants.X509_TRUST_TRUSTED
+                && (param.flags & Constants.X509_V_FLAG_TRUSTED_FIRST) == 0
+                && (param.flags & Constants.X509_V_FLAG_NO_ALT_CHAINS) == 0) {
+            // Ensure j is initialized based on the current chain length.
+            j = ctx.chain.size();
+            // Loop from the top of the chain (avoiding underflow).
+            while (j-- > 1) {
+                // Verify the index (j-1) is in range.
+                if ((j - 1) < 0)
+                    break;
+                List<X509> chtmp = ctx.chain;
+                xtmp2 = chtmp.get(j - 1);
+                ctx.chain = chtmp;
+                ok = ctx.get_issuer(xtmp2);
+                if (ok < 0)
+                    return ok;
+                if (ok > 0) {
+                    Helper.free(Helper.lastIssuer);
+                    Helper.lastIssuer = null;
+                    // Remove extra certificates from the chain.
+                    while (num > j) {
+                        X509 removed = ctx.chain.remove(ctx.chain.size() - 1);
+                        Helper.free(removed);
+                        num--;
+                        ctx.last_untrusted--;
+                    }
+                    retry = true;
+                    break;
+                }
+            }
+        }
+    } while (retry);
+
+
+        return ok;
+    }
+}

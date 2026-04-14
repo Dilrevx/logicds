@@ -1,0 +1,46 @@
+<repair>
+    public static int x509_verify_ctx_add_chain(X509VerifyCtx ctx, X509VerifyChain chain, String name) {
+        // Ensure the certificate chain is not empty.
+        int certCount = X509Utils.sk_X509_num(chain.certs);
+        if (certCount == 0) {
+            // There are no certificates in the chain – report an error.
+            return X509Utils.x509_verify_cert_error(ctx, null, 0,
+                    X509Constants.X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY, 0);
+        }
+
+        // Get the last and leaf certificates from the chain.
+        X509 last = X509Utils.x509_verify_chain_last(chain);
+        X509 leaf = X509Utils.x509_verify_chain_leaf(chain);
+
+        // We use depth as the index into the chain.cert_errors array.
+        // When there is at least one certificate, we subtract one to get the index to
+        // the last certificate’s error. (This matches the legacy behavior.)
+        int depth = certCount;
+        if (depth > 0)
+            depth--;
+
+        // Validate that the depth is within the bounds of the cert_errors array.
+        if (depth < 0 || depth >= chain.cert_errors.length) {
+            // If the error array is not sized as expected, report an error.
+            return X509Utils.x509_verify_cert_error(ctx, last, depth,
+                    X509Constants.X509_V_ERR_CERT_CHAIN_TOO_LONG, 0);
+        }
+
+        // Prevent overflowing the number of chains in the context.
+        if (ctx.chains_count >= ctx.max_chains)
+            return X509Utils.x509_verify_cert_error(ctx, last, depth,
+                    X509Constants.X509_V_ERR_CERT_CHAIN_TOO_LONG, 0);
+
+        // Fix the error code if we previously failed to get the issuer certificate locally.
+        if (chain.cert_errors[depth] == X509Constants.X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY)
+            chain.cert_errors[depth] = X509Constants.X509_V_OK;
+
+        // Validate the chain using legacy rules.
+        if (!X509Utils.x509_verify_ctx_validate_legacy_chain(ctx, chain, depth))
+            return 0;
+
+        // Add the chain to the context; ensure that we update the chain count.
+        ctx.chains[ctx.chains_count++] = chain;
+        return 1;
+    }
+</repair>

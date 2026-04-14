@@ -1,0 +1,69 @@
+The repair addresses a logical vulnerability in the `X509_verify_cert` function, specifically within the handling of alternate certificate chains when a certificate is not explicitly trusted. The original code had a logical flaw where it did not properly reconstruct the certificate chain using an alternate path if one was found. This could lead to incorrect validation results, potentially allowing untrusted certificates to be accepted as valid.
+
+### Detailed Explanation of the Repair
+
+#### Original Vulnerability
+In the original code, when an alternate chain is found (`ok > 0`), the function does not fully reconstruct the certificate chain using this new path. Instead, it breaks out of the loop without updating the main chain (`ctx->chain`) with the new alternate chain. As a result, the subsequent checks and validations are performed on the old, potentially incomplete or incorrect chain. This can lead to scenarios where a certificate chain that should be rejected due to lack of trust is incorrectly accepted.
+
+#### Key Changes in the Repair
+
+1. **Clearing the Existing Chain**: 
+   ```c
+   sk_X509_free(ctx->chain);
+   ctx->chain = sk_X509_dup(sktmp);
+   ```
+   When an alternate chain is found, the existing chain (`ctx->chain`) is freed and replaced with a duplicate of the untrusted certificates (`sktmp`). This ensures that the validation process starts fresh with the untrusted certificates.
+
+2. **Rebuilding the Chain**:
+   ```c
+   for (i = 0; i < j; i++) {
+       xtmp2 = sk_X509_value(sktmp, i);
+       if (!sk_X509_push(ctx->chain, xtmp2)) {
+           X509_free(xtmp);
+           X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+           return 0;
+       }
+       CRYPTO_add(&xtmp2->references, 1, CRYPTO_LOCK_X509);
+   }
+   ```
+   The code iterates over the untrusted certificates up to the point `j` (the position of the last untrusted certificate before the self-signed certificate). Each certificate is pushed onto the new chain, ensuring that all intermediate certificates are included.
+
+3. **Adding the New Trusted Certificate**:
+   ```c
+   if (!sk_X509_push(ctx->chain, xtmp)) {
+       X509_free(xtmp);
+       X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+       return 0;
+   }
+   CRYPTO_add(&xtmp->references, 1, CRYPTO_LOCK_X509);
+   ```
+   The newly found trusted certificate (`xtmp`) is added to the chain. This completes the reconstruction of the chain with the new, trusted path.
+
+4. **Updating Variables**:
+   ```c
+   num = sk_X509_num(ctx->chain);
+   x = sk_X509_value(ctx->chain, num - 1);
+   retry = 1;
+   break;
+   ```
+   After rebuilding the chain, the variables `num` and `x` are updated to reflect the new chain length and the last certificate in the chain. The `retry` flag is set to `1`, indicating that the validation process should be retried with the new chain.
+
+5. **Handling Memory**:
+   ```c
+   if (!ctx->chain) {
+       X509_free(xtmp);
+       X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+       return 0;
+   }
+   ```
+   Proper memory management is ensured by checking if the new chain allocation fails. If it does, the newly allocated certificate (`xtmp`) is freed, and an error is returned.
+
+6. **Continuing the Loop**:
+   ```c
+   if (retry)
+       continue;
+   ```
+   If an alternate chain was successfully found and reconstructed, the loop continues, allowing the validation process to proceed with the new chain.
+
+#### Conclusion
+By implementing these changes, the function now correctly handles the discovery and use of alternate certificate chains. This ensures that the certificate validation process is robust and cannot be bypassed through the exploitation of logical flaws. The repair enhances the security of the certificate verification process, preventing potential attacks that could exploit the original vulnerability.

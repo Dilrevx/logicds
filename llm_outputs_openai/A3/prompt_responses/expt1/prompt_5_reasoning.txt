@@ -1,0 +1,14 @@
+The repair begins by checking if the provided cipher’s nid is undefined (NID_undef). In a legacy custom cipher, the nid might be incorrectly set to NID_undef. If that happens, the code now logs an error (using ERR_raise) and immediately returns with an error status. This prevents further processing with an invalid cipher identifier. Previously, if NID_undef were used, ENGINE_get_cipher_engine() could have resulted in mistakenly fetching a default, provider-supplied (and insecure) cipher, such as the NULL cipher. By adding this check, we ensure only ciphers with a valid nid are allowed to continue.
+
+Next, the repair retains the legacy branching logic, but only if a valid cipher is provided. The code now places the ENGINE_get_cipher_engine() call after it has confirmed the cipher’s nid is valid. This means we won’t accidentally switch to a provider-based fallback that might offer an insecure implementation. If the cipher’s nid is valid and no specific ENGINE (impl) is passed, the function safely queries an engine reserved for the cipher.
+
+Following that, the legacy block is designed to handle any previously fetched cipher. If the context’s cipher matches a previously fetched cipher (ctx->fetched_cipher), it resets the pointer and frees the fetched cipher so there’s no leftover state. This avoids the risk of inadvertently using a mismatched or improperly reinitialized cipher context.
+
+Finally, after cleaning up, the code jumps to the "skip_to_init" label to proceed with the normal initialization path using either the legacy or provider-based method. This separation of paths ensures that the fix doesn't disrupt correct behavior when a proper cipher is provided; it only blocks the insecure scenario where a legacy cipher is misconfigured.
+
+In summary, the repair fixes the vulnerability by:
+1. Validating the cipher’s nid before any engine or cipher look-up, avoiding inadvertent use of a fallback that could result in plaintext being output as ciphertext.
+2. Protecting against an insecure fallback (the NULL cipher) by ensuring only properly configured ciphers (with a valid nid) are accepted.
+3. Cleaning up any state related to previous legacy engine handling, thereby preventing unintended behavior during cipher reinitialization.
+
+This comprehensive check ultimately makes sure that only secure, properly configured ciphers are used in the encryption/decryption process, effectively eliminating the vulnerability that could allow for a dangerous fallback conversion.

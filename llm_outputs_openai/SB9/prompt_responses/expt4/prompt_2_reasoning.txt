@@ -1,0 +1,20 @@
+The repair restructures the validation logic by centralizing the certificate-to-signature matching into a single flag (certMatch). Here’s the walkthrough:
+
+1. Immediate Reject for RSA PKCS#1.5:  
+   The repair starts by checking if the signature algorithm is RSA PKCS#1.5. Since TLS 1.3 should not use this algorithm, it immediately logs an error and returns an "invalid parameter" error code. This early exit prevents any further processing if a deprecated or insecure algorithm is used.
+
+2. Consolidating Checks using a Flag:  
+   Instead of having separate if-statements that immediately return an error upon any mismatch, the repair defines a boolean variable, certMatch. This flag will be set based on whether the certificate provided by the peer has a key that matches the signature algorithm used in the handshake. For each supported algorithm (ED25519, ED448, ECC DSA, Falcon Level 1, Falcon Level 5, and RSA PSS), the repair logs which algorithm was selected and then sets certMatch accordingly.
+
+3. Detailed Per-Algorithm Verification:  
+   - For ED25519, ED448, ECC DSA, and both Falcon algorithms, the flag certMatch is assigned the value indicating whether the corresponding key is present in the certificate (e.g., ssl.peerEd25519KeyPresent for ED25519).
+   - For RSA PSS, it not only checks a boolean flag but also ensures that the peer’s RSA key is not null, confirming both the existence and proper initialization of the RSA certificate data.
+
+4. Unified Final Check:  
+   After setting the flag for the appropriate algorithm, the code performs a single, final check. If certMatch is false, it logs an error stating that the certificate does not correspond with the signature algorithm used and returns a signature verification error. This catch-all check prevents any potential bypass that might occur from isolated if-statements. It ensures that if any mismatch or absence of certificate data is present, the handshake will fail.
+
+How It Fixes the Vulnerability:
+
+The vulnerability allowed an attacker to bypass the certificate check by sending a mismatched signature algorithm in the certificate_verify message compared to that in the certificate. By aggregating the validation into a single final check, the repair ensures that regardless of which algorithm is used, the certificate’s properties are consistently verified against the expected key for that algorithm. No matter how the conditional branches execute, if the certificate does not contain the correct key corresponding to the algorithm used, the handshake is terminated. This unified approach eliminates any loophole where individual if-statements could be manipulated or omitted, thereby closing the gap that previously allowed for a bypass of certificate verification in TLS 1.3.
+
+In summary, the repair enhances security by strictly ensuring that every signature algorithm is backed by a corresponding valid certificate key, thus mitigating the risk posed by mismatched signatures and certificates.

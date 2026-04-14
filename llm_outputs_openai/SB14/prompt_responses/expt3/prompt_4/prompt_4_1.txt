@@ -1,0 +1,33 @@
+Below is one example of how you might “patch” the problem. In the original code the detach work is handed off asynchronously when the connection’s handling thread isn’t the current one – meaning that a carefully “crafted” TCP stream (or any connection that for some reason never gets processed) can leave the underlying socket open (and in CLOSE_WAIT) indefinitely. One way to fix this is to force the socket to be shut down immediately (thereby causing the OS to finish closing it) rather than depending solely on asynchronous processing. For example, suppose that the connection’s underlying socket file descriptor is available (for example, via sock.fd); you could do something like this:
+
+-------------------------------------------------
+    if (sock.tid == NodeManager.nmTid()) {
+        // Calling the detach callback immediately
+        NodeManager.nmhandle_detach_cb(handle);
+    } else {
+        // Force an immediate shutdown of the socket
+        // (assuming sock.fd is the underlying file descriptor)
+        if (shutdown(sock.fd, SHUT_RDWR) == 0) {
+            close(sock.fd);
+        } else {
+            // Optionally log the error if shutdown fails
+        }
+        
+        // Still queue the detach event for any additional asynchronous cleanup.
+        NetiEventDetach event =
+                NodeManager.getNetiEventDetach(sock.mgr, sock);
+        event.handle = handle;
+        EventPasser.passEvent(event);
+        NodeManager.enqueueEvent(sock.mgr.workers[sock.tid], event);
+    }
+-------------------------------------------------
+
+A few notes about the change:
+
+1. The patch calls shutdown() (with SHUT_RDWR) and then close() on the socket. This forces the TCP connection out of CLOSE_WAIT even if the worker thread is busy or the event is otherwise delayed.
+
+2. We still create and enqueue the detach event so that any higher‐level or bookkeeping cleanup is done in the proper thread context—but the immediate shutdown ensures that the OS won’t leave the connection in CLOSE_WAIT indefinitely.
+
+3. In your environment the actual API may differ (for example, the socket’s file descriptor might be accessed via a different field or cleanup calls have to be coordinated) so adjust these details as needed.
+
+This repair helps mitigate the vulnerability where certain client behavior could cause a resource leak and an indefinitely lingering CLOSE_WAIT connection.

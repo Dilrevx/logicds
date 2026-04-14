@@ -1,0 +1,62 @@
+package master;
+
+import common.*;
+
+public class EapPeap {
+    public static final int EAP_TLV_RESULT_SUCCESS = 1;
+    public static final int EAP_TLV_RESULT_FAILURE = 0;
+
+    public static int WPA_GET_BE16(int x){
+        return x;
+    }
+
+
+    public static int eap_tlv_process(EapSm sm, EapPeapData data,
+                                      EapMethodRet ret, WPABuf req, boolean force_failure) {
+        int resp_status;
+        // tlvStatus is normally parsed from the request buffer.
+        int tlvStatus = WPA_GET_BE16(EAP_TLV_RESULT_SUCCESS);
+
+        /*
+         * Fix Explanation:
+         * The original logic allowed a branch in which the system could return a success decision
+         * even though a forced failure was requested or a non-success TLV status was received.
+         * To repair this logical vulnerability we:
+         *  - Always check if force_failure is true or if the TLV status is not success.
+         *  - In such a case, we set the decision to FAIL.
+         *  - Otherwise, if additional checks pass (e.g. peapPhase2Sufficient returns true),
+         *    then we can set the decision to UNCONDITIONAL SUCCESS.
+         */
+
+        // Prioritize failure conditions
+        if (force_failure || tlvStatus != EAP_TLV_RESULT_SUCCESS) {
+            resp_status = EAP_TLV_RESULT_FAILURE;
+            ret.decision = EapMethodRet.DECISION_FAIL;
+        } else if (!peapPhase2Sufficient(sm, data)) {
+            // Even if tlvStatus is success, the phase 2 check must pass.
+            resp_status = EAP_TLV_RESULT_FAILURE;
+            ret.decision = EapMethodRet.DECISION_FAIL;
+        } else {
+            // Only if all conditions are met do we mark the process as successful.
+            resp_status = EAP_TLV_RESULT_SUCCESS;
+            ret.decision = EapMethodRet.DECISION_UNCOND_SUCC;
+        }
+
+        // Additional processing of the request (if any) would go here.
+
+        return resp_status;
+    }
+
+
+    public static boolean peapPhase2Sufficient(EapSm sm, EapPeapData data) {
+        if ((data.phase2Auth == EapPeapData.ALWAYS ||
+                (data.phase2Auth == EapPeapData.FOR_INITIAL &&
+                        !sm.tlsConnectionResumed() &&
+                        !data.ssl.clientCertConf) ||
+                data.phase2EapStarted) &&
+                !data.phase2EapSuccess) {
+            return false;
+        }
+        return true;
+    }
+}

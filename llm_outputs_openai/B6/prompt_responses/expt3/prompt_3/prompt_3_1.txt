@@ -1,0 +1,47 @@
+Below is one way to fix the vulnerability. The problem is that the certificate verification compares the expected common name (CN) against every entry in the subjectAltName list—even those entries that are not DNS names (for example, IP addresses). An attacker who controls an IP address might obtain a certificate whose subjectAltName contains that IP address, and the code would mistakenly accept it as a valid match for a domain name.
+
+To repair the vulnerability, restrict the comparison to only those subjectAltName entries that are of the proper type (typically, DNS names). For example, if MBEDTLS_X509_SAN_DNS_NAME denotes the DNS name type for subjectAltName entries, then only perform the CN comparison when the alternative name’s tag equals MBEDTLS_X509_SAN_DNS_NAME.
+
+Below is the patched code:
+
+-------------------------------------------------
+    if( crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME )
+    {
+        for( cur = &crt->subject_alt_names; cur != NULL; cur = cur->next )
+        {
+            /* Only compare if the subjectAltName entry is of type DNS */
+            if( cur->tag == MBEDTLS_X509_SAN_DNS_NAME &&
+                x509_crt_check_cn( &cur->buf, cn, cn_len ) == 0 )
+            {
+                break;
+            }
+        }
+
+        if( cur == NULL )
+            *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+    }
+    else
+    {
+        for( name = &crt->subject; name != NULL; name = name->next )
+        {
+            if( MBEDTLS_OID_CMP( MBEDTLS_OID_AT_CN, &name->oid ) == 0 &&
+                x509_crt_check_cn( &name->val, cn, cn_len ) == 0 )
+            {
+                break;
+            }
+        }
+
+        if( name == NULL )
+            *flags |= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+    }
+-------------------------------------------------
+
+Step by step explanation:
+
+1. The loop that iterates over the subjectAltName entries now checks whether the SAN entry’s tag is MBEDTLS_X509_SAN_DNS_NAME. This ensures that only DNS names (and not IP addresses or other SAN types) are compared against the expected common name.
+
+2. If no DNS name in the subjectAltName list matches the expected CN, the certificate is marked with MBEDTLS_X509_BADCERT_CN_MISMATCH.
+
+3. The alternative case (when no subjectAltName is present) remains unchanged and checks the common name (CN) entry in the subject field.
+
+By applying this change, you ensure that only the correct SAN type is used for the domain name validation, thereby mitigating the vulnerability.

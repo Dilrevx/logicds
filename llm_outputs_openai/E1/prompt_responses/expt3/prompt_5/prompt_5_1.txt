@@ -1,0 +1,81 @@
+Below is one example of a patched version of the code that implements the repair steps. In this version, we add a check to reject plain NAS messages if a security context is active, introduce a new variable (current_message_header) to record the type of header encountered, and leave comments indicating where additional validation (such as sequence number checks) could be added for integrity‐protected messages. (Note that the actual check for an active security context is abstracted into a helper function is_security_context_activated(). This function must be implemented elsewhere based on your system’s design.)
+
+--------------------------------------------------
+/* Example patched code */
+
+uint8_t current_message_header = 0;
+
+if (is_security_context_activated() == false)
+{
+  // When no security context is active, we might allow plain messages
+  ; // continue; (Security context not activated)
+}
+
+// Process based on the security header type:
+switch (nas_msg.hdr.security_header_type)
+{
+  case nas_5gs_hdr::security_header_type_opts::plain_5gs_nas_message:
+    // If a plain NAS message is received after a security context is active, reject it.
+    if (is_security_context_activated())
+    {
+      logger.error("Rejecting plain NAS message after security context activation");
+      return SRSRAN_ERROR;
+    }
+    current_message_header = 0x00; // assign a header value for plain messages
+    break;
+
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected:
+    current_message_header = 0x01; // assign a header value for integrity-protected messages
+    if (integrity_check(pdu.get()) == false)
+    {
+      logger.error("Not handling NAS message with integrity check error");
+      return SRSRAN_ERROR;
+    }
+    // NOTE: Consider adding sequence number validation here to prevent replay attacks.
+    break;
+
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered:
+    current_message_header = 0x02; // assign a header value for integrity-protected and ciphered messages
+    if (integrity_check(pdu.get()) == false)
+    {
+      logger.error("Not handling NAS message with integrity check error");
+      return SRSRAN_ERROR;
+    }
+    else
+    {
+      cipher_decrypt(pdu.get());
+    }
+    // NOTE: Consider adding sequence number validation here as well.
+    break;
+
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_with_new_5G_nas_context:
+    current_message_header = 0x03; // assign a header value for messages with a new 5G NAS context
+    // NOTE: Sequence number checks for replay protection should be added here.
+    break;
+
+  case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered_with_new_5G_nas_context:
+    return SRSRAN_ERROR;
+
+  default:
+    logger.error("Not handling NAS message with unknown security header");
+    return SRSRAN_ERROR;  // it is safer to return an error here
+}
+
+--------------------------------------------------
+
+Explanation of the changes:
+
+1. Security Context Active Check for Plain NAS Messages:
+   • In the plain NAS message case, if is_security_context_activated() returns true (indicating that a security context is already active), the code logs an error and immediately returns an error code. This prevents processing unprotected plain messages in a secure session.
+
+2. Introduction of current_message_header:
+   • A new variable, current_message_header, is introduced and is set to a unique value depending on the security header type. This helps in categorizing and tracking the state of each message based on how it is processed.
+
+3. Integrity Check and Decryption Ordering:
+   • For integrity-protected or ciphered messages, the integrity_check() is performed first. If it fails, the error is logged and processing is halted. Only after a successful check for ciphered messages is the cipher_decrypt() function called.
+   • Comments are added to indicate that further enhancements (e.g., sequence number verification) are needed to defend against replay attacks.
+
+4. Default Case:
+   • If an unknown security header type is encountered, the code logs an error and returns an error code immediately to avoid unintended processing.
+
+This repair prevents the vulnerability where plain NAS messages could be accepted after a security context is activated, ensuring that only appropriately protected messages are processed.

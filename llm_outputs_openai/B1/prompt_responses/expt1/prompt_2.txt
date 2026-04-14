@@ -1,0 +1,120 @@
+<repair>
+	int ssl3_get_cert_verify(SSL *s)
+	{
+	    EVP_PKEY *pkey = NULL;
+	    unsigned char *p;
+	    int al, ok, ret = 0;
+	    long n;
+	    int type = 0;
+	    X509 *peer;
+	    const EVP_MD *md = NULL;
+	    EVP_MD_CTX mctx;
+	
+	    EVP_MD_CTX_init(&mctx);
+	
+	    n = s->method->ssl_get_message(s,
+	                                    SSL3_ST_SR_CERT_VRFY_A,
+	                                    SSL3_ST_SR_CERT_VRFY_B,
+	                                    -1,
+	                                    SSL3_RT_MAX_PLAIN_LENGTH,
+	                                    &ok);
+	
+	    if (!ok) {
+	        EVP_MD_CTX_cleanup(&mctx);
+	        return ((int)n);
+	    }
+	
+	    if (s->session->peer != NULL) {
+	        peer = s->session->peer;
+	        pkey = X509_get_pubkey(peer);
+	        if (pkey == NULL) {
+	            /* No public key in peer certificate: abort handshake */
+	            al = SSL_AD_INTERNAL_ERROR;
+	            ret = -1;
+	            goto f_err;
+	        }
+	        type = X509_certificate_type(peer, pkey);
+	    } else {
+	        peer = NULL;
+	        pkey = NULL;
+	        /* No peer certificate supplied: per spec this is an error */
+	        al = SSL_AD_HANDSHAKE_FAILURE;
+	        ret = -1;
+	        goto f_err;
+	    }
+	
+	    /* 
+	     * Bugfix: Ensure the received certificate verify message has a valid length.
+	     * Also check that the signature length does not exceed the maximum size for the key.
+	     */
+	    if (n <= 0 || n > (long)EVP_PKEY_size(pkey)) {
+	        al = SSL_AD_DECODE_ERROR;
+	        ret = -1;
+	        goto f_err;
+	    }
+	
+	    /* 
+	     * Set up the digest algorithm based on the type of certificate key.
+	     * This mapping must be kept in sync with the certificate types supported.
+	     */
+	    switch (type) {
+	        case EVP_PKT_RSA:
+	            md = EVP_md5_sha1(); /* legacy: SSLv3 uses MD5/SHA1 for RSA */
+	            break;
+	        case EVP_PKT_DSA:
+	            md = EVP_dss1();
+	            break;
+#ifndef OPENSSL_NO_EC
+	        case EVP_PKT_EC:
+	            /* For ECDSA the digest is decided by the signature algorithm extension.
+	             * In this simplified example, we assume a fixed digest.
+	             */
+	            md = EVP_sha256();
+	            break;
+#endif
+	        default:
+	            al = SSL_AD_HANDSHAKE_FAILURE;
+	            ret = -1;
+	            goto f_err;
+	    }
+	
+	    if (!EVP_VerifyInit_ex(&mctx, md, NULL)) {
+	        al = SSL_AD_INTERNAL_ERROR;
+	        ret = -1;
+	        goto f_err;
+	    }
+	
+	    /*
+	     * Feed the handshake data that was signed. In practice this is the concatenation
+	     * of all handshake messages up to (but not including) the CertificateVerify message.
+	     * Here we assume that s->s3->handshake_buffer holds that data and s->s3->handshake_buffer_len
+	     * its length.
+	     */
+	    if (!EVP_VerifyUpdate(&mctx, s->s3->handshake_buffer, s->s3->handshake_buffer_len)) {
+	        al = SSL_AD_INTERNAL_ERROR;
+	        ret = -1;
+	        goto f_err;
+	    }
+	
+	    /*
+	     * The pointer p is assumed to point to the signature (the body of the message),
+	     * and n is its length.
+	     */
+	    p = s->init_msg;
+	
+	    /* Verify the signature using the public key from the certificate */
+	    ret = EVP_VerifyFinal(&mctx, p, (unsigned int)n, pkey);
+	    if (ret <= 0) {
+	        al = SSL_AD_DECRYPT_ERROR;
+	        ret = 0; /* signature verification failed */
+	        goto f_err;
+	    }
+	    ret = 1;
+	
+	f_err:
+	    EVP_MD_CTX_cleanup(&mctx);
+	    if (pkey != NULL)
+	        EVP_PKEY_free(pkey);
+	    return ret;
+	}
+</repair>

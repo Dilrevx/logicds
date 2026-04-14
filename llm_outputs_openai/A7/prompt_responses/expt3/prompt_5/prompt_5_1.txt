@@ -1,0 +1,59 @@
+Below is one example of a patch that implements the repair described. In this version the removal loop no longer decrements the untrusted certificate counter; instead, after removing the extra certificates it recalculates the counter based on the remaining certificate chain.
+
+─────────────────────────────────────────────
+// Original code:
+if (ok > 0) {
+    /*
+     * Free up the found cert we'll add it again later
+     */
+    X509_free(xtmp);
+
+    /*
+     * Dump all the certs above this point - we've found an
+     * alternate chain
+     */
+    while (num > j) {
+        xtmp = sk_X509_pop(ctx->chain);
+        X509_free(xtmp);
+        num--;
+        ctx->last_untrusted--;    // <-- manual decrement removed in patched code
+    }
+    retry = 1;
+    break;
+}
+
+─────────────────────────────────────────────
+// Patched code:
+if (ok > 0) {
+    /*
+     * Free up the found cert we'll add it again later
+     */
+    X509_free(xtmp);
+
+    /*
+     * Dump all the certs above this point - we've found an
+     * alternate chain
+     */
+    while (num > j) {
+        xtmp = sk_X509_pop(ctx->chain);
+        X509_free(xtmp);
+        num--;
+    }
+
+    /* Reset the untrusted certificate counter to reflect the correct number
+       of certificates remaining in the chain */
+    ctx->last_untrusted = sk_X509_num(ctx->chain);
+
+    retry = 1;
+    break;
+}
+
+─────────────────────────────────────────────
+
+Step-by-step explanation of changes:
+
+1. In the loop that prunes certificates from the chain, the manual decrement of ctx->last_untrusted (i.e. "ctx->last_untrusted--") has been removed. This avoids potential misalignment between the counter and the actual number of certificates in the chain.
+
+2. Once the loop finishes, we recompute the number of untrusted certificates by calling sk_X509_num(ctx->chain) and assign this value directly to ctx->last_untrusted. This ensures the counter precisely reflects the remaining certificate chain length.
+
+By eliminating per-certificate counter adjustments and computing the new total afterwards, the patch preserves chain integrity and prevents the vulnerability whereby a valid leaf certificate might be misinterpreted as a trusted Certification Authority.

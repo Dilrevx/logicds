@@ -1,0 +1,87 @@
+<repair>
+    /* Ensure a context left lying around from last time is cleared.
+     * Remove legacy engine handling entirely to avoid switching between
+     * provider and legacy implementations.
+     */
+    if (cipher != NULL && ctx->cipher != NULL) {
+        /*
+         * If the context already contains a cipher and associated data,
+         * clean it up. Note: This cleanup path is maintained only for contexts
+         * that were not yet “upgraded” to a provider-based cipher.
+         */
+        if (ctx->cipher->cleanup != NULL && !ctx->cipher->cleanup(ctx))
+            return 0;
+        OPENSSL_clear_free(ctx->cipher_data, ctx->cipher->ctx_size);
+        ctx->cipher_data = NULL;
+    }
+
+    /* Start of non-legacy (provider based) handling */
+    if (cipher != NULL && ctx->cipher != NULL) {
+        /* Reset the context from previous use, preserving the encrypt flag and flags.
+         * This is important when reusing an EVP_CIPHER_CTX.
+         */
+        unsigned long flags = ctx->flags;
+        EVP_CIPHER_CTX_reset(ctx);
+        ctx->encrypt = enc;
+        ctx->flags = flags;
+    }
+
+    if (cipher == NULL)
+        cipher = ctx->cipher;
+
+    /*
+     * If the provided cipher is not already a provider implementation,
+     * fetch the provider version. This guarantees that we use the new API
+     * exclusively and that engines and legacy method fallbacks are not used.
+     */
+    if (cipher->prov == NULL) {
+#ifdef FIPS_MODULE
+        /* In the FIPS module only explicit provider fetches are allowed. */
+        ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+        return 0;
+#else
+        EVP_CIPHER *provciph = EVP_CIPHER_fetch(
+            NULL,
+            cipher->nid == NID_undef ? "NULL" : OBJ_nid2sn(cipher->nid),
+            "");
+        if (provciph == NULL)
+            return 0;
+        cipher = provciph;
+        EVP_CIPHER_free(ctx->fetched_cipher);
+        ctx->fetched_cipher = provciph;
+#endif
+    }
+
+    if (!ossl_assert(cipher->prov != NULL)) {
+        ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+        return 0;
+    }
+
+    /*
+     * Ensure proper reference count management. If the fetched provider
+     * cipher is not already the one in the context then increment its reference
+     * count and update our pointer.
+     */
+    if (cipher != ctx->fetched_cipher) {
+        if (!EVP_CIPHER_up_ref((EVP_CIPHER *)cipher)) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+        EVP_CIPHER_free(ctx->fetched_cipher);
+        /* It is safe to assign here as the reference counting has been properly updated */
+        ctx->fetched_cipher = (EVP_CIPHER *)cipher;
+    }
+    ctx->cipher = cipher;
+
+    /* Allocate the algorithm context if not already present */
+    if (ctx->algctx == NULL) {
+        ctx->algctx = ctx->cipher->newctx(ossl_provider_ctx(cipher->prov));
+        if (ctx->algctx == NULL) {
+            ERR_raise(ERR_LIB_EVP, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+    }
+
+    /* Provider-based initialization succeeded. */
+    return 1;
+</repair>

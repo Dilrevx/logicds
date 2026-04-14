@@ -1,0 +1,100 @@
+Below is an example of how the repair might be implemented. In this example, the original code that simply took the first returned key node is replaced with an iterative lookup over all candidate key nodes. The code uses a dedicated key‐comparison function and detaches each node after it is checked. In addition, once a key node is accepted, the corresponding DNS datasets are marked as secure and the proper cleanup is performed. (Note that function and variable names have been adapted to illustrate the repair—you may need to adjust them for your actual codebase.)
+
+────────────────────────────
+/* Repaired function to validate the provided key against the trust anchor table */
+int validate_trust_anchor(const Key *provided_key, DNS_Dataset *keyset, DNS_Dataset *keysigs, int *good_key_found) {
+    TrustAnchorNode *node = lookup_first_trust_anchor(provided_key);
+    TrustAnchorNode *next_node = NULL;
+    int status = DNSSEC_VALIDATE_FAILURE;
+    *good_key_found = 0;
+
+    /* If the lookup did not succeed (i.e. no candidate was returned), then skip processing */
+    if(node == NULL) {
+        /* When lookup fails the legacy behavior is to return success, but ensuring cleanup */
+        goto cleanup;
+    }
+
+    /* Iterate over all matching trust anchor nodes */
+    while (node != NULL) {
+        /*
+         * Detach this node from the trust anchor table immediately to 
+         * avoid inadvertent reuse or subsequent re-checking.
+         */
+        next_node = get_next_trust_anchor_node(node);
+        detach_trust_anchor_node(node);
+
+        /* Use dedicated key comparison to ensure full match */
+        if (keys_are_equal(provided_key, node->key) == 1) {
+            /*
+             * Found a matching key.
+             * Mark the associated datasets as secure.
+             */
+            mark_dataset_secure(keyset);
+            mark_dataset_secure(keysigs);
+
+            /* Flag that we have validated the key */
+            *good_key_found = 1;
+            status = DNSSEC_VALIDATE_SUCCESS;
+
+            /*
+             * Free or clean up the current node before breaking out of the loop.
+             * (This prevents leaks of any transient data or resources.)
+             */
+            free_trust_anchor_node(node);
+            break;
+        }
+
+        /* Free the non-matching node and move to the next candidate */
+        free_trust_anchor_node(node);
+        node = next_node;
+    }
+
+cleanup:
+    /* Ensure that any remaining keys or nodes that have not been processed
+       are cleaned up. This secondary cleanup ensures proper resource management.
+       (For example, if the lookup routine allocated temporary structures, free them here.) */
+    cleanup_trust_anchor_lookup();
+
+    return status;
+}
+
+/* 
+   Supporting functions used in this repair:
+   
+   lookup_first_trust_anchor(const Key *provided_key)
+     - Returns the first TrustAnchorNode that might match the provided key,
+       or NULL if none are found.
+   
+   get_next_trust_anchor_node(TrustAnchorNode *current)
+     - Returns the next candidate TrustAnchorNode in the trust anchor table.
+   
+   detach_trust_anchor_node(TrustAnchorNode *node)
+     - Detaches the node from the trust anchor table so it will not be reused.
+   
+   keys_are_equal(const Key *key1, const Key *key2)
+     - Thoroughly compares two keys and returns 1 if they fully match, 0 otherwise.
+   
+   mark_dataset_secure(DNS_Dataset *dataset)
+     - Sets an internal flag indicating that the dataset is considered secure.
+   
+   free_trust_anchor_node(TrustAnchorNode *node)
+     - Releases memory and resources associated with the node.
+   
+   cleanup_trust_anchor_lookup(void)
+     - Performs any necessary cleanup of temporary lookup resources.
+*/
+
+────────────────────────────
+
+Explanation of the Patch:
+1. Initially, the routine attempts to look up candidate key nodes with lookup_first_trust_anchor(). If no candidate is available, the function immediately jumps to cleanup (with a deliberate “safe” success indicator to avoid processing partial data).
+
+2. If candidates exist, the function enters an iterative loop. For each candidate:
+   • The candidate is first detached from the trust anchor table to avoid reusing it.
+   • The provided key is compared with the candidate’s key using keys_are_equal(), ensuring full comparison rather than a partial matching from the lookup.
+   • If matching, the DNS datasets (the keyset and its signatures) are explicitly marked as secure, a success flag is raised, and cleanup is initiated.
+   • If not matching, the current node is freed and the loop continues with the next node from get_next_trust_anchor_node().
+
+3. Before returning, cleanup_trust_anchor_lookup() is called to ensure that any temporary data or residual resources are freed.
+
+This repair guarantees that every candidate key is thoroughly checked and the trust anchor table is managed safely, mitigating the risk of an attacker replacing validated data with forged data by exploiting incomplete validation.

@@ -1,0 +1,15 @@
+The repair adds an extra check to verify that the certificate carrying the NoCheck extension is actually part of the certificate chain being validated. In the original code, if a certificate had its ocspNoCheckSet flag set and the verification mode was VERIFY_OCSP, the verification was disabled (set to NO_VERIFY) without confirming that the certificate belonged to the chain. This allowed an attacker to provide an OCSP response containing a NoCheck extension from an unrelated certificate, which could inadvertently disable crucial certificate validation.
+
+Here’s a step-by-step breakdown of the repair:
+
+1. The patched code first checks that the current verification state is VERIFY_OCSP and that the certificate in question has the ocspNoCheckSet flag. This step guards the special-case behavior only to the appropriate conditions.
+
+2. It then retrieves the certificate chain from a presumed valid X509_STORE_CTX pointer, “ctx”, via the function X509_STORE_CTX_get0_chain(ctx). The chain is the ordered list of certificates the verifier builds during the validation process.
+
+3. With the chain in hand, the repair calls the helper function is_cert_in_chain(cert, chain) to confirm whether the certificate that has the NoCheck extension is actually part of the validation chain. This function loops through the chain and compares certificates using X509_cmp. Only if a match is found does the helper function return true, ensuring that the NoCheck extension is applied only to a certificate that the chain explicitly contains.
+
+4. If the certificate is indeed found in the chain, then the verification mode is switched to NO_VERIFY for that certificate.
+
+By introducing this extra verification step, the repair ensures that the NoCheck extension cannot be exploited in a scenario where an attacker might inject an OCSP response for an unrelated certificate. In essence, it prevents the careless disabling of verification for any certificate that is not part of the validated chain. This extra check significantly reduces the risk posed by an attacker who might otherwise create a malicious OCSP response to bypass proper certificate verification.
+
+In summary, the vulnerability was fixed by binding the NoCheck behavior strictly to certificates that are actually part of the certificate chain, rather than applying it unconditionally. This change enforces a proper “context check” that restricts the potential misuse of the NoCheck extension, thereby reinforcing the integrity and trustworthiness of the OCSP validation process.

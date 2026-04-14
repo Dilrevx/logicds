@@ -1,0 +1,90 @@
+import common.*;
+
+public class SSHKeyExchange{
+    private SSHSession session;
+    private SSHCrypto crypto;
+    private SSHKex server;
+    private SSHKex client;
+
+    public SSHKeyExchange(SSHSession session) {
+        this.session = session;
+        this.crypto = session.getNextCrypto();
+        this.server = crypto.getServerKex();
+        this.client = crypto.getClientKex();
+    }
+
+    public int selectMethods() {
+        String[] clientMethods = client.getMethods();
+        String[] serverMethods = server.getMethods();
+        String extStart;
+
+
+if (session.isClient()) {
+    // Remove any client-specific insecure extensions from the key exchange methods
+    String clientKexMethods = clientMethods[SSHConstants.SSH_KEX];
+    String extMarkerClient = "," + SSHConstants.KEX_EXTENSION_CLIENT;
+    int extIndex = clientKexMethods.indexOf(extMarkerClient);
+    if (extIndex != -1) {
+        clientMethods[SSHConstants.SSH_KEX] = truncateString(clientKexMethods, extIndex);
+    }
+} else if (session.isServer()) {
+    // Remove any server-specific insecure extensions from the key exchange methods
+    // (Assuming serverMethods array is analogous to clientMethods for the server side)
+    String serverKexMethods = serverMethods[SSHConstants.SSH_KEX];
+    String extMarkerServer = "," + SSHConstants.KEX_EXTENSION_SERVER;
+    int extIndex = serverKexMethods.indexOf(extMarkerServer);
+    if (extIndex != -1) {
+        serverMethods[SSHConstants.SSH_KEX] = truncateString(serverKexMethods, extIndex);
+    }
+}
+
+
+        for (int i = 0; i < SSHConstants.SSH_KEX_METHODS; i++) {
+            crypto.setKexMethod(i, findMatching(serverMethods[i], clientMethods[i]));
+
+            if ((i == SSHConstants.SSH_MAC_C_S || i == SSHConstants.SSH_MAC_S_C) && (i - 2 >= 0)) {
+                String aeadHmac = findAeadHmac(crypto.getKexMethod(i - 2));
+                if (aeadHmac != null) {
+                    crypto.setKexMethod(i, aeadHmac);
+                }
+            }
+            if (crypto.getKexMethod(i) == null && i < SSHConstants.SSH_LANG_C_S) {
+                return SSHConstants.SSH_ERROR;
+            } else if (i >= SSHConstants.SSH_LANG_C_S && crypto.getKexMethod(i) == null) {
+                crypto.setKexMethod(i, "");
+            }
+        }
+        return SSHConstants.SSH_OK;
+    }
+
+    private String findSubstring(String source, String target) {
+        int index = source.indexOf(target);
+        return index == -1 ? null : source.substring(index);
+    }
+
+    private String truncateString(String source, String toRemove) {
+        return source.replace(toRemove, "");
+    }
+
+    private String findMatching(String serverMethod, String clientMethod) {
+        String[] serverTokens = serverMethod.split(",");
+        String[] clientTokens = clientMethod.split(",");
+
+        for (String clientToken : clientTokens) {
+            for (String serverToken : serverTokens) {
+                if (serverToken.equals(clientToken)) {
+                    return clientToken;
+                }
+            }
+        }
+        return null;
+    }
+
+    private String findAeadHmac(String method) {
+        return method != null && method.contains("AEAD") ? "HMAC" : null;
+    }
+
+    public SSHCrypto getSSHCrypto() {
+        return crypto;
+    }
+}

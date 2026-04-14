@@ -1,0 +1,44 @@
+The original code snippet in the buggy source code allows several message types to be processed even when they are received in plaintext, which lacks integrity protection. This can lead to security vulnerabilities because an attacker could potentially intercept and modify these messages, leading to unauthorized actions or information leakage.
+
+The vulnerability description specifies that certain message types—Detach Request, EMM Information, EMM Status, and Attach/Service Reject with `emm_cause` equal to 25—are particularly problematic when received in plaintext. These messages are critical for managing the state of the mobile connection and authentication processes. If they are tampered with, it could result in a malicious user being able to detach a legitimate user from the network, manipulate the network's understanding of a user's status, or reject service requests maliciously.
+
+To address this vulnerability, the repair involves modifying the existing switch-case structure to ensure that only specific messages are allowed in plaintext. The repair focuses on two main aspects:
+
+1. **Restricting Plaintext Messages**: The repair removes `LIBLTE_MME_MSG_TYPE_EMM_INFORMATION`, `LIBLTE_MME_MSG_TYPE_EMM_STATUS`, and `LIBLTE_MME_MSG_TYPE_SERVICE_REJECT` from the list of messages that can be processed in plaintext. This ensures that these critical messages must be received with integrity protection to be processed, thereby preventing their potential manipulation by attackers.
+
+2. **Handling Specific Cases**: For `LIBLTE_MME_MSG_TYPE_SERVICE_REJECT`, the repair introduces a conditional check to allow processing only if the `emm_cause` is 25. This means that while general `SERVICE_REJECT` messages cannot be processed in plaintext, a specific subtype (`emm_cause` 25) is permitted. This exception might be necessary based on the protocol specifications, where `emm_cause` 25 could represent a condition that does not require integrity protection, such as a temporary rejection due to network congestion that is less critical to secure.
+
+By implementing these changes, the repair ensures that the system adheres more closely to security best practices by requiring integrity protection for all critical messages except for the specific subtype of `SERVICE_REJECT` with `emm_cause` 25. This approach minimizes the risk of malicious manipulation while allowing for the necessary flexibility in handling different scenarios defined by the protocol.
+
+The modified code now looks like this:
+
+```cpp
+if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS) {
+    switch (msg_type) {
+        case LIBLTE_MME_MSG_TYPE_IDENTITY_REQUEST:
+        case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REQUEST:
+        case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REJECT:
+        case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+        case LIBLTE_MME_MSG_TYPE_DETACH_ACCEPT:
+        case LIBLTE_MME_MSG_TYPE_TRACKING_AREA_UPDATE_REJECT:
+        case LIBLTE_MME_MSG_TYPE_DETACH_REQUEST:
+            break;
+        case LIBLTE_MME_MSG_TYPE_EMM_INFORMATION:
+        case LIBLTE_MME_MSG_TYPE_EMM_STATUS:
+        case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT:
+            if (emm_cause == 25 && msg_type == LIBLTE_MME_MSG_TYPE_SERVICE_REJECT) {
+                break;
+            }
+            // Fall through to default for other cases
+        default:
+            logger.error(
+                    "Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X without integrity protection!",
+                    msg_type,
+                    sec_hdr_type
+            );
+            return SRSRAN_ERROR;
+    }
+}
+```
+
+This repair effectively mitigates the identified vulnerability by ensuring that only non-critical messages or specific critical messages under controlled conditions can be processed without integrity protection, thus enhancing the overall security of the system.

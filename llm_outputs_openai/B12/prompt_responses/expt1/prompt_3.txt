@@ -1,0 +1,58 @@
+<repair>
+            /* Signature data. */
+            if ((args->idx - args->begin) + args->sz > totalSz ||
+                args->sz > ENCRYPT_LEN) {
+                ERROR_OUT(BUFFER_ERROR, exit_dcv);
+            }
+
+            /* 
+             * FIX: Add a check to ensure that the certificate contains a public key
+             * that is compatible with the signature algorithm selected.
+             * Without this check an attacker might force a mismatch between the signature
+             * algorithm and the certificate key type.
+             *
+             * Note: ValidPubKeyForSigAlg() is a helper function that verifies whether
+             * the certificate's public key (contained in ssl->buffers.cert) is allowed
+             * for the negotiated signature algorithm (args->sigAlgo).  It should return a
+             * non-zero value if the key is valid and zero otherwise.
+             */
+            if (ssl->buffers.cert == NULL ||
+                !ValidPubKeyForSigAlg(ssl->buffers.cert, args->sigAlgo)) {
+                ret = SIG_ALGO_MISMATCH;
+                goto exit_dcv;
+            }
+
+            /* 
+             * Save pointer to the signature in the SSL structure so that the signature
+             * verification function can operate on it.
+             */
+            sig->data = input + args->idx;
+            sig->length = args->sz;
+
+            /* Advance the index past the signature data and update caller's index */
+            args->idx += args->sz;
+            *inOutIdx = args->idx;
+
+            /*
+             * Now perform the cryptographic verification of the signature.
+             * The Tls13VerifyCertSignature() routine should use the parsed hash algorithm,
+             * signature algorithm, the peer’s certificate public key (from ssl->buffers.cert),
+             * and the signature details (sig) to validate the CertificateVerify message.
+             */
+            ret = Tls13VerifyCertSignature(ssl, args->hashAlgo, args->sigAlgo,
+                                           ssl->buffers.cert, sig);
+            if (ret < 0)
+                goto exit_dcv;
+
+            break;
+        }
+
+        default:
+            ret = BAD_FUNC_ARG;
+            goto exit_dcv;
+    }
+
+exit_dcv:
+    WOLFSSL_LEAVE("DoTls13CertificateVerify");
+    return ret;
+</repair>

@@ -1,0 +1,14 @@
+The repair introduces a check after the call to X509_STORE_CTX.verify_cert(ctxStore) when there is no application-level certificate verification callback. In the original code, if X509_STORE_CTX.verify_cert returned a negative value (indicating an internal error like an out-of-memory condition), that negative value would be propagated. Consequently, SSL_get_error() might return SSL_ERROR_WANT_RETRY_VERIFY—a value that applications are not expecting unless they have set a custom certificate verification callback. This unexpected error code can lead to unintended behavior in applications.
+
+In the repaired version, immediately after calling X509_STORE_CTX.verify_cert(ctxStore), the code checks whether the value stored in i is less than zero. If it is, the repair converts this negative return value to 0, indicating a simple verification failure. This conversion prevents the propagation of a negative internal error (and its subsequent transformation to SSL_ERROR_WANT_RETRY_VERIFY) to the application.
+
+Breaking it down:
+1. When an application-level verification callback is provided (s.ctx.app_verify_callback is not null), the code defers the verification process to that callback. The repair leaves this code path unchanged.
+2. When there is no custom callback, the internal verification is performed via X509_STORE_CTX.verify_cert.
+3. After the internal verification call, the repair checks if i < 0. Such a negative value would normally cause the SSL connection to signal a need to retry verification (by returning SSL_ERROR_WANT_RETRY_VERIFY), which is only expected if the application has explicitly set a certificate verification callback.
+4. By converting a negative i to 0, the repair ensures that the error is treated as a generic verification failure rather than an error that might confuse the application with an unexpected state.
+5. This modification maintains the intended behavior for valid negative error-indication scenarios while avoiding the propagation of internal errors up to the application layer, thus closing the vulnerability.
+
+The rest of the function—handling the verification chain, error reporting, and memory cleanup—stays the same. The key point is that if an internal error occurs during certificate verification, rather than allowing that error to manifest as a confusing SSL_ERROR_WANT_RETRY_VERIFY, the returned value is normalized to signal a failure. This normalization prevents applications that do not use the custom certificate verification callbacks from mishandling the error, ensuring more predictable and secure SSL handshake outcomes.
+
+Overall, this change prevents the adverse impact described in the vulnerability report by ensuring that negative error codes from internal certificate verification are properly handled, making the behavior of SSL_get_error() consistent with the expectations of most applications.

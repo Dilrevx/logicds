@@ -1,0 +1,26 @@
+The repair addresses a critical vulnerability in the handling of TLS 1.3 mutual authentication within the WolfSSL library. The original code snippet was part of the `DoTls13Finished` function, which processes the Finished messages in a TLS 1.3 handshake. This function is crucial as it finalizes the handshake process, ensuring both parties have agreed on the session parameters and have verified each other's identities if mutual authentication is required.
+
+### Vulnerability Explanation
+
+In the context of TLS 1.3, mutual authentication means that both the client and the server must present valid certificates to each other. This ensures that both parties trust each other's identity before establishing a secure connection. The vulnerability described arises because the original code does not verify whether the `CertificateVerify` message, which is essential for proving the validity of the client's certificate, has been received by the server when mutual authentication is required. As a result, a malicious client could potentially skip sending this message, thereby bypassing the requirement for mutual authentication and establishing a connection without proper verification.
+
+### Repair Explanation
+
+The repair introduces a check to ensure that the `CertificateVerify` message has been received from the client if mutual authentication is required. This check is added before the `DeriveFinishedSecret` function call, which is responsible for deriving the final secrets used for encrypting and decrypting the data exchanged during the session. By inserting this check at this point in the code, we ensure that the integrity of the handshake is maintained and that no secrets are derived until the client's identity has been verified.
+
+#### Key Components of the Repair:
+
+1. **Mutual Authentication Check**: 
+   - The condition `ssl->options.side == WOLFSSL_CLIENT_END` checks if the current SSL object represents the server side of the connection. This is necessary because the server is responsible for verifying the client's certificate.
+   - `ssl->options.verifyPeer` indicates whether the server is configured to require mutual authentication. If this option is set, the server expects the client to present a valid certificate.
+   - `!ssl->options.havePeerCert` checks if the server has not yet received a valid certificate from the client. If this flag is true, it means the `CertificateVerify` message has not been received or processed successfully.
+
+2. **Error Handling**:
+   - If the above conditions are met (i.e., mutual authentication is required but the client's certificate has not been verified), the function returns `BAD_CERTIFICATE`. This error code indicates that the certificate presented by the client is invalid or missing, preventing the establishment of a secure connection.
+
+3. **Positioning of the Check**:
+   - The check is placed right after the initial buffer size validation and before the derivation of the finished secrets. This positioning ensures that the integrity of the handshake is verified early in the process, and any issues with the client's certificate are caught before sensitive operations are performed.
+
+### Conclusion
+
+By implementing this repair, the WolfSSL library now correctly enforces mutual authentication requirements in TLS 1.3 handshakes. This change prevents potential security breaches where an unauthenticated client could establish a connection with a server expecting mutual authentication, thereby maintaining the integrity and security of the communication channel. The repair ensures that the server only proceeds with the handshake and derives the necessary secrets after verifying the client's identity, aligning with the security principles of TLS 1.3.

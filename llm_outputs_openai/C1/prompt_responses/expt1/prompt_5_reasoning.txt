@@ -1,0 +1,17 @@
+The repair adds a check after calling X509_verify_cert(ctx) to ensure that if the function returns a negative value (which indicates an internal error such as an out-of-memory condition), that result is converted to a simple verification failure (i.e. 0). Here’s the walkthrough:
+
+1. Traditional Behavior:  
+In the original code, if s->ctx->app_verify_callback isn’t set, the code simply calls X509_verify_cert(ctx). When X509_verify_cert returns a negative value, it indicates an internal error rather than a simple verification failure. However, because OpenSSL’s internal logic may inadvertently propagate a negative return value (potentially causing the application to receive SSL_ERROR_WANT_RETRY_VERIFY), this can lead to unexpected and inconsistent behavior for the application.
+
+2. The Vulnerability:  
+If the negative error value is passed along, an application that isn’t aware of this special case (as most aren’t) might misinterpret the error. Specifically, functions like SSL_connect() or SSL_do_handshake() may not handle the negative value properly, leading to unexpected results, such as retrying verification when it shouldn’t be retried. This undermines the reliability and security measures expected from the certificate verification process.
+
+3. The Repair:  
+• The added conditional check “if (i < 0)” captures the scenario where X509_verify_cert returns a negative value.  
+• By setting the value to 0 when i < 0, the code standardizes the error handling – all negative internal error conditions are now treated as verification failures rather than as signals to potentially “retry” verification.  
+• This conversion mitigates the risk of the special and unexpected SSL_ERROR_WANT_RETRY_VERIFY error code being returned to the application, which would otherwise confuse the application’s error handling logic.
+
+4. Outcome and Benefits:  
+This change makes the behavior of certificate verification more predictable. It ensures that any internal error (represented by a negative value) is consistently handled as a failure, thereby preventing the propagation of error codes that the application logic isn’t designed to manage. As a result, it fortifies the library against misinterpretation of internal error signals, thereby improving the overall robustness and security of the SSL handshake process.
+
+In summary, the repair modifies the logic to treat any negative return value from X509_verify_cert as a standard failure (0) rather than allowing a negative value to indicate an internal error. This prevents unusual behavior in the SSL connection process and ensures that the error handling remains consistent and secure, aligning with expected application behavior.

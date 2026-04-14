@@ -1,0 +1,11 @@
+The repair introduces an additional check after calling X509_verify_cert() to determine if a negative value was returned. Here’s how it works step-by-step:
+
+1. The code originally checks if a custom callback (app_verify_callback) is provided by the application. If it is, that callback is used to verify the certificate. If not, the built-in function X509_verify_cert() is called. 
+
+2. The vulnerability occurs when X509_verify_cert() returns a negative value. This negative return signifies an internal error (like running out of memory) rather than a simple verification failure. However, OpenSSL’s higher-level functions (such as SSL_connect or SSL_do_handshake) may misinterpret this negative error as SSL_ERROR_WANT_RETRY_VERIFY. Since this error code is only expected when an application-set certificate verification callback is used, its unexpected propagation can lead to incorrect handling in applications that do not use that mechanism.
+
+3. To address this, the repair adds a conditional check immediately after calling X509_verify_cert(). If the return value (i) is less than 0, the code resets i to 0. This effectively treats any internal error that causes a negative return as a certificate verification failure rather than treating it as a transient error (which would be indicated by SSL_ERROR_WANT_RETRY_VERIFY).
+
+4. By converting any negative return value into a simple failure indicator (0), the patch prevents the propagation of an unexpected error code, thereby ensuring that the SSL/TLS handshake and subsequent error handling work as intended. Applications that rely on the standard flow will now see a verification failure (instead of an internal error triggered by a negative return) and can handle it appropriately.
+
+In summary, the patch mitigates the vulnerability by ensuring that internal errors detected by X509_verify_cert() (i.e., when a negative value is returned) are no longer misinterpreted as SSL_ERROR_WANT_RETRY_VERIFY. Instead, they are safely converted to a standard failure. This change maintains consistent error reporting behavior, thus preventing unexpected outcomes during the SSL handshake process, especially in applications that do not configure a custom verification callback.

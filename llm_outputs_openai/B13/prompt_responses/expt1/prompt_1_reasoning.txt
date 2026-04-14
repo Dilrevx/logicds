@@ -1,0 +1,17 @@
+The repair introduces a new check in the TSIG processing branch to ensure that the signer name extracted from the TSIG record is absolute before it gets cloned into the passed-in "signer" argument. 
+
+Originally, the function retrieved the TSIG record, converted it into a structured format, and then cloned the signer name without verifying its properties. This lack of validation could be exploited by providing a malicious relative name, leading to issues such as misinterpretation of the signer's identity or potential injection vulnerabilities in systems expecting an absolute domain name.
+
+Here’s what the repair does step-by-step:
+
+1. After calling dns_rdsataset_first() and dns_rdataset_current() to obtain the TSIG record into the rdata structure, the code converts rdata into a structured TSIG object using dns_rdata_tostruct().
+
+2. Before cloning the signer name from the TSIG record (which is now in tsig.signer) to the provided signer buffer, the repair adds a crucial check:
+   • It calls dns_name_isabsolute(&tsig.signer) to confirm that the signer name is absolute.
+   • If this check fails (i.e., the name is not absolute), the function frees the allocated TSIG structure and immediately returns DNS_R_SIGINVALID, effectively rejecting the potentially malicious input.
+
+3. If the check passes, the code safely clones the absolute signer name into the provided signer target using dns_name_clone(). This ensures that downstream operations only work with fully qualified, expected names.
+
+4. After cloning, the structure is freed, and the code continues, returning an appropriate ISC_R_SUCCESS or DNS_R_SIGINVALID if the signature verification has issues.
+
+This extra validation step fixes a vulnerability by preventing attackers from interfering with the signer identification process through manipulation of relative names. By ensuring that only absolute names are accepted, the repair reduces the attack surface for potential spoofing and ensures consistent handling of names as expected within the DNS infrastructure.

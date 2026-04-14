@@ -1,0 +1,15 @@
+The fix focuses on the handling of replay-related errors (srtp_err_status_replay_old and srtp_err_status_replay_fail) during the probation period. Originally, the code attempted to restart the SRTP session upon detecting these errors during probation. However, this approach could be exploited by an attacker sending packets that intentionally trigger these error conditions, causing repeated SRTP restarts. This is a potential denial-of-service or session desynchronization vulnerability.
+
+Here’s how the repair addresses the issue step-by-step:
+
+1. During probation—when older packets might be lingering—the code first checks if a replay-related error occurs (err equals srtp_err_status_replay_old or srtp_err_status_replay_fail) while in the probation period (srtp->probation_cnt > 0).
+
+2. Instead of attempting to restart the SRTP session (which was the vulnerability), the new repair simply drops the packet. Dropping the packet prevents further triggering of the vulnerable SRTP restart logic or repeatedly consuming resources. This step also logs the event for debugging by calling PJ_LOG with an appropriate message.
+
+3. The mutex, which was acquired earlier, is released immediately before returning. This ensures that the SRTP state is not held locked inadvertently even when the packet is discarded—maintaining proper synchronization and resource management.
+
+4. After handling the replay error and probation check, the code continues to release the lock, check if the error status is acceptable (i.e., if unprotection was successful) and then proceed with delivering the packet to the callback functions (rtp_cb or rtp_cb2) using the updated packet length. 
+
+5. Dropping replayed packets instead of restarting SRTP avoids the risk of an attacker causing repeated session restarts, thus mitigating a potential denial-of-service. By not modifying the session state (or attempting a restart that could confuse the receiver’s sequence tracking), the function ensures that only valid packets continue to be processed.
+
+In summary, the repair limits the course of action when encountering specific replay-related errors during a probation period. Instead of taking a drastic “restart” action (which could destabilize the transport by repeatedly reconciling sequence numbers), it silently drops the packet and logs the event. This approach increases the resilience of the SRTP session against attackers who might try to trick the implementation into performing costly restarts, ensuring stable and secure processing of RTP packets.

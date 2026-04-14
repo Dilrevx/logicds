@@ -1,0 +1,18 @@
+The repair addresses the vulnerability by ensuring that the client random value is generated only after a HelloVerifyRequest has been received in a DTLS session. In the original code, the condition checked whether no HelloVerifyRequest had been received—i.e., it confirmed that the count was zero. This led to a situation where the client random, which is crucial for providing entropy in the DTLS handshake, was left as a series of zero bytes. This static value undermines the cryptographic properties needed to securely negotiate a session, making the handshake vulnerable.
+
+The key change in the repair is in the condition:
+
+• Originally: The code checked if session.getInternals().getDtls().getHskHelloVerifyRequests() == 0.
+• Repaired: The condition is changed to session.getInternals().getDtls().getHskHelloVerifyRequests() != 0.
+
+Here’s the reasoning behind the change:
+
+1. In DTLS, a HelloVerifyRequest is used to prevent certain Denial-of-Service attacks and to manage the handshake by ensuring that any retry of the handshake reintroduces proper randomness. By checking that there has been at least one HelloVerifyRequest (i.e., the count is non-zero), we guarantee the client is in the right protocol stage to generate a new, randomized client random value.
+
+2. With the revised condition, the generateClientRandom(session) method is only triggered after a HelloVerifyRequest has been processed. This avoids the risky situation in which the client might inadvertently rely on a default, insecure random value (32 zero bytes).
+
+3. The repair reinforces the protocol's security. With proper randomness, any replay or prediction attacks are mitigated because the handshake now includes a truly random client component that cannot be easily guessed or reproduced by an attacker.
+
+4. This fix aligns with the DTLS protocol requirements by ensuring that the randomness is only generated when it is appropriate—specifically, after a HelloVerifyRequest confirms that the client must now commit to a new secure random value for the session. This ordering is critical, as generating the random value too early (or when the handshake state doesn't justify it) risks using a non-random value.
+
+In summary, the repair inverts the condition used to decide when to generate the client random value. This inversion is crucial because it ensures that the correct cryptographic procedure is followed, whereby the client only generates its random value when it is appropriate and safe to do so. By doing this, the handshake will use a proper random value rather than a fixed series of zeroes, thereby restoring the proper cryptographic strength and successfully mitigating the risk of attacks that could exploit a predictable client random value.

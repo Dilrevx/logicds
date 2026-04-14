@@ -1,0 +1,15 @@
+The repair primarily involves changing the behavior when both acl_list and acl_patterns are empty. In the original code, if these two fields were NULL, the function would return MOSQ_ERR_PLUGIN_DEFER. That return value effectively treated an empty or comment-only ACL file as if no ACL file were configured and allowed a default permit-all policy. This behavior is what the vulnerability description outlined as problematic. 
+
+In the fixed version, we modify the check for an empty ACL file to immediately deny access instead. Look at this key section in the code:
+
+  if(!security_opts->acl_list && !security_opts->acl_patterns){
+    return MOSQ_ERR_ACL_DENIED;
+  }
+
+Previously, the code would have returned MOSQ_ERR_PLUGIN_DEFER in such a scenario. By returning MOSQ_ERR_ACL_DENIED instead, the fix ensures that an explicitly configured but empty ACL file does not inadvertently open up access. This prevents an administrator’s explicit intention (even if it results in denying all operations) from being undermined by a fallback to permissive behavior.
+
+The remainder of the function still processes any ACLs that are defined in the ACL file or provided via patterns. It goes through the list of ACLs checking for topic matches and applies appropriate substitutions if the ACL topic contains placeholders like %c (client id) or %u (username). Thus, if rules are present, they’re handled as before.
+
+Furthermore, for pattern-based ACLs, the code still checks for dangerous characters (such as “+” or “#”) in either the client id or the username. This is a safety check to prevent bypasses using wildcard characters in these identifiers. By ensuring that both concrete ACL entries and pattern ACLs are processed properly, the function maintains correct, intended behavior in all scenarios.
+
+In summary, the repair fixes the vulnerability by correctly enforcing restrictions when an ACL file is empty. It does so by detecting when both acl_list and acl_patterns are not set and then denying any access—thus aligning with the desired behavior where an explicit but empty ACL file means no permissions are granted. This prevents the unwanted default allow policy that could otherwise be abused by someone configuring the system with an ACL file that is empty, ensuring that access control remains strict and predictable.

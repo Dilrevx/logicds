@@ -1,0 +1,35 @@
+The repair enhances security by introducing a sequence number check, managing state updates, and enforcing message validity based on the security context before processing the payload. Here’s a walkthrough of the changes:
+
+1. Sequence Number Validation:  
+   The first addition extracts an incoming sequence number from the NAS header (assumed to exist as nas_msg.hdr.sequence_number). This number is then compared to the expected sequence number maintained in the security context (security_context.expected_sequence_number). If the incoming sequence number is lower than expected, the message is rejected as it might be a replay (or an out-of-order message), preventing replay attacks where an attacker might resend an older message.
+
+2. Outer Header Unpacking:  
+   After verifying the sequence number, the code attempts to unpack the outer NAS header. If this operation fails, the function logs an error and exits immediately. This ensures that processing does not continue on a tampered or malformed message.
+
+3. State Update for Traceability:  
+   The code records the current security header type (nas_msg.hdr.security_header_type) into a variable called current_security_header. This makes it clearer in subsequent processing and debugging which security type is being handled.
+
+4. Enforcement Based on Security Header Type:  
+   A switch statement then processes the message based on its security header type:
+   
+   - For plain NAS messages (plain_5gs_nas_message), an additional check is added to verify if a security context has already been established (security_context.is_established). Plain messages are rejected if a security context is active, preventing the use of insecure messages when secure communication is expected.
+   
+   - For integrity protected messages (integrity_protected), the integrity_check function is used. If the integrity check fails, the message is rejected.
+   
+   - For messages that are both integrity protected and ciphered (integrity_protected_and_ciphered), the message first undergoes an integrity check; if it passes, it then undergoes decryption via the cipher_decrypt function. This ensures both integrity and confidentiality are maintained.
+   
+   - For messages with an unsupported combination (integrity_protected_and_ciphered_with_new_5G_nas_context), the message is decisively rejected with an error. This firm stance mitigates risks related to using an unrecognized or unsupported new context that might have vulnerabilities.
+   
+   - The case for integrity_protected_with_new_5G_nas_context is left open for additional handling if required, but the structure is in place to expand security measures.
+
+5. Security Context Update:  
+   If the message passes all checks, the expected sequence number is updated (security_context.expected_sequence_number = incoming_seq + 1). This update ensures that any subsequent message must have a sequence number that is higher than the current one, effectively preventing the replay of older, valid messages.
+
+In summary, the repair addresses the vulnerability by ensuring that:
+• The sequence number is verified to defend against replay attacks.
+• The packet header is properly validated before further processing.
+• Plain messages are not allowed after a secure context is in place.
+• Integrity and confidentiality checks are rigorously enforced, and
+• The system state is updated accordingly for traceability and ensuring the correct sequencing.
+
+Each of these steps creates multiple layers of security checks which together prevent replay events and ensure that only correctly sequenced and authenticated messages are processed.

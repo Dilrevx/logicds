@@ -1,0 +1,13 @@
+The repair adds an explicit check early in the function to ensure that any Diffie‐Hellman (DH) certificate is rejected outright for client authentication. In the original code, the function would extract the peer’s certificate and public key, then continue processing the handshake even if the CertificateVerify message was missing. However, DH certificates are intended for key agreement, not for creating signatures. This discrepancy could allow an attacker to bypass the requirement for a CertificateVerify message (which confirms possession of the private key) when a DH certificate was provided. 
+
+In the repaired code, after obtaining the certificate and extracting the public key (pkey), the function checks whether the key is of DH type by calling EVP_PKEY_id(pkey) and comparing it to EVP_PKEY_DH. If this condition is true, an error is raised using SSLerr, and the function jumps to the error-handling section via goto f_err. This means that if a DH certificate is used for client authentication, the code immediately marks it as an unexpected message, thus preventing further processing. Consequently, even if no CertificateVerify message is provided, a DH certificate will not be erroneously accepted for authentication.
+
+Additionally, this check is placed before other operations and before any potential reuse of the message. Thus, it makes sure that any certificate that isn’t signing-capable does not get considered, stopping the possibility of an attacker using crafted TLS Handshake messages to bypass the need for a valid signature (or a CertificateVerify message).
+
+By preventing the use of DH certificates in this particular context, the repair closes the vulnerability. This measure ensures that only certificates capable of producing a valid signature (i.e., those using algorithms suitable for signing like RSA, DSA, or ECDSA) can pass the client authentication phase, and they must be paired with a valid CertificateVerify message. It also ensures that clients that mistakenly (or maliciously) use a DH certificate are immediately rejected.
+
+In summary, the primary fix is the introduction of:
+
+  if (pkey != NULL && EVP_PKEY_id(pkey) == EVP_PKEY_DH)
+
+which makes it impossible for a DH certificate to slip through the handshake if the CertificateVerify message is missing. This directly addresses the vulnerability by ensuring that DH certificates—unsuited for signing—cannot be used as a loophole for client authentication on TLS-enabled servers.

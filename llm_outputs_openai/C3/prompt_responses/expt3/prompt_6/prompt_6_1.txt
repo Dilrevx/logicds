@@ -1,0 +1,60 @@
+Below is an example of how the fix might look. In the original code the only check was to see if the ACL “lists” or “patterns” had been set. This patch adds an explicit check for an ACL file. That is, if an ACL file is specified (even if its content is empty or contains only comments/blank lines) the code will treat it as an explicit ACL configuration rather than defaulting to allow-all via plugin deferral.
+
+Below is an illustrative C code snippet before and after the repair:
+
+────────────────────────
+Original (buggy) code excerpt:
+
+  // Old behavior: if neither ACL lists nor patterns are provided,
+  // fallback to plugin handling which in turn permits all access.
+  if (!conf->acl_list && !conf->acl_pattern) {
+      /* No ACL settings were provided.
+         FALLBACK: allow all access via deferred ACL plugin. */
+      return PLUGIN_DEFER;
+  }
+  
+  // Normal ACL processing follows...
+────────────────────────
+
+Patched version after the repair:
+
+  // New behavior: ensure that the existence of an ACL file is considered.
+  //
+  // If no ACL configuration exists at all (meaning that no ACL file,
+  // no ACL list, and no ACL pattern has been specified),
+  // then fallback to plugin handling (which might be the intended default).
+  if (!conf->acl_file && !conf->acl_list && !conf->acl_pattern) {
+      return PLUGIN_DEFER;
+  }
+  
+  // At this point at least one ACL mechanism has been defined.
+  // If an ACL file is specified, attempt to load it.
+  // Note: even if the file turns out to have no effective rules (i.e. empty
+  // or only comments/white space), the fact that the administrator provided it
+  // is taken as a deliberate configuration. In that case, further checking
+  // can later enforce that access should be denied, rather than defer to a permissive fallback.
+  
+  if (conf->acl_file) {
+      // Load and parse the ACL file.
+      // The parsing function should return appropriate status:
+      //   - If any valid rules are found, use them.
+      //   - If the file is empty (or only has comments/blanks), then interpret
+      //     as “deny all” (or otherwise handle as per secure policy).
+      result = load_acl_file(conf->acl_file);
+      if (result == ACL_EMPTY) {
+          /* ACL file was provided intentionally, but no active rules were found.
+             Deny all access as a secure default. */
+          deny_all_access();
+          return ACCESS_DENIED;
+      }
+  }
+  
+  // ... continue processing based on ACL lists or patterns if present.
+────────────────────────
+
+Explanation of the Fix:
+1. The condition now explicitly checks if an ACL file was provided (conf->acl_file). In the original code, if only an ACL file was provided (with empty content) the condition would fall through to the “plugin defer” path, which defaults to an allow-all policy.
+2. With the ACL file check added, if an ACL file is specified—even if its content is empty—the code will bypass the fallback and process the ACL file, with further logic to treat empty ACL files as “deny all.”
+3. This ensures that an administrator’s explicit configuration of an ACL file is not mistakenly assumed to mean “no ACL configuration.”
+
+This repair eliminates the vulnerability by ensuring that a provided ACL file (even with no effective rules) is treated as a deliberate configuration, thereby avoiding the unintended permissive default.

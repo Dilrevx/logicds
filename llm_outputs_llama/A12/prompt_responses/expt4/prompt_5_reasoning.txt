@@ -1,0 +1,29 @@
+The provided repair addresses a vulnerability in the TLS 1.3 server implementation, where a malicious client can bypass mutual authentication by not sending the `certificate_verify` message. This vulnerability allows a client to connect to the server without presenting a certificate, even if the server requires one.
+
+The repair introduces a new check to ensure that the `certificate_verify` message has been received from the client before completing the handshake. This check is performed only on the server side, when the server requires a certificate from the client (`ssl->options.require_cert` is true).
+
+Here's a breakdown of the changes made:
+
+1.  A new variable `ssl->options.certReceived` is assumed to be introduced elsewhere in the code to track whether the `certificate_verify` message has been received from the client.
+2.  In the `DoTls13Finished` function, a new check is added to verify that the `certificate_verify` message has been received when the server requires a certificate:
+
+    ```c
+if (ssl->options.require_cert && ssl->options.side == WOLFSSL_SERVER_END) {
+    if (!ssl->options.certReceived) {
+        WOLFSSL_MSG("Certificate not received from client");
+        SendAlert(ssl, alert_fatal, bad_certificate);
+        return BAD_CERTIFICATE;
+    }
+}
+```
+
+    This check is performed after the `Finished` message has been verified, but before the handshake is considered complete. If the `certificate_verify` message has not been received, the server sends a fatal alert to the client with a `bad_certificate` error code and returns an error.
+
+The reasoning behind this repair is as follows:
+
+*   The `certificate_verify` message is a critical component of the TLS 1.3 handshake, as it allows the client to prove possession of the private key corresponding to the certificate presented earlier in the handshake.
+*   By not sending the `certificate_verify` message, a malicious client can bypass the authentication mechanism and connect to the server without presenting a valid certificate.
+*   The server should always verify that the `certificate_verify` message has been received before completing the handshake, especially when mutual authentication is required.
+*   The introduced check ensures that the server enforces this requirement and prevents malicious clients from bypassing authentication.
+
+In summary, the repair addresses a critical vulnerability in the TLS 1.3 server implementation by introducing a check to ensure that the `certificate_verify` message has been received from the client before completing the handshake. This check is essential for enforcing mutual authentication and preventing malicious clients from bypassing the authentication mechanism.

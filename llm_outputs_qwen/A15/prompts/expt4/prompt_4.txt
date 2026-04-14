@@ -1,0 +1,114 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags. Do not provide any extra text explanation.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+The implementation of PEAP in wpa_supplicant allows authentication bypass. For a successful attack, wpa_supplicant must be configured to not verify the network's TLS certificate during Phase 1 authentication, and an eap_peap_decrypt vulnerability can then be abused to skip Phase 2 authentication. The attack vector is sending an EAP-TLV Success packet instead of starting Phase 2. This allows an adversary to impersonate Enterprise Wi-Fi networks.
+</vulnerability_description>
+Source code:
+Context code:
+<context_code>
+### src/eap_peer/eap_peap.c ###
+static int eap_tlv_process(struct eap_sm *sm, struct eap_peap_data *data,
+			   struct eap_method_ret *ret,
+			   const struct wpabuf *req, struct wpabuf **resp,
+			   int force_failure)
+{
+	size_t left, tlv_len;
+	const u8 *pos;
+	const u8 *result_tlv = NULL, *crypto_tlv = NULL;
+	size_t result_tlv_len = 0, crypto_tlv_len = 0;
+	int tlv_type, mandatory;
+
+	/* Parse TLVs */
+	pos = eap_hdr_validate(EAP_VENDOR_IETF, EAP_TYPE_TLV, req, &left);
+
+............
+#define EAP_PEAP_VERSION 1
+
+
+static void eap_peap_deinit(struct eap_sm *sm, void *priv);
+
+
+struct eap_peap_data {
+	struct eap_ssl_data ssl;
+
+	int peap_version, force_peap_version, force_new_label;
+
+	const struct eap_method *phase2_method;
+	void *phase2_priv;
+	int phase2_success;
+	int phase2_eap_success;
+	int phase2_eap_started;
+
+	struct eap_method_type phase2_type;
+	struct eap_method_type *phase2_types;
+	size_t num_phase2_types;
+
+	int peap_outer_success; /* 0 = PEAP terminated on Phase 2 inner
+				 * EAP-Success
+				 * 1 = reply with tunneled EAP-Success to inner
+				 * EAP-Success and expect AS to send outer
+				 * (unencrypted) EAP-Success after this
+				 * 2 = reply with PEAP/TLS ACK to inner
+				 * EAP-Success and expect AS to send outer
+				 * (unencrypted) EAP-Success after this */
+	int resuming; /* starting a resumed session */
+	int reauth; /* reauthentication */
+	u8 *key_data;
+	u8 *session_id;
+	size_t id_len;
+
+	struct wpabuf *pending_phase2_req;
+	struct wpabuf *pending_resp;
+	enum { NO_BINDING, OPTIONAL_BINDING, REQUIRE_BINDING } crypto_binding;
+	int crypto_binding_used;
+	u8 binding_nonce[32];
+	u8 ipmk[40];
+	u8 cmk[20];
+	int soh; /* Whether IF-TNCCS-SOH (Statement of Health; Microsoft NAP)
+		  * is enabled. */
+};
+
+............
+
+</context_code>
+Buggy source code:
+
+<buggy_code>
+		if (status == EAP_TLV_RESULT_SUCCESS) {
+			wpa_printf(MSG_INFO, "EAP-TLV: TLV Result - Success "
+				   "- EAP-TLV/Phase2 Completed");
+			if (force_failure) {
+				wpa_printf(MSG_INFO, "EAP-TLV: Earlier failure"
+					   " - force failed Phase 2");
+				resp_status = EAP_TLV_RESULT_FAILURE;
+				ret->decision = DECISION_FAIL;
+			} else {
+				resp_status = EAP_TLV_RESULT_SUCCESS;
+				ret->decision = DECISION_UNCOND_SUCC;
+			}
+		} else if (status == EAP_TLV_RESULT_FAILURE) {
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+To address the vulnerability described, the repair introduces a critical check to ensure that the server's indication of successful Phase 2 authentication genuinely reflects a completed and verified Phase 2 process. Here’s a step-by-step explanation of how the repair mitigates this security flaw:
+
+1. **Initial Condition Check**: The code begins by checking if the `status` variable holds the value `EAP_TLV_RESULT_SUCCESS`. This condition signifies that the server has sent an EAP-TLV Success packet, indicating that Phase 2 authentication is complete.
+
+2. **Force Failure Handling**: If the `force_failure` flag is set to true, the code logs an informational message about forcing a failure in Phase 2. It then sets `resp_status` to `EAP_TLV_RESULT_FAILURE` and `ret->decision` to `DECISION_FAIL`. This part of the code remains unchanged from the original, ensuring that any previously flagged failures are honored.
+
+3. **Phase 2 Sufficiency Check**: After handling the `force_failure` scenario, the repair introduces a new condition using the function `peap_phase2_sufficient(sm, data)`. This function is crucial as it evaluates whether the Phase 2 authentication has indeed been completed satisfactorily according to the protocol's requirements. It checks for various conditions such as whether all necessary messages have been exchanged, certificates have been validated, and other security measures have been successfully passed.
+
+4. **Logging Inconsistencies**: If the `peap_phase2_sufficient(sm, data)` function returns false, indicating that despite the server's claim of Phase 2 success, the actual authentication process has not been sufficiently completed, the code logs an informational message. This message highlights the discrepancy between the server's claim and the actual state of authentication, providing transparency into the system's behavior.
+
+5. **Setting Response Status and Decision**: Following the logging of the inconsistency, the code sets `resp_status` to `EAP_TLV_RESULT_FAILURE` and `ret->decision` to `DECISION_FAIL`. This action ensures that the client does not accept the server's premature indication of success and instead treats it as a failure. By doing so, the client prevents the authentication process from being bypassed or compromised.
+
+6. **Normal Success Handling**: If the `peap_phase2_sufficient(sm, data)` function returns true, confirming that the Phase 2 authentication has been completed satisfactorily, the code proceeds to set `resp_status` to `EAP_TLV_RESULT_SUCCESS` and `ret->decision` to `DECISION_UNCOND_SUCC`. This allows the authentication process to proceed as intended when all security measures have been correctly followed.
+
+7. **Handling Other Statuses**: The repair code retains the original handling for other statuses, such as `EAP_TLV_RESULT_FAILURE`, ensuring that the overall structure and functionality of the authentication process remain intact.
+
+By incorporating this additional check, the repair ensures that the client only accepts a successful Phase 2 authentication when it has been genuinely completed, thereby preventing an attacker from bypassing Phase 2 by sending an EAP-TLV Success packet prematurely. This enhancement significantly strengthens the security of the PEAP implementation in wpa_supplicant against the described vulnerability.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

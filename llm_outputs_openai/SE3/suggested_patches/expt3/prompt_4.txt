@@ -1,0 +1,212 @@
+package main;
+
+import commons.*;
+
+public class Nas5g {
+    public static final int SRSRAN_SUCCESS = 0;
+    public static final int SRSRAN_ERROR = -1;
+    static Logger logger = new Logger();
+    static Pcap pcap;
+    private int current_message_header;
+
+    public int write_pdu(UniqueByteBuffer pdu) {
+        logger.info(pdu.msg, pdu.N_bytes, "DL PDU (length %d)", pdu.N_bytes);
+        Nas5gsMsg nas_msg = new Nas5gsMsg();
+        if (nas_msg.unpack_outer_hdr(pdu) != SRSRAN_SUCCESS) {
+            logger.error("Unable to unpack outer NAS header");
+            return SRSRAN_ERROR;
+        }
+        switch (nas_msg.hdr.security_header_type) {
+            case Nas5gsHdr.security_header_type_opts.plain_5gs_nas_message:
+                current_message_header = 0;
+                break;
+            case Nas5gsHdr.security_header_type_opts.integrity_protected:
+                current_message_header = 1;
+                if (!integrity_check(pdu.get())) {
+                    logger.error("Not handling NAS message with integrity check error");
+                    return SRSRAN_ERROR;
+                }
+                break;
+            case Nas5gsHdr.security_header_type_opts.integrity_protected_and_ciphered:
+                current_message_header = 2;
+                if (!integrity_check(pdu.get())) {
+                    logger.error("Not handling NAS message with integrity check error");
+                    return SRSRAN_ERROR;
+                } else {
+                    cipher_decrypt(pdu.get());
+                }
+                break;
+            case Nas5gsHdr.security_header_type_opts.integrity_protected_with_new_5G_nas_context:
+                current_message_header = 3;
+                break;
+            case Nas5gsHdr.security_header_type_opts.integrity_protected_and_ciphered_with_new_5G_nas_context:
+                current_message_header = 4;
+                return SRSRAN_ERROR;
+            default:
+                logger.error("Not handling NAS message with unkown security header");
+                return SRSRAN_ERROR;
+        }
+        if (pcap != null) {
+            pcap.write_nas(pdu.msg, pdu.N_bytes);
+        }
+        logger.info(pdu.msg, pdu.N_bytes, "Decrypted DL PDU (length %d)", pdu.N_bytes);
+        if (nas_msg.unpack(pdu) != SRSRAN_SUCCESS) {
+            logger.error("Unable to unpack complete NAS pdu");
+            return SRSRAN_ERROR;
+        }
+
+if (nas_msg == null || nas_msg.hdr == null) {
+    logger.error("Invalid NAS message: message or header is null.");
+    return;
+}
+
+switch (nas_msg.hdr.message_type) {
+    case MsgOpts.Options.registration_accept: {
+        var regAccept = nas_msg.registration_accept();
+        if (regAccept == null) {
+            logger.error("registration_accept message is missing or malformed.");
+            break;
+        }
+        handle_registration_accept(regAccept);
+        break;
+    }
+    case MsgOpts.Options.registration_reject: {
+        var regReject = nas_msg.registration_reject();
+        if (regReject == null) {
+            logger.error("registration_reject message is missing or malformed.");
+            break;
+        }
+        handle_registration_reject(regReject);
+        break;
+    }
+    case MsgOpts.Options.authentication_reject: {
+        var authReject = nas_msg.authentication_reject();
+        if (authReject == null) {
+            logger.error("authentication_reject message is missing or malformed.");
+            break;
+        }
+        handle_authentication_reject(authReject);
+        break;
+    }
+    case MsgOpts.Options.authentication_request: {
+        var authRequest = nas_msg.authentication_request();
+        if (authRequest == null) {
+            logger.error("authentication_request message is missing or malformed.");
+            break;
+        }
+        handle_authentication_request(authRequest);
+        break;
+    }
+    case MsgOpts.Options.identity_request: {
+        var idRequest = nas_msg.identity_request();
+        if (idRequest == null) {
+            logger.error("identity_request message is missing or malformed.");
+            break;
+        }
+        handle_identity_request(idRequest);
+        break;
+    }
+    case MsgOpts.Options.security_mode_command: {
+        var secModeCmd = nas_msg.security_mode_command();
+        if (secModeCmd == null) {
+            logger.error("security_mode_command message is missing or malformed.");
+            break;
+        }
+        if (pdu == null) {
+            logger.error("PDU is null for security_mode_command processing.");
+            break;
+        }
+        handle_security_mode_command(secModeCmd, pdu);
+        break;
+    }
+    case MsgOpts.Options.service_accept: {
+        var servAccept = nas_msg.service_accept();
+        if (servAccept == null) {
+            logger.error("service_accept message is missing or malformed.");
+            break;
+        }
+        handle_service_accept(servAccept);
+        break;
+    }
+    case MsgOpts.Options.service_reject: {
+        var servReject = nas_msg.service_reject();
+        if (servReject == null) {
+            logger.error("service_reject message is missing or malformed.");
+            break;
+        }
+        handle_service_reject(servReject);
+        break;
+    }
+    case MsgOpts.Options.deregistration_accept_ue_terminated: {
+        var deregAcceptUeTerminated = nas_msg.deregistration_accept_ue_terminated();
+        if (deregAcceptUeTerminated == null) {
+            logger.error("deregistration_accept_ue_terminated message is missing or malformed.");
+            break;
+        }
+        handle_deregistration_accept_ue_terminated(deregAcceptUeTerminated);
+        break;
+    }
+    case MsgOpts.Options.deregistration_request_ue_terminated: {
+        var deregRequestUeTerminated = nas_msg.deregistration_request_ue_terminated();
+        if (deregRequestUeTerminated == null) {
+            logger.error("deregistration_request_ue_terminated message is missing or malformed.");
+            break;
+        }
+        handle_deregistration_request_ue_terminated(deregRequestUeTerminated);
+        break;
+    }
+    case MsgOpts.Options.dl_nas_transport: {
+        var dlNasTransport = nas_msg.dl_nas_transport();
+        if (dlNasTransport == null) {
+            logger.error("dl_nas_transport message is missing or malformed.");
+            break;
+        }
+        handle_dl_nas_transport(dlNasTransport);
+        break;
+    }
+    case MsgOpts.Options.deregistration_accept_ue_originating: {
+        var deregAcceptUeOriginating = nas_msg.deregistration_accept_ue_originating();
+        if (deregAcceptUeOriginating == null) {
+            logger.error("deregistration_accept_ue_originating message is missing or malformed.");
+            break;
+        }
+        handle_deregistration_accept_ue_originating(deregAcceptUeOriginating);
+        break;
+    }
+    case MsgOpts.Options.configuration_update_command: {
+        var configUpdateCmd = nas_msg.configuration_update_command();
+        if (configUpdateCmd == null) {
+            logger.error("configuration_update_command message is missing or malformed.");
+            break;
+        }
+        handle_configuration_update_command(configUpdateCmd);
+        break;
+    }
+    default:
+        logger.error("Not handling NAS message type: " + nas_msg.hdr.message_type);
+        break;
+}
+
+        return SRSRAN_SUCCESS;
+    }
+
+    private boolean integrity_check(byte[] data) {
+        return true;
+    }
+
+    private void cipher_decrypt(byte[] data) {}
+
+    private void handle_registration_accept(Object o) {}
+    private void handle_registration_reject(Object o) {}
+    private void handle_authentication_reject(Object o) {}
+    private void handle_authentication_request(Object o) {}
+    private void handle_identity_request(Object o) {}
+    private void handle_security_mode_command(Object o, UniqueByteBuffer pdu) {}
+    private void handle_service_accept(Object o) {}
+    private void handle_service_reject(Object o) {}
+    private void handle_deregistration_accept_ue_terminated(Object o) {}
+    private void handle_deregistration_request_ue_terminated(Object o) {}
+    private void handle_dl_nas_transport(Object o) {}
+    private void handle_deregistration_accept_ue_originating(Object o) {}
+    private void handle_configuration_update_command(Object o) {}
+}

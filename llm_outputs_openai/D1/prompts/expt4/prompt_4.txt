@@ -1,0 +1,77 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+When processing certain packets, PJSIP may incorrectly switch from using SRTP media transport to using basic RTP upon SRTP restart, causing the media to be sent insecurely. The vulnerability impacts all PJSIP users that use SRTP.
+</vulnerability_description>
+Source code:
+Context code:
+<context_code>
+### pjmedia/src/pjmedia/transport_srtp.c ###
+static void srtp_rtp_cb(pjmedia_tp_cb_param *param)
+{
+    transport_srtp *srtp = (transport_srtp *) param->user_data;
+    void *pkt = param->pkt;
+    pj_ssize_t size = param->size;
+    int len = (int)size;
+    srtp_err_status_t err;
+    void (*cb)(void*, void*, pj_ssize_t) = NULL;
+    void (*cb2)(pjmedia_tp_cb_param*) = NULL;
+    void *cb_data = NULL;
+
+
+</context_code>
+Buggy source code:
+
+<buggy_code>
+    if (srtp->probation_cnt > 0 &&
+	(err == srtp_err_status_replay_old ||
+	 err == srtp_err_status_replay_fail))
+    {
+	/* Handle such condition that stream is updated (RTP seq is reinited
+	 * & SRTP is restarted), but some old packets are still coming
+	 * so SRTP is learning wrong RTP seq. While the newly inited RTP seq
+	 * comes, SRTP thinks the RTP seq is replayed, so srtp_unprotect()
+	 * will return err_status_replay_*. Restarting SRTP can resolve this.
+	 */
+	pjmedia_srtp_crypto tx, rx;
+	pj_status_t status;
+
+	/* Stop SRTP first, otherwise srtp_start() will maintain current
+	 * roll-over counter.
+	 */
+	pjmedia_transport_srtp_stop((pjmedia_transport*)srtp);
+
+	tx = srtp->tx_policy;
+	rx = srtp->rx_policy;
+	status = pjmedia_transport_srtp_start((pjmedia_transport*)srtp,
+					      &tx, &rx);
+	if (status != PJ_SUCCESS) {
+	    PJ_LOG(5,(srtp->pool->obj_name, "Failed to restart SRTP, err=%s",
+		      get_libsrtp_errstr(err)));
+	} else if (!srtp->bypass_srtp) {
+	    err = srtp_unprotect(srtp->srtp_rx_ctx, (pj_uint8_t*)pkt, &len);
+	}
+    }
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair addresses the vulnerability by reordering how the SRTP session’s policy parameters are saved and used during a restart. In the original code, when a replay-related error was detected and the function intended to restart SRTP to fix the issue with incorrect sequence learning, the call to stop the SRTP session was made before extracting the current transmission and reception policies. This ordering risked that stopping the SRTP session might alter or lose necessary state information, so when the restart function was called afterward, it could be provided with stale or incomplete configuration data. This mishandling could result in the restarted session not operating correctly, ultimately reverting to using basic RTP transport in certain circumstances and thus sending media insecurely.
+
+In the repair, the first step is to immediately capture the current SRTP configuration for both transmission and reception. By saving these policies to temporary variables before any changes to the session state, the code ensures that the exact parameters needed to restore a secure session are preserved. Once the critical policy information is secured, the code proceeds to stop the SRTP session. This call is necessary because if the current context is kept, the underlying SRTP library might maintain outdated internal state such as the rollover counter, which could continue to trigger replay detection errors.
+
+After the session is stopped, the code then uses the previously saved policy settings to restart the SRTP session. Calling the restart function with the cached parameters guarantees that the session is reinitialized from a known, secure state. This careful restoration is important because the replay-related error stems from misinterpreting new packets as replays during a transition phase when old packets are still being processed. The secure restart reestablishes the correct sequence numbering mechanism, preventing the incorrect calling of the unprotect function which could lead to bypassing SRTP processing.
+
+Finally, if the restart is successful and SRTP processing should be active (i.e., the bypass flag is not set), the packet is then processed using the SRTP unprotect function. This ensures that even packets arriving during the transition are handled correctly under the secure protocol. By capturing the policy data before any session termination, the repair not only prevents the vulnerability from triggering but also reinforces the proper SRTP behavior—avoiding a switch to basic RTP and thereby maintaining media security.
+
+Overall, the repair’s key steps are:
+1. Immediately capture and save the SRTP session policies.
+2. Stop the SRTP session to reset the internal state without losing configuration.
+3. Restart the SRTP session using the preserved policies to ensure a clean, correctly configured secure session.
+4. Process the packet using SRTP unprotect only if the secure context is properly reestablished.
+
+This sequence eliminates the vulnerability by keeping the SRTP session configuration intact across the restart, thus preventing any transition to an insecure RTP mode.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

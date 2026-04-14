@@ -1,0 +1,21 @@
+The repair fixes the vulnerability by addressing how alternative certificate chains are built and validated, ensuring that only properly authorized Certification Authorities (CAs) are accepted. Here’s a walkthrough of the key changes:
+
+1. Self-Signed Certificate Handling:
+ • When the chain contains a single certificate and that certificate is self-signed, the code calls get_issuer(). If the result indicates an error or that the issuer does not match the expected CA (using Helper.equals), it logs a depth-zero self-signed certificate error. This preserves the intended behavior for leaf certificates.
+ • If the self-signed certificate’s issuer is valid, the code replaces the certificate in the chain with its issuer and sets the untrusted index (ctx.last_untrusted) to 0. This avoids misinterpreting a valid CA chain.
+
+2. Certificate Removal and State Update:
+ • For chains with more than one certificate, if a self-signed certificate is encountered in a position other than the first certificate, the certificate is removed from the chain. The removed certificate is immediately freed, and the state is updated by decrementing the counters (num, j) and correctly setting ctx.last_untrusted to the new chain index. This prevents lingering invalid certificates that could later be exploited to falsely claim CA status.
+
+3. Alternative Chain Building Loop:
+ • The loop that adds issuer certificates has been kept “in place” without reassigning the chain container. As a result, the certificate chain remains consistent throughout verification. The loop breaks when the issuer is either not found or when a self-signed certificate is reached.
+ • This ensures that each addition to the chain really represents a valid issuer certificate. Memory for temporary issuers is managed carefully with each iteration, preventing misuse of stale references.
+
+4. Proper Cleanup in the Alternative Chain Loop:
+ • When exploring alternative chains, the code iterates over the chain in place (instead of reassigning the chain to a temporary variable). If a valid issuer is found in the loop, the repair uses a cleanup branch that first frees the temporary issuer memory.
+ • Then it removes any certificates beyond the valid point in the chain, freeing them and decrementing the chain size counter appropriately. Most importantly, ctx.last_untrusted is updated to reflect the current chain size (minus one), ensuring that later operations only deal with the genuine untrusted segment of the chain.
+
+5. Final Chain State Adjustment:
+ • By carefully ensuring that after any modification the ctx.last_untrusted variable and the overall chain state correctly reflect only the valid certificate entries, the code prevents attackers from injecting or keeping a spoofed, self-signed CA certificate in the chain. This repair effectively eliminates the possibility of an alternative chain “shortcut” that could allow a fabricated CA to be trusted improperly.
+
+Overall, the repair tightens the handling of the certificate chain by ensuring proper memory cleanup, accurate state tracking for untrusted certificates, and a consistent chain structure. These changes mitigate the risk of allowing a malicious certificate chain to be accepted by preventing spoofed CAs from being inadvertently trusted.

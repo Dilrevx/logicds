@@ -1,0 +1,48 @@
+<repair>
+    err = srtp_unprotect(srtp->srtp_rx_ctx, (pj_uint8_t*)pkt, &len);
+
+    /* Check the result of unprotect and validate the packet length.
+     * If decryption/authentication fails or the resulting length is invalid,
+     * drop the packet.
+     */
+    if (err != srtp_err_status_ok || len <= 0 || len > (int)size) {
+        pj_lock_release(srtp->mutex);
+        PJ_LOG(3, (THIS_FILE,
+                  "SRTP unprotect failed or produced invalid packet length (%d): %s",
+                  len, get_libsrtp_errstr(err)));
+        return;
+    }
+
+#if PJMEDIA_SRTP_CHECK_RTP_SEQ_ON_RESTART
+    {
+        /* Bugfix: ensure the RTP sequence number does not unexpectedly restart,
+         * which could be exploited by an attacker to replay old packets.
+         * We assume 'last_seq' is maintained in the srtp structure.
+         */
+        pjmedia_rtp_hdr *hdr = (pjmedia_rtp_hdr *)pkt;
+        pj_uint16_t seq = ntohs(hdr->seq);
+        if (srtp->last_seq && (pj_uint16_t)(seq - srtp->last_seq) > 0x8000) {
+            PJ_LOG(3, (THIS_FILE,
+                      "Detected RTP sequence number restart (last_seq=%u, current_seq=%u), dropping packet",
+                      srtp->last_seq, seq));
+            pj_lock_release(srtp->mutex);
+            return;
+        }
+        srtp->last_seq = seq;
+    }
+#endif
+
+    pj_lock_release(srtp->mutex);
+
+    /* Update the packet length after SRTP unprotection and invoke the right callback */
+    if (srtp->rtp_cb2) {
+        pjmedia_tp_cb_param param2 = *param;
+        param2.user_data = srtp->user_data;
+        param2.size = len;
+        srtp->rtp_cb2(&param2);
+        param->rem_switch = param2.rem_switch;
+    } else if (srtp->rtp_cb) {
+        srtp->rtp_cb(srtp->user_data, pkt, len);
+    }
+}
+</repair>

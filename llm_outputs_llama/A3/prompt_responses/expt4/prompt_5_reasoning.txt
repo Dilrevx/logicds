@@ -1,0 +1,37 @@
+The repair provided addresses the vulnerability in the OpenSSL code that incorrectly handles legacy custom ciphers passed to the EVP_EncryptInit_ex2(), EVP_DecryptInit_ex2(), and EVP_CipherInit_ex2() functions. The vulnerability occurs when an application passes NID_undef as the NID value in the call to EVP_CIPHER_meth_new(). This causes the OpenSSL encryption/decryption initialization function to match the NULL cipher as being equivalent and fetch it from the available providers, resulting in the plaintext being emitted as the ciphertext.
+
+The repair involves adding a check for NID_undef in two places in the code:
+
+1.  In the non-legacy code path, when fetching a cipher from a provider using EVP_CIPHER_fetch(), the code now checks if the cipher's NID is NID_undef. If it is, the function raises an error and returns 0.
+
+    ```c
+if (cipher->nid == NID_undef) {
+    ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_NID);
+    return 0;
+}
+```
+
+2.  In the legacy code path, when initializing the cipher context, the code now checks if the cipher's NID is NID_undef. If it is, the function raises an error and returns 0.
+
+    ```c
+if (cipher->nid == NID_undef) {
+    ERR_raise(ERR_LIB_EVP, EVP_R_INVALID_NID);
+    return 0;
+}
+```
+
+By adding these checks, the code ensures that NID_undef is not used as a valid NID, preventing the vulnerability from occurring.
+
+Additionally, the repair removes the code that previously allowed NID_undef to be used as a valid NID. Specifically, the line that fetched the "NULL" cipher when the NID was NID_undef has been removed:
+
+```c
+EVP_CIPHER *provciph =
+    EVP_CIPHER_fetch(NULL,
+                     cipher->nid == NID_undef? "NULL"
+                                              : OBJ_nid2sn(cipher->nid),
+                     "");
+```
+
+This line has been replaced with a simple call to EVP_CIPHER_fetch() using the cipher's NID, without the special case for NID_undef.
+
+Overall, the repair ensures that NID_undef is not used as a valid NID, preventing the vulnerability from occurring and ensuring that the OpenSSL encryption/decryption initialization functions behave correctly.

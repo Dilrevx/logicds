@@ -1,0 +1,66 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+Mirror zones are a BIND feature allowing recursive servers to pre-cache zone data provided by other servers. A mirror zone is similar to a zone of type secondary, except that its data is subject to DNSSEC validation before being used in answers, as if it had been looked up via traditional recursion, and when mirror zone data cannot be validated, BIND falls back to using traditional recursion instead of the mirror zone. However, an error in the validity checks for the incoming zone data can allow an on-path attacker to replace zone data that was validated with a configured trust anchor with forged data of the attacker's choosing. The mirror zone feature is most often used to serve a local copy of the root zone. If an attacker was able to insert themselves into the network path between a recursive server using a mirror zone and a root name server, this vulnerability could then be used to cause the recursive server to accept a copy of falsified root zone data.
+</vulnerability_description>
+Here is the buggy source code:
+<buggy_code>
+	result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+					  dst_key_alg(key), dst_key_id(key),
+					  &keynode);
+	switch (result) {
+	case ISC_R_SUCCESS:
+		/*
+		 * The supplied key is a trust anchor.
+		 */
+		dns_keytable_detachkeynode(vctx->secroots, &keynode);
+		dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+		dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+		*goodkey = true;
+		break;
+	case DNS_R_PARTIALMATCH:
+	case ISC_R_NOTFOUND:
+		/*
+		 * The supplied key is not present in the trust anchor table,
+		 * but other keys signing the DNSKEY RRset may be, so this is
+		 * not an error, we just do not set 'vctx->good[kz]sk'.
+		 */
+		result = ISC_R_SUCCESS;
+		break;
+	default:
+		/*
+		 * An error occurred while searching the trust anchor table,
+		 * return it to the caller.
+		 */
+		break;
+	}
+
+	/*
+	 * Clean up.
+	 */
+	dst_key_free(&key);
+
+	return (result);
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair begins by reordering the logic used to look up and search for a matching trusted key. The original code assumed that the first match was sufficient, but the repair ensures that every candidate from the trust anchor table is properly examined.
+
+Initially, a search is performed in the trust anchor table for a key matching the provided key identifier and algorithm. If no exact match is found—that is, if the search result indicates either a partial match or that no matching key exists—the repair logic sets the overall result to success and immediately jumps to cleanup. This change makes sure that if there is no corresponding trust anchor simply found, the function can exit cleanly after releasing the allocated resources, without attempting any further validation.
+
+If the search returns success, the repair then enters a loop that iterates through all potential keynodes that could correspond to the trust anchor. In each iteration, the current keynode is compared against the provided key using a secure comparison function. This loop is critical because it prevents incorrect assumptions: while the initial lookup might return a keynode, it does not guarantee that this keynode exactly corresponds to the key being validated. 
+
+Inside the loop, when an exact match is found, the code detaches that keynode from the trust anchor table to prevent further use. At this point, both the keyset and keysigs (which represent different aspects of the signature validation context) have their trust levels set to secure. This indicates that the key is fully trusted for the purposes of DNSSEC validation. Additionally, an output flag is set to signal that a good key has been found. After these steps, the function immediately exits the loop by jumping to a cleanup section.
+
+If the current keynode does not match the provided key, the function attempts to retrieve the next candidate keynode using a function that moves through the trust anchor table. Before doing so, the current keynode is detached from the table to ensure that already examined nodes are cleared out. This iterative process continues until either a match is found or all nodes have been inspected.
+
+The cleanup process comes next, regardless of whether a match was found or not. The code makes sure that if any keynode remains, it is detached properly. This is important for resource management and to avoid memory leaks or dangling pointers. Additionally, the provided key’s memory is freed if it was allocated earlier.
+
+Finally, the function returns a general success code. Importantly, throughout this process, the function ensures that only keys that have been validated through a strict comparison are accepted as trusted. This careful traversal of possible trust anchor candidates prevents attackers from exploiting any timing or partial match vulnerabilities that could otherwise allow an attacker to substitute forged data.
+
+In summary, the repair reinforces a thorough check of all candidate trusted keys from the trust anchor table. It iterates over multiple potential matches, uses a secure comparison for validation, detaches nodes appropriately, and ensures proper resource cleanup, thereby mitigating the original vulnerability in the mirror zone feature.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

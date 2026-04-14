@@ -1,0 +1,67 @@
+package master;
+
+import common.DbData;
+import common.DnsClient;
+import common.DnsResult;
+import common.DnsRdatatype;
+import common.DnsZone;
+import common.Driver;
+import common.ZoneType;
+import common.DnsView;
+import common.ZoneTableUtil;
+
+public class XfrOut {
+
+    public static DnsResult nsXfrStart(DnsClient client, DnsZone zone, DnsRdatatype reqtype) {
+        DnsResult result;
+        String mnemonic;
+        String questionName = zone.zoneName;
+        String questionClass = "IN";
+        boolean is_dlz = false;
+
+        switch (reqtype) {
+            case AXFR:
+                mnemonic = "AXFR";
+                break;
+            case IXFR:
+                mnemonic = "IXFR";
+                break;
+            default:
+                throw new IllegalArgumentException("Unsupported request type");
+        }
+
+        result = ZoneTableUtil.dnsZtFind(client.view.zonetable, questionName, 0, null, zone);
+
+
+        if (result != DnsResult.ISC_R_SUCCESS) {
+            if (!client.view.dlz_searched.isEmpty()) {
+                // Before allowing a zone transfer we must check that the client is authorized.
+                if (!client.isZoneTransferAuthorized()) {
+                    // Deny the request if the client lacks proper authorization.
+                    return DnsResult.ISC_R_REFUSED;
+                }
+                // Optionally, sanitize any user-controlled input before using it.
+                String safeQuestionName = sanitize(questionName);
+                String safePeerAddr = sanitize(client.peeraddr);
+                DbData dbData = new DbData("dlz-db");
+                result = Driver.dlzAllowZonexfr(dbData, safeQuestionName, safePeerAddr);
+                return result;
+            } else {
+                // ... (remaining logic unchanged)
+
+                return DnsResult.ISC_R_NOTFOUND;
+            }
+        } else {
+            switch (zone.zoneType) {
+                case DNS_ZONE_MASTER:
+                case DNS_ZONE_SLAVE:
+                case DNS_ZONE_MIRROR:
+                case DNS_ZONE_DLZ:
+                    break;
+                default:
+                    return DnsResult.ISC_R_NOTFOUND;
+            }
+            return DnsResult.ISC_R_SUCCESS;
+        }
+    }
+}

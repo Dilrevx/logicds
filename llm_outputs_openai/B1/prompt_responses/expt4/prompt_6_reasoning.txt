@@ -1,0 +1,15 @@
+The key change in the repair is the removal of the conditional check that allowed a client with a non-signing certificate to bypass the requirement for a CertificateVerify message. Originally, the code allowed a handshake to proceed if the certificate did not have the signing flag, even if a certificate was presented. This loophole could be exploited when clients used Diffie-Hellman (DH) certificates that, by their nature, might not set the signing flag, allowing them to authenticate without proving possession of the private key via the CertificateVerify message.
+
+In the repaired code, the logic is streamlined to enforce that whenever a client certificate is present (i.e., the “peer” variable is not NULL), a CertificateVerify message must be received. The new logic does this by checking the message type directly: if the message type isn’t SSL3_MT_CERTIFICATE_VERIFY and there is a client certificate, the code immediately flags this as an error, setting the alert level and issuing an error message via SSLerr. This ensures that no client certificate – including DH certificates – can bypass the requirement, closing the vulnerability.
+
+To break it down step by step:
+
+1. The function starts as before by reading the incoming message and extracting the client’s public key and certificate type.
+
+2. The critical modified part is that instead of conditionally checking the presence of the signing flag (EVP_PKT_SIGN) on the certificate to decide whether the missing CertificateVerify message is acceptable, the repair unconditionally treats the absence of the CertificateVerify message as an error when any certificate (peer != NULL) is provided. In the repaired code, if a client certificate exists but the message type is not SSL3_MT_CERTIFICATE_VERIFY, it sets an error (SSL_R_MISSING_VERIFY_MESSAGE) and aborts the handshake.
+
+3. This change ensures that clients using DH certificates, or any other type, cannot exploit the previous condition where the missing CertificateVerify might be inadvertently tolerated if a particular flag wasn’t set.
+
+4. Beyond this check, the rest of the function (handling signature verification depending on the algorithm and key type) remains largely unchanged. This means that once a valid CertificateVerify message is received, the code will perform the usual validations, ensuring the authenticity of the signature and, thus, that the client indeed possesses the corresponding private key.
+
+In summary, by requiring a CertificateVerify message whenever a client certificate is present, the repair eliminates the possibility of bypassing signature verification. This protects against attacks where an adversary could use a DH certificate to gain unauthorized access without proving ownership of the private key. The simpler and stricter check aligns better with the TLS protocol requirements, ultimately improving the security of the handshake process.

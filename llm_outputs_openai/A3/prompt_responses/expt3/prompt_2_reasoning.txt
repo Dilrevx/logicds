@@ -1,0 +1,21 @@
+The repair adds two specific checks to determine if the cipher in use was created with the legacy custom method. This is important because if a cipher is created via the legacy functions with an undefined identifier (NID_undef), then OpenSSL might mistakenly retrieve a NULL cipher from its providers. If this happens, encryption routines would emit the plaintext as ciphertext—a serious security flaw.
+
+Here’s what the repair does step by step:
+
+1. Existing Conditions Retained:  
+   The first part of the if statement still checks for the standard conditions: whether an engine (or an alternative implementation) is available. These conditions determine if the cipher should follow the legacy handling route by default.
+
+2. New Conditions for Legacy Custom Cipher:  
+   Two additional conditions are added:
+   - The first new condition checks if the primary cipher pointer (ctx->cipher) is not NULL and if its "origin" field indicates that it comes from the legacy custom method. If true, it clearly signifies that the cipher was created using older legacy functions.
+   - The second condition addresses the case where ctx->cipher is NULL but the fetched cipher (ctx->fetched_cipher) is non-null and marked as having originated from the legacy method. This ensures that even when the primary cipher pointer is absent, any residual legacy cipher information is detected.
+
+3. Entering Legacy Handling:  
+   When any of these conditions are true, the code enters the legacy handling branch by using "goto legacy". Before the branch is processed, the repair makes sure to clean up any possible conflicting state:
+   - If the primary cipher pointer matches the fetched cipher, it is set to NULL.
+   - The fetched cipher is then freed and set to NULL.
+
+4. Preventing Unintended Cipher Usage:  
+   By directing to the legacy branch, the code avoids calling functions like EVP_EncryptInit_ex2() that might inappropriately fetch an equivalent cipher from the providers. This is crucial because, without these additional conditions, a custom cipher with NID_undef might default to retrieving the NULL cipher from a loaded provider. The use of the NULL cipher would lead to a situation where encrypting data returns the original plaintext, inadvertently exposing sensitive data.
+
+In summary, these additional checks ensure that if the cipher (or its fetched version) was constructed using legacy methods, the cipher handling flow explicitly runs through the legacy branch. This prevents the scenario where a cipher with an undefined identifier is mistakenly replaced by the provider’s NULL cipher, thereby fixing the vulnerability where plaintext could be disclosed instead of being securely encrypted.

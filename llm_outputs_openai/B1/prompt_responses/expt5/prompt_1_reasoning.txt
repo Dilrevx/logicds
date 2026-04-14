@@ -1,0 +1,18 @@
+Below is an explanation of the repair:
+
+1. Background Issue:
+   - In the original code, when the message type did not equal SSL3_MT_CERTIFICATE_VERIFY, the code unconditionally set s->s3->tmp.reuse_message to 1. This could allow the system to reuse or replay a message from a previous handshake even when the current message isn’t valid, leading to potential replay attacks.
+   - Moreover, the condition checking whether peer isn’t NULL and type includes EVP_PKT_SIGN would only lead to an error after the reuse_message flag had already been set. This creates a window where an attacker might be able to use that incorrectly marked state.
+
+2. What the Repair Does:
+   - The repair removes the unconditional assignment “s->s3->tmp.reuse_message = 1;” from the branch where the message type is not SSL3_MT_CERTIFICATE_VERIFY.
+   - Instead, it only executes the block that checks if the peer is not NULL and if type contains EVP_PKT_SIGN. If so, it raises an error by setting the alert value (al = SSL_AD_UNEXPECTED_MESSAGE) and calling the error-reporting function (SSLerr). This prevents further processing of the message.
+   - When none of the error conditions match (or after error handling), it sets ret = 1 and goes to the end label using “goto end”, indicating that the message is being ignored or that the connection is treated as operating under some error state without reusing suspect data.
+   - By not setting the reuse_message flag in the event of a mismatched message type, the repair avoids inadvertently allowing an attack where a previously valid CertificateVerify message could be replayed.
+
+3. How the Vulnerability Is Fixed:
+   - The vulnerability stemmed from reusing a message flag (reuse_message) in situations where the message type was not what is expected. This repair ensures that reuse_message is not falsely re-enabled. 
+   - The correct integrity check is maintained: only when the message format is exactly as expected (CertificateVerify) should subsequent operations that might lead to message reuse be carried out. With this patch, unexpected messages no longer trap the system into reusing old data, thereby preventing a potential replay attack.
+   - The error-handling branch now appropriately signals the error without side effects that could lead to state reuse, making the handshake process more secure.
+
+In summary, by removing the unconditional reuse_message flag assignment in the case of an unexpected message type and strictly handling error conditions, the repair ensures that only valid, freshly verified messages are used, closing the vulnerability that could otherwise be exploited to reuse old handshake data.

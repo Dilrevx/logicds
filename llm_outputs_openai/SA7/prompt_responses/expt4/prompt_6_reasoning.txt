@@ -1,0 +1,18 @@
+The repair addresses the vulnerability by ensuring that only valid Certificate Authority (CA) certificates are used in the alternative chain resolution and that the chain’s state (including which certificates are untrusted) is updated accurately. Here’s a walkthrough:
+
+1. CA Basic Constraint Checking:  
+   In two key places (one when retrieving an issuer and one inside the loop that builds the chain), the patched code calls a helper method (Helper.hasValidBasicConstraints) to verify that any candidate issuer actually possesses valid basic constraints (i.e. a proper cA flag). This ensures that an attacker cannot simply use a certificate that is valid as a leaf but erroneously claimed to be a CA in order to spoof an authority. If the retrieved issuer certificate fails this check, its memory is freed, and the chain extension is halted or the alternative chain search continues. This directly addresses the vulnerability where alternative chains were improperly verified.
+
+2. Chain Consistency and Memory Management:  
+   The repair refrains from reassigning or indirectly modifying the certificate chain container, thereby maintaining a consistent internal chain state. When an alternative valid certificate is found, the original “bad” certificates beyond that point are removed correctly, with proper freeing of memory (using Helper.free). By updating the chain length (num) and decrementing the last_untrusted counter accordingly, the chain state remains coherent throughout the process.
+
+3. Alternative Chain Loop Adjustments:  
+   The loop that searches for alternative chains is simplified so it no longer reassigns the chain list unexpectedly. Instead, it methodically checks, for each intermediate certificate, if the issuer is valid and properly qualifies as a CA. If so, it removes the extra certificates after the valid chain point and sets a retry flag, ensuring that subsequent verification attempts work on the refined (valid) chain. This prevents attackers from exploiting an alternative chain path that leads to the acceptance of a spoofed issuer.
+
+4. Updating the Untrusted Index:  
+   At the end of the verification loop, the repair explicitly updates ctx.last_untrusted to reflect the current chain size. This update is critical because it guarantees that the chain and its associated “untrusted” state remain synchronized. With this precise tracking, the verification process will not mistakenly trust a certificate that has been incorrectly flagged as part of a valid chain.
+
+5. Overall Verification Flow:  
+   The sequence now correctly starts with building the preliminary chain, then moves on to handle self-signed certificates appropriately, and finally recalculates alternative chains with proper checks on CA certification and chain consistency. Each step includes proper memory deallocation to avoid leaving cached temporary issuers that might be misused later.
+
+In summary, by incorporating stringent checks for valid CA basic constraints, ensuring that chain modifications are managed carefully, and by updating the tracking variables accurately, the repair prevents certificate spoofing through alternative chain verification. This robustly closes the vulnerability that previously allowed a valid leaf certificate to be exploited to spoof a Certification Authority role.

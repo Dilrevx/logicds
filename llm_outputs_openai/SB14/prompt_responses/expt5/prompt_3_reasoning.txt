@@ -1,0 +1,13 @@
+The repair extends the original logic by adding a call to forcibly close the socket (sock.forceClose()) right after processing the detach event. This extra step is critical to the fix.
+
+Here's how it works:
+
+1. The existing code handles the regular detach behavior. If the socket is managed by the same thread (i.e. sock.tid equals the current thread ID), it calls the NodeManager’s local detach callback; otherwise, it creates and enqueues a detachment event for processing by the appropriate network worker. This part remains unchanged.
+
+2. The new line,
+  sock.forceClose();
+is added immediately after the detachment process. This function is designed to ensure that the TCP socket and its underlying connection state are fully cleaned up. Specifically, it deals with potential lingering issues such as the socket remaining indefinitely in the CLOSE_WAIT state due to crafted FIN segments from a remote peer.
+
+3. When receiving an unsolicited FIN (which places the socket in a CLOSE_WAIT state), the standard behavior is to wait for the application to perform a close so that a FIN can be sent in return. However, when a malicious peer crafts the segments to keep the socket open, the connection may remain in CLOSE_WAIT indefinitely. The sock.forceClose() call forces the cleanup of this lingering state, ensuring that all associated resources are released. This prevents resource exhaustion and potential denial-of-service issues stemming from many sockets stuck in CLOSE_WAIT.
+
+In summary, by adding the forceClose() call, the repair eliminates the scenario where maliciously crafted TCP streams keep the connection in a problematic state. It ensures that even if the normal FIN exchange is disrupted, the socket is explicitly closed, thereby mitigating the vulnerability described.

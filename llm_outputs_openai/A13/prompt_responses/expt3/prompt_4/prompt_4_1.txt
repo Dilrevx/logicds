@@ -1,0 +1,56 @@
+Below is one example of a patch that fixes the vulnerability. In the original code only DLZ zones found in the “dlz_searched” list were checked for transfer permissions, meaning that writable DLZ zones (which may not be in that list) never had dns_dlzallowzonexfr() invoked on them. In the patch below we modify the condition so that if either a “normal” DLZ zone is found (via dlz_searched) or a writable DLZ zone is configured (via, for example, a new pointer dlz_writable), then we always call dns_dlzallowzonexfr() to perform the transfer (XFR) access check.
+
+Assume that the view structure now contains a field (or flag) such as dlz_writable that is non-NULL when a writable DLZ zone is configured. (In your actual system the field name or test might be different.) For example:
+
+---------------------------------------------------------
+/* Patched code snippet */
+if (result != ISC_R_SUCCESS) {
+	/*
+	 * Normal zone table did not match.
+	 * Try the DLZ database.  This now includes writable DLZ zones.
+	 */
+	if (! ISC_LIST_EMPTY(client->view->dlz_searched) ||
+	    (client->view->dlz_writable != NULL)) {  /* New condition for writable DLZ */
+
+		result = dns_dlzallowzonexfr(client->view,
+					     question_name,
+					     &client->peeraddr,
+					     &db);
+
+		if (result == ISC_R_NOPERM) {
+			char _buf1[DNS_NAME_FORMATSIZE];
+			char _buf2[DNS_RDATACLASS_FORMATSIZE];
+
+			result = DNS_R_REFUSED;
+			dns_name_format(question_name, _buf1, sizeof(_buf1));
+			dns_rdataclass_format(question_class, _buf2, sizeof(_buf2));
+			ns_client_log(client, DNS_LOGCATEGORY_SECURITY,
+				      NS_LOGMODULE_XFER_OUT, ISC_LOG_ERROR,
+				      "zone transfer '%s/%s' denied",
+				      _buf1, _buf2);
+			goto failure;
+		}
+		if (result != ISC_R_SUCCESS)
+			FAILQ(DNS_R_NOTAUTH, "non-authoritative zone",
+			      question_name, question_class);
+		is_dlz = true;
+	} else {
+		/*
+		 * Not a DLZ zone and not in the normal zone table:
+		 * we are not authoritative here.
+		 */
+		FAILQ(DNS_R_NOTAUTH, "non-authoritative zone",
+		      question_name, question_class);
+	}
+} else {
+	/* ... normal handling when a match is found in the zone table ... */
+}
+
+---------------------------------------------------------
+
+Explanation of key changes:
+1. The condition now uses a logical OR to check for either a non‐empty dlz_searched list or a configured writable DLZ zone (client->view->dlz_writable != NULL). This ensures that zone transfer access checks (via dns_dlzallowzonexfr()) are carried out even for writable DLZ zones.
+2. The call to dns_dlzallowzonexfr() is made unconditionally when either condition is met so that the proper XFR permission (allowzonexfr) method is invoked.
+3. The subsequent permission-related checks remain unchanged.
+
+This patch ensures that the intended zone transfer restrictions are enforced for all DLZ zones, addressing the vulnerability where writable DLZ zones were previously bypassing the allowzonexfr check.

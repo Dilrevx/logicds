@@ -1,0 +1,30 @@
+You will provide a repair for a mentioned buggy code snippet to fix a vulnerability.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+A bug has been identified in the processing of key and initialisation vector (IV) lengths. This can lead to potential truncation or overruns during the initialisation of some symmetric ciphers. A truncation in the IV can result in non-uniqueness, which could result in loss of confidentiality for some cipher modes. When calling EVP_EncryptInit_ex2(), EVP_DecryptInit_ex2() or EVP_CipherInit_ex2() the provided OSSL_PARAM array is processed after the key and IV have been established. 
+</vulnerability_description>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair begins by preserving the already existing branch that handles contexts configured for no padding. This branch calls a function to explicitly set the padding flag to false, ensuring that the cipher remains in the no-padding state. The logic remains unchanged in this part, so that behavior is preserved.
+
+After that, the repair introduces additional logic that is excluded from the FIPS module build. This conditional block is designed to address the bug described in CVE-2023-5363, where key and IV lengths might be processed too late, potentially leading to issues like truncation, overruns, or even non-unique IVs. The approach taken is to extract and force the update of certain length parameters before the main cipher initialization takes place.
+
+Within this block, the code first checks whether any additional parameters have been passed. If parameters exist, a temporary array of parameter objects is created. This temporary array is structured to hold up to two critical parameters: one for the key length and one for the IV length. The repair code then searches within the existing parameters for the key length. If the key length parameter is found, it copies that parameter into the temporary array for processing.
+
+Next, the repair handles the IV length parameter. It searches the provided parameters for a parameter that specifies the IV length and, if available, copies it into the temporary array just like for the key. Notably, the repair supports two synonymous parameter names for the IV length. This helps ensure that regardless of which identifier is used in the parameters, the IV length is correctly processed.
+
+Once either or both of these parameters have been copied into the temporary array, the repair calls a function to set these parameters on the cipher context. This function is designed to update the internal state of the cipher context early, before the main initialization logic kicks in. By doing so, the cipher is pre-configured with explicit lengths for the key and IV, thereby mitigating the risk of improper truncation or overruns that could otherwise compromise the security and correctness of the cryptographic operations.
+
+If the update of these parameters fails, an error is raised, and the function exits early, preventing the use of an improperly initialized cipher context.
+
+Finally, following the parameter update, the function checks if encryption is required. If so, it verifies that the cipher has a valid initialization function and then proceeds with the cipher’s encryption initialization routine. In case the cipher initialization function pointer is null (indicating that initialization cannot be performed), an error is raised and the function returns early.
+
+In summary, the repair steps are:
+1. Preserve the behavior for contexts configured with no padding.
+2. If extra initialization parameters are provided and the build is not FIPS-compliant, prepare an array to hold key and IV lengths.
+3. Locate and copy the key length parameter from the provided parameters.
+4. Locate and copy the IV length parameter (handling synonymous names) into the temporary array.
+5. Set these parameters early on in the cipher context to avoid late application issues.
+6. Ensure that the cipher initialization process proceeds only if the provided parameters have been successfully applied.
+7. Maintain the existing flow for initializing encryption, thereby mitigating the vulnerability while preserving functionality.
+</repair_description>

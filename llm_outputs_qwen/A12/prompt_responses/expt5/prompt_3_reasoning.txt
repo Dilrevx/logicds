@@ -1,0 +1,39 @@
+The provided repair addresses a critical vulnerability in a TLS v1.3 server implementation where mutual authentication can be bypassed by a malicious client. The vulnerability arises because the server does not enforce the requirement for the `CertificateVerify` message from the client during the handshake process, which is essential for establishing mutual authentication.
+
+### Understanding the Vulnerability
+
+In a typical TLS v1.3 handshake with mutual authentication, both the client and the server authenticate each other. The client sends its certificate and signs a hash of the handshake messages using its private key in the `CertificateVerify` message. The server verifies this signature to ensure that the client possesses the private key corresponding to the public key in the certificate it presented. If the server does not validate this step, a malicious client can omit the `CertificateVerify` message, thus connecting to the server without proving its identity.
+
+### Analysis of the Buggy Code
+
+The buggy code snippet is part of the `DoTls13Finished` function, which is responsible for processing the `Finished` message in the TLS v1.3 handshake. This message is sent by both the client and the server to confirm that they have received all handshake messages and derived the necessary secrets. However, the code does not include any checks to verify whether mutual authentication was successfully completed, especially if the server requires it.
+
+### Repair Explanation
+
+The repair introduces a new condition to ensure that mutual authentication is completed before proceeding with the handshake. Here's a detailed breakdown of the changes:
+
+1. **Check for Mutual Authentication Requirement:**
+   ```c
+   if (!ssl->options.mutualAuthDone && ssl->options.requireMutualAuth) {
+       WOLFSSL_MSG("Mutual authentication required but not completed");
+       return MUTUAL_AUTH_FAILED_E;
+   }
+   ```
+   - **`ssl->options.mutualAuthDone`:** This flag indicates whether mutual authentication has been successfully completed. It should be set to `true` after the server successfully verifies the client's `CertificateVerify` message.
+   - **`ssl->options.requireMutualAuth`:** This flag specifies whether the server requires mutual authentication. If set to `true`, the server must ensure that the client has presented a valid certificate and signed the handshake transcript.
+   - **`MUTUAL_AUTH_FAILED_E`:** This error code is returned if mutual authentication is required but not completed, preventing the handshake from proceeding.
+
+2. **Placement of the Check:**
+   - The check is placed right after verifying that the input buffer size is sufficient (`*inOutIdx + size + ssl->keys.padSz <= totalSz`). This ensures that the mutual authentication status is checked early in the `DoTls13Finished` function, before any further handshake steps are taken.
+
+3. **Logging and Error Handling:**
+   - **`WOLFSSL_MSG("Mutual authentication required but not completed");`:** This log message provides clarity about why the handshake is being terminated, which can be useful for debugging and monitoring purposes.
+   - **Returning an Error:** By returning `MUTUAL_AUTH_FAILED_E`, the function stops further processing and signals to the calling code that the handshake has failed due to the absence of mutual authentication.
+
+### Ensuring Proper Functionality
+
+To ensure that the repair does not inadvertently break the functionality of the server when mutual authentication is not required, the check is conditional on `ssl->options.requireMutualAuth`. This means that if the server does not require mutual authentication, the handshake can proceed as usual without checking the `mutualAuthDone` flag.
+
+### Conclusion
+
+By implementing this repair, the server enforces the requirement for mutual authentication when specified. This prevents malicious clients from bypassing the authentication process, thereby enhancing the security of the TLS v1.3 implementation. The repair maintains the integrity of the handshake process and ensures that only authenticated clients can establish a secure connection with the server, aligning with the specifications provided.

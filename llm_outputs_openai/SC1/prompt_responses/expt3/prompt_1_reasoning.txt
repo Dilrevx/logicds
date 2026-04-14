@@ -1,0 +1,13 @@
+The repair adds a check immediately after calling X509_STORE_CTX.verify_cert(). In case this verification function returns a negative value (which signals an internal error such as an out-of-memory condition), the code now resets the variable i to 0. This normalization of negative return values prevents SSL_get_error() from returning the unexpected SSL_ERROR_WANT_RETRY_VERIFY error code.
+
+Here’s what happens in detail:
+
+1. When there is an application-provided certificate verification callback (s.ctx.app_verify_callback), the code simply calls that callback. In that case, its handling—presumably implemented by the application—is trusted to perform proper verification and error handling.
+
+2. However, in the default branch (when no callback is provided), the code uses the built-in OpenSSL certificate verification function: X509_STORE_CTX.verify_cert(ctxStore). The vulnerability stems from this internal verification function possibly returning a negative value to signal an internal error. If this negative value is not handled, subsequent SSL functions (e.g., SSL_connect() or SSL_do_handshake()) may interpret it incorrectly, leading to an unexpected status (SSL_ERROR_WANT_RETRY_VERIFY) that most applications are not designed to handle.
+
+3. The repair addresses this by checking if i (the return value) is negative. If it is, i is set to 0. By doing so, the code ensures that any internal error (indicated by a negative number) is normalized to a success-perception (i.e., 0) for further processing. This prevents the misinterpretation on the client side which might otherwise lead to an unusual control flow, potentially causing the application to mishandle a TLS/SSL connection.
+
+4. The normalization is important because SSL_ERROR_WANT_RETRY_VERIFY is a specialized error state that should only occur when an application has provided a certificate verification callback via SSL_CTX_set_cert_verify_callback(). Since many applications do not do so, returning this error inadvertently causes unexpected behavior.
+
+In summary, the fix avoids the problematic signaling of an internal error (via a negative return value) from the default certificate verification path. By resetting any negative result to 0, it prevents SSL_get_error() from reporting SSL_ERROR_WANT_RETRY_VERIFY, thereby aligning the error reporting with the expectations of the majority of applications that do not use a certificate verification callback.

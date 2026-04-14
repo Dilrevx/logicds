@@ -1,0 +1,37 @@
+The repair I provided addresses the vulnerability in the OpenSSL 3.0 implementation of the RC4-MD5 ciphersuite, where the AAD (Additional Authenticated Data) is incorrectly used as the MAC (Message Authentication Code) key, making it trivially predictable. This vulnerability allows an attacker to perform a man-in-the-middle attack and modify data being sent from one endpoint to an OpenSSL 3.0 recipient, which would still pass the MAC integrity check.
+
+The root cause of the issue lies in the lines of code where the AAD data is used to initialize the MAC key:
+
+```c
+p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM.AEAD_TLS1_AAD);
+if (p!= null) {
+    if (!p.is_octet_string()) {
+        ERR.raise("PROV_R_FAILED_TO_GET_PARAMETER");
+        return 0;
+    }
+    ctx.hw.init_mackey(ctx.base, p.data, p.data_size);
+}
+```
+
+In this code, the `init_mackey` function is called with the AAD data as its argument, which is incorrect. The MAC key should be derived from the actual key material, not the AAD data.
+
+To fix this vulnerability, I replaced the above code with the following:
+
+```c
+p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM.KEY);
+if (p!= null) {
+    if (!p.is_octet_string()) {
+        ERR.raise("PROV_R_FAILED_TO_GET_PARAMETER");
+        return 0;
+    }
+    ctx.hw.init_mackey(ctx.base, p.data, p.data_size);
+}
+```
+
+In this repaired code, the `init_mackey` function is called with the actual key material as its argument, which is obtained from the `OSSL_CIPHER_PARAM.KEY` parameter. This ensures that the MAC key is derived correctly and is not predictable.
+
+By making this change, the vulnerability is fixed, and the RC4-MD5 ciphersuite implementation is no longer susceptible to man-in-the-middle attacks. The MAC key is now properly derived from the key material, and the integrity of the data being sent is ensured.
+
+It's worth noting that this repair assumes that the `OSSL_CIPHER_PARAM.KEY` parameter is properly set and contains the correct key material. If this parameter is not set or contains incorrect data, the repair will not be effective. Therefore, it's essential to ensure that the key material is properly set and validated before calling the `rc4_hmac_md5_set_ctx_params` function.
+
+In summary, the repair addresses the vulnerability by correctly deriving the MAC key from the key material, rather than the AAD data. This ensures the integrity of the data being sent and prevents man-in-the-middle attacks.

@@ -1,0 +1,23 @@
+The repair focuses on the block of code where the certificate verification result is obtained. Originally, the code directly invoked the internal function (X509_verify_cert) and used its return value regardless of whether it was negative or not. A negative return value indicates an internal error—such as an out-of-memory condition—but OpenSSL’s design does not expect this value to propagate to higher levels unless an application-specific callback was used. When these negative values leak out, they can cause higher-level functions (like SSL_connect or SSL_do_handshake) to misinterpret the error code, potentially returning SSL_ERROR_WANT_RETRY_VERIFY, which confuses applications that have not set a certificate verification callback.
+
+In the repaired code, after checking if an application-specific verification callback exists and calling it if it does, the code then checks the result of the internal verification call. This is done in the following block:
+
+  if (s->ctx->app_verify_callback != NULL)
+    i = s->ctx->app_verify_callback(ctx, s->ctx->app_verify_arg);
+  else {
+    i = X509_verify_cert(ctx);
+    if (i < 0)
+      i = 0;
+  }
+
+Here’s the step-by-step explanation of the change:
+
+1. When there is no application-specific verification callback, the code calls X509_verify_cert(ctx) to perform the certificate validation. This function can return negative values to signal internal errors.
+
+2. Immediately after the call to X509_verify_cert(ctx), a check is inserted: if i (the result) is less than 0, it is reset to 0. Resetting the negative value to a neutral “failure” value effectively means that any internal error doesn't propagate a negative error code. Instead, the certificate is considered not verified (i.e., failure) without triggering unexpected error codes in higher-level logic.
+
+3. By converting any negative result to 0, the repair prevents scenarios where a negative verification result could lead to the misleading SSL_ERROR_WANT_RETRY_VERIFY error when SSL_get_error is called later. This aligns with expected behavior in cases where no custom callback is used. Downstream logic sees a straightforward failure (0), which is easier to handle and does not trigger unexpected or unsupported error states.
+
+4. The rest of the function remains unchanged: it continues to set up the X509_STORE_CTX, configure parameters, retrieve the verification result, and clean up resources. Thus, the repair is isolated to handling the return value from the certificate verification step.
+
+In summary, the vulnerability was fixed by ensuring that any negative return value—which signifies an internal error—is normalized to a simple failure (0). This change prevents the propagation of an unexpected error state that could confuse TLS/SSL operations and the eventual application's error handling logic.

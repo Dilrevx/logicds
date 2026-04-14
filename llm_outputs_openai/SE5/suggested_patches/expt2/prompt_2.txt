@@ -1,0 +1,75 @@
+package main;
+
+import commons.*;
+
+public class RrcNr {
+    private int transaction_id;
+    private SecCfg sec_cfg = new SecCfg();
+    private boolean security_is_activated;
+    private Pdcp pdcp = new Pdcp();
+    private static final String[] ciphering_algorithm_id_nr_text = {"ALG0", "ALG1"};
+    private static final String[] integrity_algorithm_id_nr_text = {"NIA0", "NIA1"};
+    static Logger logger = new Logger();
+
+    public void handle_security_mode_command(SecurityModeCmdS smc) {
+        transaction_id = smc.rrc_transaction_id;
+        SecurityAlgorithmCfg sec_algo_cfg = smc.crit_exts.security_mode_cmd().security_cfg_smc.security_algorithm_cfg;
+        sec_cfg.cipher_algo = CIPHERING_ALGORITHM_ID_ENUM.fromValue(sec_algo_cfg.ciphering_algorithm.value);
+        if (sec_algo_cfg.integrity_prot_algorithm_present) {
+            sec_cfg.integ_algo = INTEGRITY_ALGORITHM_ID_ENUM.fromValue(sec_algo_cfg.integrity_prot_algorithm.value);
+            if (sec_cfg.integ_algo == INTEGRITY_ALGORITHM_ID_ENUM.NIA0) {
+                logger.error("prohibited value in RRC SMC!");
+                return;
+            }
+        } else {
+            logger.error("Missing Integrity Algorithm Config");
+        }
+        generate_as_keys();
+        security_is_activated = true;
+        int lcid = srb_to_lcid(NrSrb.srb1);
+        pdcp.config_security(lcid, sec_cfg);
+        pdcp.enable_integrity(lcid, Pdcp.DIRECTION_TXRX);
+        send_security_mode_complete();
+        pdcp.enable_encryption(lcid, Pdcp.DIRECTION_TXRX);
+    }
+
+    private void generate_as_keys() {}
+    private int srb_to_lcid(NrSrb srb) { return 0; }
+    private void send_security_mode_complete() {}
+
+public enum NR_SIGNALING_RB_TYPE
+{
+    // Only the secure signaling radio bearer is accepted.
+    SECURE_SIGNALLING,
+    // All other types are considered insecure.
+    UNSUPPORTED
+}
+
+public class RRC_SecurityConfig
+{
+    // New field coupling the security configuration with an explicitly defined signaling radio bearer.
+    public NR_SIGNALING_RB_TYPE radioBearer;
+    public CIPHERING_ALGORITHM_ID_ENUM cipher_algo;
+    public INTEGRITY_ALGORITHM_ID_ENUM integ_algo;
+
+    public RRC_SecurityConfig(NR_SIGNALING_RB_TYPE radioBearer,
+                              CIPHERING_ALGORITHM_ID_ENUM cipher_algo,
+                              INTEGRITY_ALGORITHM_ID_ENUM integ_algo)
+    {
+        // Enforce that only a trusted signaling bearer is allowed.
+        if (radioBearer != NR_SIGNALING_RB_TYPE.SECURE_SIGNALLING)
+        {
+            throw new ArgumentException("Insecure signaling radio bearer is not permitted.");
+        }
+
+        // Prevent using the insecure integrity algorithm NIA0.
+        if (integ_algo == INTEGRITY_ALGORITHM_ID_ENUM.NIA0)
+        {
+            throw new ArgumentException("The integrity algorithm NIA0 is not allowed for secure configuration.");
+        }
+
+        this.radioBearer = radioBearer;
+        this.cipher_algo = cipher_algo;
+        this.integ_algo = integ_algo;
+    }
+}

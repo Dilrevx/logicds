@@ -1,0 +1,17 @@
+The original code snippet only verified that the reply’s identifier (new_id) and optionally a hash value were matching with a forwarded query. This is a problem because it does not check the network-level parameters (namely, the destination IP address and port) of the original forwarded query. Without this check, an attacker could craft a reply that has the correct id (and possibly hash) but uses another address or port, bypassing the intended protections as outlined in RFC5452.
+
+In our repair, we have added explicit verification that the reply’s source address and port (the “from” parameter) exactly match those found in the forwarded query’s “sentto” field. We do this by checking the address family of the incoming reply and then, based on whether it is IPv4 or IPv6, we compare both the port and the IP address.
+
+For IPv4, the code casts the “from” and the “sentto” fields into “struct sockaddr_in” pointers. It then compares the sin_port fields and the binary representation of the sin_addr fields (using a direct equality check on the s_addr members). If both the port and IP address match, the reply is confirmed to originate from the same address and port that we originally sent the query to.
+
+Likewise, for IPv6, the code handles the “struct sockaddr_in6”. It compares the sin6_port fields for both “from” and “sentto”. Since IP addresses in IPv6 are more complex, the code uses memcmp to compare the sin6_addr fields. The size of the address compared is determined by sizeof(struct in6_addr) to ensure the complete address is compared byte-for-byte.
+
+By enforcing these additional conditions, the repaired code ensures that the reply is only accepted if all the critical query parameters are matched exactly. This distance from the original behavior is crucial because even if an attacker guesses the query id and hash, they also must replicate the precise networking information (address and port) that was used in the original forwarding. This significantly raises the difficulty for an attacker to forge a valid reply and helps mitigate DNS cache poisoning.
+
+Moreover, the revised code maintains backward compatibility with the existing correctness of the hash check (when present) by combining it with the new address/port validation using logical AND operators. Thus, only when the network parameters, identifiers, and optional hash verification steps all pass does the code consider the reply as valid and return the forwarded query.
+
+In summary, the repair effectively ensures that replies are tied to their original query parameters by:
+1. Casting the reply’s source and the stored forwarded query’s destination addresses to the appropriate data structures depending on the address family.
+2. Comparing both the network port and IP address to ensure the reply originates from the exact same endpoint that was originally contacted.
+3. Retaining the original query id and hash checks.
+This comprehensive match prevents attackers from successfully spoofing DNS replies and reinforces compliance with RFC5452, thereby mitigating the risk of DNS cache poisoning.

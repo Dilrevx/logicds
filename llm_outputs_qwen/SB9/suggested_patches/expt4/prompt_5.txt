@@ -1,0 +1,65 @@
+package main;
+
+import commons.*;
+
+public class Tls13CertificateVerify {
+
+    public static int DoTls13CertificateVerify(TlsContext ssl, byte[] input, int[] inOutIdx, int totalSz) {
+        int ret = 0;
+        Buffer sig = ssl.buffers.sig;
+        Dcv13Args args = new Dcv13Args();
+        ssl.options.asyncState = CommonsConstants.TLS_ASYNC_BEGIN;
+        args.hashAlgo = CommonsConstants.sha_mac;
+        args.sigAlgo = CommonsConstants.anonymous_sa_algo;
+        args.idx   = inOutIdx[0];
+        args.begin = inOutIdx[0];
+        switch (ssl.options.asyncState) {
+            case CommonsConstants.TLS_ASYNC_BEGIN:
+                ssl.options.asyncState = CommonsConstants.TLS_ASYNC_BUILD;
+            case CommonsConstants.TLS_ASYNC_BUILD:
+                if ((args.idx - args.begin) + CommonsConstants.ENUM_LEN + CommonsConstants.ENUM_LEN > totalSz)
+                    return CommonsConstants.BUFFER_ERROR;
+                ret = CommonUtils.DecodeTls13SigAlg(input, args);
+                if (ret < 0)
+                    return ret;
+                args.idx += CommonsConstants.OPAQUE16_LEN;
+                if ((args.idx - args.begin) + CommonsConstants.OPAQUE16_LEN > totalSz)
+                    return CommonsConstants.BUFFER_ERROR;
+                args.sz = CommonUtils.ato16(input, args.idx);
+                args.idx += CommonsConstants.OPAQUE16_LEN;
+                if ((args.idx - args.begin) + args.sz > totalSz || args.sz > CommonsConstants.ENCRYPT_LEN)
+                    return CommonsConstants.BUFFER_ERROR;
+
+                // Ensure the signature algorithm matches the certificate algorithm
+                if (!isCompatibleSigAlgo(args.sigAlgo, ssl)) {
+                    Wslib.WOLFSSL_MSG("Incompatible signature algorithm with certificate");
+                    return CommonsConstants.SIG_VERIFY_E;
+                }
+
+                return 0;
+            default:
+                return 0;
+        }
+    }
+
+    private static boolean isCompatibleSigAlgo(int sigAlgo, TlsContext ssl) {
+        switch (sigAlgo) {
+            case CommonsConstants.ed25519_sa_algo:
+                return ssl.peerEd25519KeyPresent;
+            case CommonsConstants.ed448_sa_algo:
+                return ssl.peerEd448KeyPresent;
+            case CommonsConstants.ecc_dsa_sa_algo:
+                return ssl.peerEccDsaKeyPresent;
+            case CommonsConstants.falcon_level1_sa_algo:
+            case CommonsConstants.falcon_level5_sa_algo:
+                return ssl.peerFalconKeyPresent;
+            case CommonsConstants.rsa_sa_algo:
+                return false; // PKCS#1.5 should not be used
+            case CommonsConstants.rsa_pss_sa_algo:
+                return ssl.peerRsaKey != null && ssl.peerRsaKeyPresent;
+            default:
+                return false; // Unknown or unsupported algorithm
+        }
+    }
+
+}

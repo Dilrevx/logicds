@@ -1,0 +1,14 @@
+The repair adds a check to ensure that no prior error has been flagged before performing each subsequent validation step. Originally, both the explicit elliptic curve parameters check and the CA certificate check were executed independently, even if an earlier step had already set an error. As a result, an error from the curve parameters check could be unintentionally overwritten by the CA certificate check.
+
+In the first validation block, the if condition is modified to include "&& ret > 0". This means that the explicit curve parameters check (via check_curve(x)) is only performed if no previous error has been set (i.e., ret is still positive). Once check_curve is called:
+• If it returns a negative value, the error is set to an unspecified error, and ret is reset to zero immediately. This prevents any further validations on this particular certificate.
+• If it returns zero, a specific error indicating explicit elliptic curve parameters is recorded.
+
+The second validation block also checks that ret is still positive (ret > 0) before proceeding with the CA certificate check. This ensures that if the curve parameters check already failed (and so ret was set to zero), then the certificate's CA validations will be skipped, thereby preserving the original error condition. This is particularly important because the bug allowed non-CA certificates to bypass intended checks by having subsequent logic overwrite the initial error.
+
+By introducing these conditional checks:
+• The repair ensures a sequential validation flow where once an error is detected, subsequent verification steps do not overwrite that error.
+• This prevents a vulnerability where an invalid certificate (or one with explicit curve parameters) could potentially bypass restrictions on non-CA certificates issuing further certificates.
+• The integrity of the chain validation is maintained, enforcing strict requirements when the X509_V_FLAG_X509_STRICT flag is used.
+
+Thus, the modifications ensure that any error detected during the earlier stages of validation (e.g., from checking explicit elliptic curve parameters) is not accidentally cleared or replaced by later checks (e.g., the CA certificate validation). This fixes the vulnerability by guaranteeing that once an error condition is encountered, subsequent processes do not override that error, preserving the security behavior intended by the strict flag.

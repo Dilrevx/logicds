@@ -1,0 +1,17 @@
+The repair introduces an explicit check at the beginning of the code snippet that compares the signature algorithm (sig_algo) received in the CertificateVerify message (args.sigAlgo) with the algorithm indicated by the certificate, stored in ssl.peerCertSigAlgo. Here’s how the fix works:
+
+1. Prevention of Mismatched Signature Algorithms:  
+   The vulnerability allows a client to bypass certificate verification if the sig_algo in the CertificateVerify message is different from the one in the certificate message. By inserting a check that the provided sig_algo exactly matches the expected one (ssl.peerCertSigAlgo), the repair ensures that the server cannot trick the client into accepting a mismatch. If the two do not match, the function immediately returns an error (SIG_VERIFY_E) with an appropriate error message.
+
+2. Early Exit on Mismatch:  
+   This check is performed before any further per-algorithm validations. If the algorithms do not match, the process is halted, blocking any potential bypass scenario. This ordering is crucial because it prevents the subsequent individual checks (for ed25519, ed448, etc.) from processing an invalid input that could lead to erroneously accepting a bad signature.
+
+3. Retaining Original Integrity Checks:  
+   Once the matching check is passed, the subsequent algorithm-specific checks remain intact. Each of these checks validates that the corresponding keys (e.g., peerEd25519KeyPresent for ed25519) are appropriately set according to what the CertificateVerify message suggests. These checks act as secondary assurance steps to confirm that the proper key is available for the algorithm, maintaining the consistency of the handshake.
+
+4. Ensuring Full Authentication:  
+   Both the new global check and the existing per-algorithm checks together ensure that the certificate and the CertificateVerify message are in sync regarding the signature algorithm. This dual-layer defense makes sure that even if an attacker attempts to present a rogue signature algorithm (or a mismatched key presentation) they will be caught early in the verification process.
+
+Together, these changes directly address the vulnerability by ensuring that any deviation in the algorithm selection between certificate issuance and signature verification is detected and rejected immediately. This enforcement stops any potential bypass that could otherwise allow a client to be tricked into accepting an improperly authenticated server.
+
+Overall, the repair reinforces the critical invariants in the TLS handshake process: the mutual agreement on the signature algorithm, which is essential for maintaining the integrity and trustworthiness of the TLS v1.3 authentication process.

@@ -1,0 +1,42 @@
+The repair implemented addresses the CCS Injection vulnerability, a critical flaw in the handling of ChangeCipherSpec (CCS) messages during the TLS handshake process. This vulnerability arises because the original code did not adequately restrict when a CCS message could be processed, allowing an attacker to inject a CCS message out of sequence, potentially leading to the use of a zero-length master key and compromising the security of the session.
+
+### Key Concepts and Vulnerability Details
+
+**ChangeCipherSpec Message:** In the TLS protocol, the ChangeCipherSpec (CCS) message signals the transition from using unencrypted data to encrypted data. It is crucial that this message is processed at the correct time in the handshake to ensure that encryption keys are established before encrypted communication begins.
+
+**CCS Injection Vulnerability:** The vulnerability occurs when an attacker can inject a CCS message before the handshake is complete, causing the server to believe that encryption should begin prematurely. This can result in the use of a zero-length master key, which effectively means no encryption is applied, allowing the attacker to intercept and read sensitive information.
+
+### The Repair Approach
+
+To mitigate this vulnerability, the repair introduces a mechanism to control when a CCS message can be processed. This is achieved by introducing a new flag, `SSL3_FLAGS_CCS_OK`, which indicates whether a CCS message is expected at a particular point in the handshake.
+
+#### Setting the `SSL3_FLAGS_CCS_OK` Flag
+
+The flag `SSL3_FLAGS_CCS_OK` is set in specific states where the receipt of a CCS message is valid:
+
+1. **After CertificateVerify (Server-Side):** 
+   - In the state `SSL3_ST_SR_CERT_VRFY_B`, after the server successfully processes the CertificateVerify message from the client, it sets the `SSL3_FLAGS_CCS_OK` flag. This indicates that the server is ready to accept a CCS message from the client next. This step is crucial in scenarios involving client authentication, where the CertificateVerify message is part of the handshake.
+
+2. **After Finished (Server-Side):**
+   - In the state `SSL3_ST_SR_FINISHED_A` or `SSL3_ST_SR_FINISHED_B`, after the server processes the Finished message from the client, it sets the `SSL3_FLAGS_CCS_OK` flag. This is particularly important in resumed sessions, where the Finished message is immediately followed by a CCS message from the client. Ensuring the flag is set here prevents the CCS message from being processed out of sequence.
+
+3. **After NextProto (Server-Side):**
+   - If Next Protocol Negotiation is enabled and the server has processed the NextProto message, it sets the `SSL3_FLAGS_CCS_OK` flag. This allows the server to accept a CCS message from the client next, ensuring that all necessary handshake messages have been exchanged before the CCS message is processed.
+
+#### Checking the `SSL3_FLAGS_CCS_OK` Flag
+
+While the provided repair code does not explicitly show the mechanism for checking the `SSL3_FLAGS_CCS_OK` flag before processing a CCS message, it is implied that such a check exists elsewhere in the codebase. The flag serves as a guard to ensure that a CCS message is only processed when it is expected. If the flag is not set when a CCS message is received, the system should reject the message, thus mitigating the risk of a malicious attacker injecting a CCS message out of sequence.
+
+#### Ensuring Proper State Transitions
+
+By carefully managing the setting of `SSL3_FLAGS_CCS_OK`, the repair ensures that the state machine correctly transitions between different stages of the handshake. This prevents premature transitions and ensures that all necessary messages are received and processed in the correct order. The flag acts as a synchronization mechanism, ensuring that the handshake progresses only when it is safe to do so.
+
+#### Maintaining Backward Compatibility
+
+The repair is designed to work seamlessly with existing configurations and options, such as those disabling TLS extensions or Next Protocol Negotiation. It uses preprocessor directives to conditionally compile parts of the code that deal with these extensions, ensuring that the repair does not introduce compatibility issues with older or differently configured systems. This is evident in the use of `#if defined(OPENSSL_NO_TLSEXT)` and similar directives, which allow the code to adapt to different build configurations.
+
+### Security Implications
+
+By enforcing strict control over when CCS messages can be processed, the repair effectively neutralizes the CCS Injection attack. This attack relies on the ability to inject a CCS message out of sequence, which could lead to the use of a zero-length master key and subsequent session hijacking. The introduction of the `SSL3_FLAGS_CCS_OK` flag ensures that such attacks are thwarted by preventing the acceptance of improperly timed CCS messages.
+
+In summary, the repair addresses the CCS Injection vulnerability by introducing a mechanism to track and enforce the proper timing of CCS messages during the TLS handshake. This is achieved through the strategic use of a new flag, ensuring that CCS messages are only accepted when they are expected, thereby maintaining the integrity and security of the TLS protocol. The repair is designed to be backward compatible and to integrate smoothly with existing OpenSSL configurations, making it a robust solution to a significant security issue.

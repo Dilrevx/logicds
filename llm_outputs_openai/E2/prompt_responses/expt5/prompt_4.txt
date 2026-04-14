@@ -1,0 +1,58 @@
+<repair>
+  if (nas_msg.unpack_outer_hdr(pdu) != SRSRAN_SUCCESS) {
+    logger.error("Unable to unpack outer NAS header");
+    return SRSRAN_ERROR;
+  }
+
+  // Initialize a flag for the current message header status.
+  // Using -1 to represent an invalid/uninitialized value.
+  int current_sec_hdr_flag = -1;
+
+  // Critical check based on the message sequence number.
+  // Assume that the NAS header provides a field "sequence_number" and that an external
+  // context structure (ctx) provides the expected receive count (rx_count).
+  // Also assume that MAX_SEQUENCE_NUMBER is a defined constant representing the maximum allowed sequence.
+  uint8_t received_seq_num = nas_msg.hdr.sequence_number;
+  if ((received_seq_num != MAX_SEQUENCE_NUMBER) && (received_seq_num < ctx->rx_count)) {
+    logger.warn("Potential NAS replay attack detected: expected seq count >= %d, received %d", ctx->rx_count, received_seq_num);
+    return SRSRAN_ERROR;
+  }
+
+  // Update the current header flag with the actual security header type.
+  current_sec_hdr_flag = nas_msg.hdr.security_header_type;
+
+  switch (nas_msg.hdr.security_header_type) {
+    case nas_5gs_hdr::security_header_type_opts::plain_5gs_nas_message:
+      // If a security context is already established, reject plain NAS messages to prevent replay.
+      if (ctx->security_established) {
+        logger.error("Plain NAS message rejected due to an already established security context");
+        return SRSRAN_ERROR;
+      }
+      break;
+    case nas_5gs_hdr::security_header_type_opts::integrity_protected:
+      // Perform integrity verification.
+      if (!integrity_check(pdu.get())) {
+        logger.error("NAS message failed integrity check");
+        return SRSRAN_ERROR;
+      }
+      break;
+    case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered:
+      // Perform integrity check and, if successful, decrypt the message.
+      if (!integrity_check(pdu.get())) {
+        logger.error("NAS message failed integrity check");
+        return SRSRAN_ERROR;
+      } else {
+        cipher_decrypt(pdu.get());
+      }
+      break;
+    case nas_5gs_hdr::security_header_type_opts::integrity_protected_with_new_5G_nas_context:
+      // Additional handling for messages using a new 5G NAS context can be added here.
+      break;
+    case nas_5gs_hdr::security_header_type_opts::integrity_protected_and_ciphered_with_new_5G_nas_context:
+      // Immediately reject this message type as per the security policy.
+      return SRSRAN_ERROR;
+    default:
+      logger.error("Not handling NAS message with unknown security header");
+      break;
+  }
+</repair>

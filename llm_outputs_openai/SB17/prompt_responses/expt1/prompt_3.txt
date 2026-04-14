@@ -1,0 +1,51 @@
+<repair>
+        if (crls != null) {
+            // Retrieve the issuer certificate from the CRL store so we can verify the CRL using the correct public key.
+            X509Certificate issuerCert = Commons.tls_crl_store.getCertificate(issuer);
+            if (issuerCert == null) {
+                Commons.tls_log("Unable to locate issuer certificate required for CRL verification");
+                ctx.setError(Commons.X509_V_ERR_UNABLE_TO_GET_CRL);
+                crls.free();
+                storeCtx.cleanup();
+                storeCtx.free();
+                return Commons.FALSE;
+            }
+            PubKey caPubKey = issuerCert.getPublicKey();
+            for (i = 0; i < crls.size(); i++) {
+                Crl crl = crls.get(i);
+                // Log the actual CRL issuer rather than the certificate issuer.
+                Commons.tls_log("CRL: Issuer: " + crl.getIssuerName().toString());
+                // Verify the CRL using the CA issuer's public key instead of the subject certificate's key.
+                res = crl.verify(caPubKey);
+                if (res <= 0) {
+                    Commons.tls_log("invalid signature on CRL");
+                    ctx.setError(Commons.X509_V_ERR_CRL_SIGNATURE_FAILURE);
+                    crls.free();
+                    storeCtx.cleanup();
+                    storeCtx.free();
+                    return Commons.FALSE;
+                }
+                res = crl.nextUpdateCmp();
+                if (res == 0) {
+                    Commons.tls_log("CRL has invalid nextUpdate field");
+                    ctx.setError(Commons.X509_V_ERR_ERROR_IN_CRL_NEXT_UPDATE_FIELD);
+                    crls.free();
+                    storeCtx.cleanup();
+                    storeCtx.free();
+                    return Commons.FALSE;
+                }
+                if (res < 0) {
+                    Commons.tls_log("CRL is expired, revoking all certificates until an updated CRL is obtained");
+                    ctx.setError(Commons.X509_V_ERR_CRL_HAS_EXPIRED);
+                    crls.free();
+                    storeCtx.cleanup();
+                    storeCtx.free();
+                    return Commons.FALSE;
+                }
+            }
+            crls.free();
+        }
+        storeCtx.cleanup();
+        storeCtx.free();
+        return ok;
+</repair>

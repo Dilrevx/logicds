@@ -1,0 +1,45 @@
+<repair>
+    if (*extMsgType == server_hello) {
+#if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
+        PreSharedKey* psk = NULL;
+        TLSX* ext = TLSX_Find(ssl->extensions, TLSX_PRE_SHARED_KEY);
+        if (ext != NULL)
+            psk = (PreSharedKey*)ext->data;
+        while (psk != NULL && !psk->chosen)
+            psk = psk->next;
+        if (psk == NULL) {
+            ssl->options.resuming = 0;
+            ssl->arrays->psk_keySz = 0;
+            XMEMSET(ssl->arrays->psk_key, 0, MAX_PSK_KEY_LEN);
+        }
+        else {
+            if ((ret = SetupPskKey(ssl, psk, 0)) != 0)
+                return ret;
+            ssl->options.pskNegotiated = 1;
+        }
+#endif
+
+        /* 
+         * Additional validation: ensure that at least one key exchange mechanism
+         * has been provided. If a valid PSK was not negotiated, then the key share
+         * extension must be present. Here, we assume that a non-zero value in the
+         * namedGroup field indicates the presence of a valid key share extension.
+         */
+        if (!ssl->options.pskNegotiated && (ssl->suites.namedGroup == 0)) {
+            /* 
+             * Neither a PSK nor a key share extension was provided.
+             * Abort the handshake to prevent using a predictable IKM.
+             */
+            return -1;  /* Replace -1 with an appropriate error code as needed */
+        }
+
+        ssl->keys.encryptionOn = 1;
+        ssl->options.serverState = SERVER_HELLO_COMPLETE;
+    }
+    else {
+        ssl->options.tls1_3 = 1;
+        ssl->options.serverState = SERVER_HELLO_RETRY_REQUEST_COMPLETE;
+
+        ret = RestartHandshakeHash(ssl);
+    }
+</repair>

@@ -1,0 +1,29 @@
+The repair addresses a critical vulnerability in the handling of TLS 1.3 connections within the wolfSSL library, specifically when a TLS 1.3 client does not receive either a Pre-Shared Key (PSK) extension or a Key Share Extension (KSE) from the server during the handshake process. The original code snippet contains a security flaw because it uses a default, predictable buffer as the Input Keying Material (IKM) for generating the session master secret when neither a PSK nor a KSE is present. This predictability can be exploited by an attacker to reconstruct the session master secret, compromising the confidentiality and integrity of the encrypted communication.
+
+### Analysis of the Vulnerability
+
+In the original code, the following sequence of events occurs:
+
+1. **Check for PSK Extension**: The code checks if the server has sent a PSK extension. If found, it attempts to use the PSK provided by the server.
+2. **Iterate Over PSKs**: If multiple PSKs are available, the code iterates through them until it finds one that is marked as chosen.
+3. **Handle Missing PSK**: If no suitable PSK is found (`psk == null`), the code resets the PSK-related options and clears the PSK key array. However, it does not handle the scenario where no Key Share Extension (KSE) is also present.
+4. **Continue Handshake**: Regardless of whether a PSK was found or not, the code proceeds with setting `encryptionOn` to true and advancing the server state to `SERVER_HELLO_COMPLETE`.
+
+The critical issue arises when neither a PSK nor a KSE is received from the server. In this scenario, the code does not generate a secure, random IKM. Instead, it relies on a default, predictable buffer, which can be easily guessed or brute-forced by an attacker. This predictability allows an attacker to deduce the session master secret, leading to potential eavesdropping or tampering with the encrypted data.
+
+### Repair Strategy
+
+The repair strategy involves modifying the code to ensure that a secure, random IKM is generated whenever neither a PSK nor a KSE is received from the server. Here’s how the repair is implemented:
+
+1. **Check for KSE Extension**: In addition to checking for the PSK extension, the code now also checks for the presence of a Key Share Extension.
+2. **Generate Random IKM**: If both the PSK and KSE extensions are missing (`psk == null && kse == null`), the code generates a secure, random IKM using a cryptographically secure random number generator (`SecureRandom`). The size of the IKM is set to 32 bytes, which is a common choice for cryptographic keys, but this can be adjusted based on specific security requirements.
+3. **Use IKM for Further Processing**: The generated random IKM is then used for further processing in the handshake protocol. This ensures that the session master secret is derived from a truly random source, thereby mitigating the risk of prediction or reconstruction by an attacker.
+4. **Reset PSK Options**: As in the original code, if no suitable PSK is found, the PSK-related options are reset, and the PSK key array is cleared. This step remains unchanged as it is necessary for proper session management when no PSK is negotiated.
+
+### Benefits of the Repair
+
+- **Enhanced Security**: By ensuring that a secure, random IKM is always used when neither a PSK nor a KSE is present, the repair significantly enhances the security of TLS 1.3 sessions. This prevents attackers from exploiting predictable IKMs to compromise session secrets.
+- **Compliance with Standards**: The repair aligns with the TLS 1.3 protocol specifications, which emphasize the importance of using strong randomness in key generation processes to ensure secure communications.
+- **Maintains Functionality**: The repair maintains the existing functionality of the code, including handling cases where a PSK is successfully negotiated. It only introduces additional logic to handle the scenario where neither a PSK nor a KSE is received, thus preserving the overall behavior of the TLS handshake process.
+
+In conclusion, the repair effectively addresses the identified vulnerability by ensuring that the session master secret is always derived from a secure, random source, thereby protecting the confidentiality and integrity of TLS 1.3 sessions against potential attacks.

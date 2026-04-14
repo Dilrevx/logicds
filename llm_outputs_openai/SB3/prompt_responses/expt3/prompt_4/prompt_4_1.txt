@@ -1,0 +1,38 @@
+Below is one example of how you might “repair” the snippet so that the client no longer blindly accepts a user‐authentication success message but instead verifies that the success corresponds to an allowed authentication method. In this example the fix is to check that the method that made it to the “success” state is one of the methods that the client actually asked for (for instance, FIDO2 or SSH‐Askpass) rather than accepting an authentication success that left the cli_ses.lastauthtype “none.” (Note that the exact allowed methods and available state variables depend on your overall design.) The fix prevents an attacker from “downgrading” the authentication to a state in which additional measures would be bypassed.
+
+For example, a repaired version might look like this:
+
+--------------------------------------------------
+        Logger.trace("received msg_userauth_success");
+
+        // Verify that a legitimate authentication method was used.
+        // Replace AUTH_TYPE_FIDO2 and AUTH_TYPE_ASKPASS with the actual constants your client accepts.
+        if (cli_ses.lastauthtype != ClientSession.AUTH_TYPE_FIDO2 &&
+            cli_ses.lastauthtype != ClientSession.AUTH_TYPE_ASKPASS &&
+            cli_ses.lastauthtype != ClientSession.AUTH_TYPE_PUBKEY) {
+            Logger.error("Invalid authentication method on success; aborting login");
+            // Optionally, clean up state or raise an error:
+            return;
+        }
+
+        // Now that we have checked that the authentication method is one we allowed,
+        // mark the session as authenticated.
+        ses.authstate.authdone = true;
+        cli_ses.state = ClientSession.USERAUTH_SUCCESS_RCVD;
+
+        // Do not blindly reset 'lastauthtype'; you might want to keep it for audit/logging.
+        // If you need to clean up resources for pubkey auth, do so conditionally.
+        if (cli_ses.lastauthtype == ClientSession.AUTH_TYPE_PUBKEY) {
+            ClientSession.cli_auth_pubkey_cleanup();
+        }
+--------------------------------------------------
+
+Explanation:
+
+1. The new code makes sure that before accepting the “userauth_success” message, the code verifies that the authentication method stored in cli_ses.lastauthtype is one that the client explicitly requested. In the buggy code this check is missing and the field is reset to AUTH_TYPE_NONE immediately.
+
+2. By checking against a list of allowed methods (in our example, FIDO2, SSH-Askpass, or public-key) the client no longer unconditionally accepts a success message that might have been manipulated by a malicious server.
+
+3. The cleanup routine for public key–based authentication is only called if that method was used, rather than always resetting the credential state.
+
+You should adjust the allowed methods and error handling as fits your application’s overall design and security policy. This repair brings the check more in line with RFC expectations and prevents an attacker from “downgrading” or spoofing the authentication process.

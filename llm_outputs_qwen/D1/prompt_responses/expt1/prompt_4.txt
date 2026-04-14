@@ -1,0 +1,58 @@
+<repair>
+        /* Handle such condition that stream is updated (RTP seq is reinited
+         * & SRTP is restarted), but some old packets are still coming
+         * so SRTP is learning wrong RTP seq. While the newly inited RTP seq
+         * comes, SRTP thinks the RTP seq is replayed, so srtp_unprotect()
+         * will return err_status_replay_*. Restarting SRTP can resolve this.
+         */
+        pjmedia_srtp_crypto tx, rx;
+        pj_status_t status;
+
+        /* Stop SRTP first, otherwise srtp_start() will maintain current
+         * roll-over counter.
+         */
+        pjmedia_transport_srtp_stop((pjmedia_transport*)srtp);
+
+        tx = srtp->tx_policy;
+        rx = srtp->rx_policy;
+        status = pjmedia_transport_srtp_start((pjmedia_transport*)srtp,
+                                              &tx, &rx);
+        if (status != PJ_SUCCESS) {
+            PJ_LOG(5,(srtp->pool->obj_name, "Failed to restart SRTP, err=%s",
+                      get_libsrtp_errstr(status)));
+        } else if (!srtp->bypass_srtp) {
+            err = srtp_unprotect(srtp->srtp_rx_ctx, (pj_uint8_t*)pkt, &len);
+        }
+    }
+#endif
+#endif
+
+    if (err != srtp_err_status_ok) {
+        PJ_LOG(5,(srtp->pool->obj_name, "Failed to unprotect RTP packet, err=%s",
+                  get_libsrtp_errstr(err)));
+        pj_lock_release(srtp->mutex);
+        return;
+    }
+
+    if (srtp->probation_cnt == 0 && !srtp->session_active) {
+        srtp->session_active = PJ_TRUE;
+        PJ_LOG(4,(srtp->pool->obj_name, "SRTP session activated"));
+    }
+
+    cb = srtp->rtp_cb;
+    cb2 = srtp->rtp_cb2;
+    cb_data = srtp->user_data;
+
+    pj_lock_release(srtp->mutex);
+
+    if (cb2) {
+        pjmedia_tp_cb_param param2 = *param;
+        param2.user_data = cb_data;
+        param2.pkt = pkt;
+        param2.size = len;
+        cb2(&param2);
+        param->rem_switch = param2.rem_switch;
+    } else if (cb) {
+        cb(cb_data, pkt, len);
+    }
+}</repair>

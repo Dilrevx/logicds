@@ -1,0 +1,42 @@
+Below is one way to fix the bug. In the original code the client blindly marks authentication “done” and resets the recorded authentication method (cli_ses.lastauthtype) to AUTH_TYPE_NONE. That ends up “forgetting” which secure method was used – which in turn lets a malicious SSH server, by tweaking the list of offered methods, force the client to believe that no additional measures (such as a FIDO2 token) were needed. In our fix we instead keep (and verify) the method that was actually used so that the client can enforce the expected additional authentication steps if necessary.
+
+For example, suppose that earlier in the code we recorded the authentication method that was attempted in ses.authstate.used_method. The repaired version verifies that this method is one of the allowed secure methods and then saves it in cli_ses.lastauthtype rather than zeroing it out. (You may need to adjust the names of the variables or method checks to fit your codebase.) Here is a sample patch:
+
+------------------------------------------------------------
+	TRACE(("received msg_userauth_success"));
+	
+	/* Ensure that the authentication method negotiated with the server
+	 * is compliant with our security policy. For instance, if additional
+	 * security (e.g. FIDO2 or SSH-Askpass) was required, we must verify that
+	 * the server did not “downgrade” the authentication.
+	 *
+	 * Assume that ses.authstate.used_method has already been set from our
+	 * attempted authentication. An attacker must not be allowed to set the
+	 * authentication method to “none”. */
+	if (ses.authstate.used_method == AUTH_TYPE_NONE) {
+	    fatal("Internal error: server returned success with invalid authentication method");
+	}
+	
+	/* If additional methods are mandatory, verify here that used_method 
+	 * is one of the permitted secure methods; for example:
+	 *
+	 * if (ses.authstate.used_method != AUTH_TYPE_FIDO2 &&
+	 *     ses.authstate.used_method != AUTH_TYPE_ASKPASS) {
+	 *    fatal("Server succeeded using an insecure authentication method");
+	 * }
+	 */
+	
+	/* Mark authentication as finished and keep the negotiated method.
+	 * This change prevents an attacker from replacing a secure method with
+	 * AUTH_TYPE_NONE to make SSH agent forwarding appear less suspicious. */
+	ses.authstate.authdone = 1;
+	cli_ses.state = USERAUTH_SUCCESS_RCVD;
+	cli_ses.lastauthtype = ses.authstate.used_method;
+------------------------------------------------------------
+
+Explanation of the patch:
+1. Instead of unconditionally setting cli_ses.lastauthtype to AUTH_TYPE_NONE, the code now checks that the recorded method (ses.authstate.used_method) is not AUTH_TYPE_NONE and (if needed) that it is one of the secure methods.
+2. Based on that check, the authentication “done” flag is set and the client session state is updated.
+3. Retaining the actual authentication method ensures that subsequent security checks have the right information—even if an SSH server tries to “downgrade” the negotiation.
+
+This repair makes the client’s behavior RFC compliant by not allowing a spurious success message to clear the information needed to enforce multi-factor/security policies.

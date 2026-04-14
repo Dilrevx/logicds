@@ -1,0 +1,55 @@
+<repair>
+if (s->s3->handshake_fragment_len >= 4 && 
+    s->s3->handshake_fragment[0] == SSL3_MT_HELLO_REQUEST && 
+    s->session!= NULL && s->session->cipher!= NULL)
+    {
+    if ((s->s3->handshake_fragment[1]!= 0) ||
+        (s->s3->handshake_fragment[2]!= 0) ||
+        (s->s3->handshake_fragment[3]!= 0))
+        {
+        al=SSL_AD_DECODE_ERROR;
+        SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_BAD_HELLO_REQUEST);
+        goto f_err;
+        }
+
+    if (s->msg_callback)
+        s->msg_callback(0, s->version, SSL3_RT_HANDSHAKE, s->s3->handshake_fragment, 4, s, s->msg_callback_arg);
+
+    if (SSL_is_init_finished(s) &&
+       !(s->s3->flags & SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS) &&
+       !s->s3->renegotiate)
+        {
+        ssl3_renegotiate(s);
+        if (ssl3_renegotiate_check(s))
+            {
+            i=s->handshake_func(s);
+            if (i < 0) return(i);
+            if (i == 0)
+                {
+                SSLerr(SSL_F_SSL3_READ_BYTES,SSL_R_SSL_HANDSHAKE_FAILURE);
+                return(-1);
+                }
+
+            if (!(s->mode & SSL_MODE_AUTO_RETRY))
+                {
+                if (s->s3->rbuf.left == 0) /* no read-ahead left? */
+                    {
+                    BIO *bio;
+                    /* In the case where we try to read application data,
+                     * but we trigger an SSL handshake, we return -1 with
+                     * the retry option set.  Otherwise renegotiation may
+                     * cause nasty problems in the blocking world */
+                    s->rwstate=SSL_READING;
+                    bio=SSL_get_rbio(s);
+                    BIO_clear_retry_flags(bio);
+                    BIO_set_retry_read(bio);
+                    return(-1);
+                    }
+                }
+            }
+        }
+    /* we either finished a handshake or ignored the request,
+     * now try again to obtain the (application) data we were asked for */
+    goto start;
+    }
+</repair>

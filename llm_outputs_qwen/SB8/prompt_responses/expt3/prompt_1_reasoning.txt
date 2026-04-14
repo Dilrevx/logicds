@@ -1,0 +1,44 @@
+The provided repair addresses the vulnerability described by ensuring that a predictable default value is not used for the Intermediate Key Material (IKM) when neither a Pre-Shared Key (PSK) extension nor a Key Share Extension (KSE) is received from the server during a TLS 1.3 handshake. Instead, a cryptographically secure random value is generated and used as the IKM, which significantly enhances the security of the session.
+
+### Vulnerability Overview
+
+In the original code snippet, if a TLS 1.3 client does not receive either a PSK or a KSE from the server, it uses a default, predictable buffer for the IKM. This predictability can be exploited by an attacker who might intercept or manipulate the communication. Since the IKM is crucial for generating the session master secret, using a predictable IKM allows an eavesdropper to potentially reconstruct the session keys, leading to unauthorized access or manipulation of the session's contents.
+
+### Repair Details
+
+#### Step-by-Step Explanation
+
+1. **Detection of Missing Extensions:**
+   - The code first checks if the received `extMsgType` is `CommonsConstants.server_hello`, indicating the start of a server hello message.
+   - It then searches for the `TLSX_PRE_SHARED_KEY` and `TLSX_KEY_SHARE` extensions within the server's extensions list.
+   - If the `PreSharedKey` object (`psk`) is found, it iterates through the linked list of PSKs until it finds one that has been chosen by the server (`psk.chosen`).
+   - Similarly, if the `KeyShare` object (`ks`) is found, it assigns it for potential use.
+
+2. **Handling Absence of Both Extensions:**
+   - The critical part of the repair is the condition `if (psk == null && ks == null)`. This condition checks whether neither a PSK nor a KSE was received from the server.
+   - If both are null, indicating that no suitable key material was provided, the code proceeds to generate a random IKM value using a secure random number generator.
+
+3. **Generating a Secure Random IKM:**
+   - A byte array `randomIkm` of a suitable length (e.g., 32 bytes) is created to hold the random IKM.
+   - `SecureRandom.getInstanceStrong().nextBytes(randomIkm)` is used to fill this array with cryptographically secure random bytes. This ensures that the IKM is unpredictable and unique for each session, preventing attacks based on known or predictable values.
+   - The comment `// Use randomIkm for further processing instead of a default predictable value` indicates where the newly generated `randomIkm` should be integrated into the rest of the IKM generation process.
+
+4. **Resetting Session State:**
+   - If no valid PSK or KSE is found, the code resets the session state to indicate that no resumption is taking place (`ssl.options.resuming = false`).
+   - It also clears the existing PSK key data (`ssl.arrays.psk_key`) by setting its size to zero and overwriting its contents with zeros.
+
+5. **Handling Valid PSK:**
+   - If a valid PSK is found (`else if (psk != null)`), the code proceeds with setting up the PSK key using the `SetupPskKey` function.
+   - This function call is essential for establishing the session using the negotiated PSK, assuming the PSK is valid and chosen by the server.
+
+6. **Finalizing the Handshake:**
+   - Regardless of whether a PSK or a random IKM is used, the code sets `ssl.keys.encryptionOn` to true, indicating that encryption can now be enabled for the session.
+   - Finally, it updates the server state to `SERVER_HELLO_COMPLETE`, signaling that the server hello phase of the handshake is complete.
+
+### Security Implications
+
+By ensuring that a random, unpredictable IKM is used when neither a PSK nor a KSE is available, the repair effectively mitigates the risk of session key compromise. This change aligns with cryptographic best practices, which emphasize the importance of randomness in key generation to prevent attacks that exploit predictable values.
+
+### Conclusion
+
+The repair addresses the core issue of using a predictable IKM by replacing it with a securely generated random value. This modification ensures that even in scenarios where the server fails to provide appropriate key material, the session remains secure against eavesdropping and manipulation. The implementation is straightforward yet effective, leveraging Java's `SecureRandom` class to generate high-quality random numbers suitable for cryptographic purposes.

@@ -1,0 +1,40 @@
+The vulnerability described in the `tls_verify_crl` function pertains to an incorrect handling of Certificate Revocation List (CRL) entries. Specifically, the code checks for the `subject` field twice instead of checking once for the `subject` and once for the `issuer`. This oversight can lead to a situation where valid CRLs are not recognized, allowing revoked client certificates to pass verification and establish connections with the server.
+
+### Understanding the Original Code
+
+In the original buggy code snippet, the function retrieves a set of CRLs using either `X509_STORE_CTX_get1_crls` or `X509_STORE_get1_crls`, depending on the version of OpenSSL being used. The critical part of the bug lies in the parameters passed to these functions. Both functions are called with the `subject` parameter, which is intended to match the subject of the certificate being verified. However, according to the vulnerability description, the correct approach should involve matching both the `subject` and the `issuer` of the certificate against the CRL entries.
+
+### The Role of Subject and Issuer in CRL Verification
+
+In Public Key Infrastructure (PKI), a CRL contains a list of certificates that have been revoked by their respective Certificate Authorities (CAs). Each entry in a CRL includes information about the revoked certificate, such as its serial number, the date of revocation, and optionally, the reason for revocation. Crucially, each entry also includes the `issuer` field, which identifies the CA that issued the revoked certificate. This is important because multiple CAs might issue certificates with the same `subject` (e.g., different users might have the same common name), but they would have different `issuer` fields.
+
+When verifying a certificate chain, it is essential to ensure that the certificate has not been revoked. To do this accurately, the verification process must match both the `subject` and `issuer` of the certificate against the corresponding fields in the CRL entries. Matching only the `subject` could result in false negatives, where a valid certificate is incorrectly deemed revoked if another certificate with the same `subject` but a different `issuer` is listed in the CRL.
+
+### The Repair
+
+To address the vulnerability, the repair involves modifying the parameters passed to the functions responsible for retrieving CRLs. Instead of passing the `subject` parameter, the `issuer` parameter should be used. This change ensures that the CRL verification process correctly matches both the `subject` and `issuer` of the certificate being verified against the CRL entries.
+
+Here is the corrected code snippet:
+
+```c
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+      !defined(HAVE_LIBRESSL)
+  crls = X509_STORE_get1_crls(store_ctx, issuer);
+#else
+  /* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+  crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+### Explanation of the Repair
+
+- **Function Calls**: The functions `X509_STORE_CTX_get1_crls` and `X509_STORE_get1_crls` are used to retrieve the CRLs relevant to the certificate being verified. By passing the `issuer` parameter instead of the `subject`, the code ensures that the CRLs retrieved are those issued by the same CA as the certificate being verified.
+  
+- **Version Compatibility**: The repair maintains compatibility across different versions of OpenSSL. It uses preprocessor directives to conditionally compile the code based on the OpenSSL version, ensuring that the correct function and parameter are used for each version.
+
+- **Security Implications**: Correctly matching both the `subject` and `issuer` in CRL verification enhances the security of the TLS/SSL connection. It prevents revoked certificates from being accepted, thereby mitigating the risk of man-in-the-middle attacks and other security breaches.
+
+By implementing this repair, the `tls_verify_crl` function will correctly verify the validity of certificates by consulting the appropriate CRLs, thus enhancing the overall security of the system.

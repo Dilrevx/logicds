@@ -1,0 +1,25 @@
+The repair introduced addresses a significant security vulnerability in the TLS v1.3 implementation, specifically related to the validation of the signature algorithm (`sigAlgo`) used in the `certificate_verify` message against the public key type present in the server's certificate. This vulnerability could allow an attacker to bypass the certificate check by sending a mismatched signature algorithm, leading to potential man-in-the-middle attacks or other forms of certificate validation circumvention.
+
+### Introduction of `validSigAlgo` Flag
+
+The core of the repair involves the introduction of a new boolean flag named `validSigAlgo`. Initially set to zero (false), this flag acts as a sentinel to track whether the signature algorithm used in the `certificate_verify` message corresponds to the type of public key presented in the server's certificate. The flag is updated to one (true) only when a match is found between the signature algorithm and the public key type, ensuring that any discrepancy is easily detectable at the end of the validation process.
+
+### Consistent Logic Across Different Algorithms
+
+To maintain uniformity and reliability, the repair modifies the existing conditional checks for various signature algorithms—ED25519, ED448, ECC DSA, Falcon PQC, and RSA-PSS—to consistently update the `validSigAlgo` flag. This ensures that the logic for validating the signature algorithm is applied uniformly across all supported cryptographic methods. For instance, if the `sigAlgo` matches the expected algorithm (e.g., ED25519), the corresponding public key presence is checked. If the public key is present, `validSigAlgo` is set to true, indicating a valid configuration. This approach minimizes the risk of discrepancies slipping through the validation process due to inconsistent logic handling.
+
+### Enhanced Message Logging
+
+The repair enhances the logging mechanism by providing more informative and consistent messages. Instead of logging specific error messages when the signature algorithm does not match the public key type, the repair logs a generic message indicating which signature algorithm was received. This change aids in debugging and monitoring without revealing sensitive information about the mismatch directly. For example, if an ED25519 signature is received but no ED25519 public key is present, the message "Peer sent ED25519 sig but not ED25519 cert" is logged. This approach ensures that detailed error messages do not inadvertently expose information about the server's cryptographic setup.
+
+### Final Validation Check
+
+After executing all the conditional checks for different signature algorithms, the repair introduces a final validation step. This step checks the value of the `validSigAlgo` flag. If `validSigAlgo` remains zero (false) after all checks, it signifies that there is no match between the signature algorithm and the public key type in the certificate. In such cases, the function logs an error message ("Invalid signature algorithm for given certificate") and returns an error code `SIG_VERIFY_E`. This action halts the certificate verification process, ensuring that the TLS handshake cannot proceed with an inconsistent configuration.
+
+### Error Handling for Unsupported Algorithms
+
+The repair retains and enhances the error handling for unsupported or invalid signature algorithms, such as PKCS#1.5 RSA signatures, which are not valid in TLS 1.3. When these algorithms are detected, the function immediately exits with an `INVALID_PARAMETER` error, ensuring that such unsupported algorithms cannot bypass the certificate validation process. This robust error handling reinforces the security measures by disallowing any attempts to use outdated or non-standard signature algorithms.
+
+### Conclusion
+
+By implementing these changes, the repair effectively closes the gap in the certificate verification process, ensuring that the signature algorithm used in the `certificate_verify` message aligns with the public key type presented in the server's certificate. This alignment is crucial for maintaining the integrity and security of the TLS v1.3 handshake process. The introduction of the `validSigAlgo` flag, consistent logic across different algorithms, enhanced logging, final validation checks, and robust error handling collectively enhance the security posture, preventing attackers from exploiting mismatches to bypass the certificate validation. This comprehensive approach not only fixes the identified vulnerability but also strengthens the overall resilience of the TLS implementation against potential future threats.

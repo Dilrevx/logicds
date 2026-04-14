@@ -1,0 +1,27 @@
+Below is one correct repair. In the original code the EC parameters check was performed unconditionally in the strict‐mode branch and its error return could “overwrite” an error already set when verifying that a certificate is a valid CA. (That is, if a certificate wasn’t a CA, an earlier check had set an error but then the explicit EC check ran and replaced that error.) One way to repair this is to change the checking order so that you first reject a certificate that isn’t allowed to issue certificates—in other words, perform the CA check first—and only if the certificate is a valid CA do you run the explicit elliptic curve parameters check. For example, the following fix rearranges the two checks:
+
+--------------------------------------------------
+    /* First, if the certificate is not allowed to be a CA, mark it invalid */
+    if ((ctx->param->flags & X509_V_FLAG_X509_STRICT)
+         && (x->ex_flags & EXFLAG_CA) == 0
+         && x->ex_pathlen != -1) {
+         ctx->error = X509_V_ERR_INVALID_EXTENSION;
+         ret = 0;
+    }
+    /* Otherwise, if there is a chain (num > 1), enforce that explicit EC parameters are not allowed */
+    else if ((ctx->param->flags & X509_V_FLAG_X509_STRICT) && num > 1) {
+         ret = check_curve(x);
+         if (ret < 0)
+              ctx->error = X509_V_ERR_UNSPECIFIED;
+         else if (ret == 0)
+              ctx->error = X509_V_ERR_EC_KEY_EXPLICIT_PARAMS;
+    }
+--------------------------------------------------
+
+Explanation:
+
+1. By checking first whether the certificate is allowed to issue certificates (i.e. whether it is a CA), we ensure that if it isn’t valid as a CA then we “fail early” (by setting X509_V_ERR_INVALID_EXTENSION) without later running the curve check.
+2. The explicit elliptic curve parameter check is only performed when the certificate is a valid CA candidate and the chain length is greater than one.
+3. This ordering prevents the explicit EC parameters error from “overwriting” the CA verification error.
+
+This repair meets the goal of not bypassing the intended CA checks when the strict flag is enabled.

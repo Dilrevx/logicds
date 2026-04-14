@@ -1,0 +1,119 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags. Do not provide any extra text explanation.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+Mirror zones are a BIND feature allowing recursive servers to pre-cache zone data provided by other servers. A mirror zone is similar to a zone of type secondary, except that its data is subject to DNSSEC validation before being used in answers, as if it had been looked up via traditional recursion, and when mirror zone data cannot be validated, BIND falls back to using traditional recursion instead of the mirror zone. However, an error in the validity checks for the incoming zone data can allow an on-path attacker to replace zone data that was validated with a configured trust anchor with forged data of the attacker's choosing. The mirror zone feature is most often used to serve a local copy of the root zone. If an attacker was able to insert themselves into the network path between a recursive server using a mirror zone and a root name server, this vulnerability could then be used to cause the recursive server to accept a copy of falsified root zone data.
+</vulnerability_description>
+Here is the buggy source code:
+<buggy_code>
+static isc_result_t
+check_dnskey_sigs(vctx_t *vctx, const dns_rdata_dnskey_t *dnskey,
+		  dns_rdata_t *rdata, bool is_ksk)
+{
+	unsigned char *active_keys, *standby_keys;
+	dns_keynode_t *keynode = NULL;
+	bool *goodkey;
+	dst_key_t *key = NULL;
+	isc_result_t result;
+
+	active_keys = (is_ksk ? vctx->ksk_algorithms : vctx->zsk_algorithms);
+	standby_keys = (is_ksk ? vctx->standby_ksk : vctx->standby_zsk);
+	goodkey = (is_ksk ? &vctx->goodksk : &vctx->goodzsk);
+
+	if (dns_dnssec_selfsigns(rdata, vctx->origin, &vctx->keyset,
+				 &vctx->keysigs, false, vctx->mctx))
+	{
+		if (active_keys[dnskey->algorithm] != 255) {
+			active_keys[dnskey->algorithm]++;
+		}
+	} else if (!is_ksk &&
+		   dns_dnssec_signs(rdata, vctx->origin, &vctx->soaset,
+				    &vctx->soasigs, false, vctx->mctx))
+	{
+		if (active_keys[dnskey->algorithm] != 255) {
+			active_keys[dnskey->algorithm]++;
+		}
+		return (ISC_R_SUCCESS);
+	} else {
+		if (standby_keys[dnskey->algorithm] != 255) {
+			standby_keys[dnskey->algorithm]++;
+		}
+		return (ISC_R_SUCCESS);
+	}
+
+	/*
+	 * If a trust anchor table was not supplied, a correctly self-signed
+	 * DNSKEY RRset is good enough.
+	 */
+	if (vctx->secroots == NULL) {
+		*goodkey = true;
+		return (ISC_R_SUCCESS);
+	}
+
+	/*
+	 * Look up the supplied key in the trust anchor table.
+	 */
+	result = dns_dnssec_keyfromrdata(vctx->origin, rdata, vctx->mctx,
+					 &key);
+	if (result != ISC_R_SUCCESS) {
+		return (result);
+	}
+	result = dns_keytable_findkeynode(vctx->secroots, vctx->origin,
+					  dst_key_alg(key), dst_key_id(key),
+					  &keynode);
+	switch (result) {
+	case ISC_R_SUCCESS:
+		/*
+		 * The supplied key is a trust anchor.
+		 */
+		dns_keytable_detachkeynode(vctx->secroots, &keynode);
+		dns_rdataset_settrust(&vctx->keyset, dns_trust_secure);
+		dns_rdataset_settrust(&vctx->keysigs, dns_trust_secure);
+		*goodkey = true;
+		break;
+	case DNS_R_PARTIALMATCH:
+	case ISC_R_NOTFOUND:
+		/*
+		 * The supplied key is not present in the trust anchor table,
+		 * but other keys signing the DNSKEY RRset may be, so this is
+		 * not an error, we just do not set 'vctx->good[kz]sk'.
+		 */
+		result = ISC_R_SUCCESS;
+		break;
+	default:
+		/*
+		 * An error occurred while searching the trust anchor table,
+		 * return it to the caller.
+		 */
+		break;
+	}
+
+	/*
+	 * Clean up.
+	 */
+	dst_key_free(&key);
+
+	return (result);
+}
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair process for the vulnerability in the BIND DNS server's handling of mirror zones involves several critical steps aimed at ensuring that only valid, trusted keys are accepted and used to validate DNS data. Here’s a detailed explanation of these steps:
+
+1. **Initial Key Lookup**: The repair begins with an attempt to find a matching key node in the security roots (`secroots`) key table. This step remains unchanged from the original code, where `dns_keytable_findkeynode` is called to search for a key based on its algorithm and identifier.
+
+2. **Handling Non-Match Scenarios**: If the key is not found (`ISC_R_SUCCESS` is not returned), the repair code checks for `DNS_R_PARTIALMATCH` or `ISC_R_NOTFOUND`. These indicate that the exact key was not found, but this is not considered an error since other keys might still be valid for signing the DNSKEY RRset. In such cases, the result is set to `ISC_R_SUCCESS`, and the function proceeds to the cleanup phase. This ensures that the absence of a specific key does not prematurely terminate the validation process.
+
+3. **Iterative Validation Loop**: When a key node is found, the repair introduces a loop that iterates over potential key nodes until no more matches are found. This is crucial because the original code did not account for the possibility of multiple keys being present for the same origin, which could lead to skipping valid keys if the first one did not match.
+
+4. **Key Comparison**: Inside the loop, the repair code compares the candidate key (`keynode`) with the key being validated using `dst_key_compare`. If they match, it means the key is a valid trust anchor. The key node is then detached from the key table to free resources, and the trust level of both the keyset and keysigs rdatasets is set to `dns_trust_secure`. The `goodkey` flag is also set to true, indicating that a valid trust anchor has been found.
+
+5. **Cleanup and Resource Management**: After processing each key node, whether matched or not, the repair code detaches the current key node from the key table. This is essential to prevent memory leaks and ensure that resources are properly managed. If the loop completes without finding a match, the function proceeds directly to the cleanup phase.
+
+6. **Final Cleanup and Return**: Regardless of whether a valid key was found, the cleanup phase is executed. It ensures that any remaining key nodes are detached and any allocated key structures are freed. Finally, the function returns `ISC_R_SUCCESS`, indicating that the validation process has completed successfully. This return value is consistent regardless of whether a valid key was found, which helps maintain the integrity of the validation logic.
+
+By implementing these steps, the repair addresses the vulnerability by ensuring that all potential keys are considered during the validation process, and only valid, trusted keys are accepted. This prevents an attacker from exploiting the vulnerability by inserting forged keys that bypass the validation checks.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

@@ -1,0 +1,22 @@
+The repaired code now ensures that if an error is recorded during leaf certificate verification (for instance, via an installed callback), that error is propagated rather than being discarded. Here’s the walkthrough:
+
+1. Chain Duplication and Memory Check:
+   • The first block remains similar—the code attempts to duplicate the certificate chain if there is capacity. If duplication fails (for example, due to an out-of-memory error), the code calls X509Utils.x509_verify_cert_error(), passing the mnemonic error X509_V_ERR_OUT_OF_MEM.
+   
+2. Validation of the Leaf Certificate:
+   • In the buggy version, if x509_verify_cert_valid() returns false, the code immediately returns 0. This immediate halt does not consider any error that may have been set by an installed verification callback, which might have provided a specific certificate error.
+   • In the repaired code, instead of returning 0, the failure case now returns a call to x509_verify_cert_error(), passing the current value of ctx.error. This preserves the error that was recorded by any previously invoked callbacks.
+
+3. Hostname Verification:
+   • Similarly, hostname verification was previously handled by returning 0 if the check failed, which again discards any error information. The repaired code similarly calls x509_verify_cert_error() with the current ctx.error when hostname verification fails, ensuring that any callback error information is not lost.
+
+4. Incrementing the Chain Count and Error Handling:
+   • Once both verifications pass, the chain count is incremented. Importantly, the repair does not reset or unconditionally overwrite ctx.error. This means that if any callback had set an error (even if the overall process continues), that error is preserved.
+   • Finally, the function returns success (indicated by returning 1), while keeping the context’s error state unchanged if an error was previously flagged.
+
+How It Fixes the Vulnerability:
+• The vulnerability was caused by the original implementation’s immediate return of 0 on verification failures, which did not capture and propagate errors reported by a verification callback. This meant that even if an invalid certificate was detected and an error was recorded, the actual error was overwritten or lost by a generic failure code.
+• By refactoring the code to call X509Utils.x509_verify_cert_error() when validations fail, the repair correctly uses the error already stored in ctx.error. This makes sure that any specific error conditions (e.g., those detected via the verification callback) are returned to the caller.
+• Consequently, the verifier now accurately reports the certificate errors that occurred during the verification process, ensuring that downstream processes can handle the error appropriately.
+
+Overall, the changes preserve vital error information instead of discarding it, which addresses the vulnerability described.

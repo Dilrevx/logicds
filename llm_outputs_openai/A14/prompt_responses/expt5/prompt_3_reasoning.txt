@@ -1,0 +1,18 @@
+The repair adds extra checks to ensure that the ChangeCipherSpec (CCS) message is processed only in a valid protocol state and only once. Here are the key aspects of the changes:
+
+1. State Validation:  
+   The new check "if (s->state != SSL3_ST_SR_CCS)" ensures that the CCS is only accepted when the connection state is exactly where a CCS is expected during the handshake. This prevents an attacker from injecting a forged CCS message when the state isn’t appropriate, stopping manipulation of the cipher transition process.
+
+2. Duplicate CCS Prevention:  
+   The repair adds a check "if (s->s3->change_cipher_spec)" to reject duplicate CCS messages. If the CCS flag is already set, that indicates a CCS was already processed, so a second one is treated as an error. This prevents attackers from replaying a CCS message in an attempt to trigger unexpected behavior, including the use of a zero-length master key.
+
+3. Existing Validations Retained:  
+   The original checks on the record’s length, offset, and payload (whether it matches the expected single byte with value SSL3_MT_CCS) are still performed. These ensure that the CCS record format is strictly validated.
+
+4. Timing Enforcement for New Cipher:  
+   The condition "if (s->s3->tmp.new_cipher == NULL)" is kept to detect if the CCS message arrives too early, i.e., before a new cipher has been established. This is significant for the handshake order and prevents the use of an uninitialized master key.
+
+5. Record and Protocol Updates:  
+   Once all validations succeed, the code marks the record as consumed by setting "rr->length = 0", logs the event via the message callback, and sets the "s->s3->change_cipher_spec" flag to show that a successful CCS message has been processed. Then, it calls ssl3_do_change_cipher_spec(s) to update the cipher spec and continues the handshake.
+
+Altogether, these improvements fix the vulnerability by ensuring that a ChangeCipherSpec message is only accepted at the correct point in the protocol handshake (by checking the connection state), that only one such message is accepted per session (rejecting duplicates), and that the CCS message’s structure and timing relative to the handshake are fully validated. This prevents man-in-the-middle attackers from crafting a malicious TLS handshake to force the use of an invalid or zero-length master key, thereby closing the "CCS Injection" vulnerability.

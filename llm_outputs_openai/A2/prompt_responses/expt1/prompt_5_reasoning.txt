@@ -1,0 +1,13 @@
+The repair alters the handling of certificate chains when invalid certificate policies are encountered. In the original code, the handling of the X509_PCY_TREE_INVALID condition was commented out, which meant that certificate policies with invalid extensions in leaf certificates could be silently ignored. This creates a vulnerability: a malicious CA could embed deliberately malformed or invalid policy assertions into a certificate’s extensions to bypass policy checking.
+
+Here’s a step-by-step breakdown of the repair:
+
+1. When the function receives a result code (ret) equal to X509_PCY_TREE_INVALID from the call to X509_policy_check(), it now enters a branch specifically added for this condition. This was initially part of a commented-out section.
+
+2. Within this branch, the code iterates over the certificate chain (skipping the trust anchor at index 0, hence starting with i = 1) to locate any certificates that include invalid policy extensions. For each certificate, it uses the macro (or function) CB_FAIL_IF to check if the certificate’s flags indicate an invalid policy (via the EXFLAG_INVALID_POLICY flag).
+
+3. In the original version, the callback was used to notify of a failure if an invalid policy was detected, but then the function would have returned 1, which meant “success”, effectively accepting the chain despite the problematic policy extension. In our repair, after checking all certificates in the chain, we now return 0 to indicate that the chain verification should be considered a failure if any certificate contained an invalid policy extension. This change prevents a malicious CA from bypassing certificate policy enforcement by inserting an invalid certificate policy.
+
+4. The branch for the case where ret equals X509_PCY_TREE_FAILURE remains largely unchanged except for a clear separation. The code now terminates with an explicit error (via ERR_raise and goto memerr) when a more severe internal failure of policy evaluation occurs.
+
+By making these changes, the repair ensures that if an invalid policy extension is detected in any certificate (except for the trust anchor), the chain verification will fail. This stops attackers from exploiting the opportunity to use invalid certificate policies to bypass security checks, thereby maintaining the integrity of the certificate validation process.

@@ -1,0 +1,13 @@
+The provided repair addresses the vulnerability in the OpenSSL library where the `X509_verify_cert()` function may return a negative value to indicate an internal error, such as out of memory, which is mishandled by OpenSSL. This mishandling causes an IO function like `SSL_connect()` or `SSL_do_handshake()` to not indicate success, and a subsequent call to `SSL_get_error()` returns the value `SSL_ERROR_WANT_RETRY_VERIFY`. This return value is unexpected for most applications, as it is only supposed to be returned when the application has previously called `SSL_CTX_set_cert_verify_callback()`.
+
+The repair checks if the `app_verify_callback` is not null, and if so, it calls the `verify` function on the callback with the provided arguments. However, if the `app_verify_callback` is null, it calls the `X509_STORE_CTX.verify_cert()` function to verify the certificate.
+
+The key part of the repair is the addition of a check for the return value of `X509_STORE_CTX.verify_cert()`. If the return value is less than 0, it indicates an error. In this case, the repair checks the reason for the error using `ERR_GET_REASON(ERR_peek_last_error())`. If the reason is `X509_R_CERT_HAS_UNTRUSTED_ISSUER`, it sets the certificate store error to `X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY` using `SSL_set_cert_store_error()`. Otherwise, it sets the certificate store error to `X509_V_ERR_CERT_HAS_EXPIRED`.
+
+This repair addresses the vulnerability in two ways:
+
+1.  **Proper Error Handling**: By checking the return value of `X509_STORE_CTX.verify_cert()` and handling the error accordingly, the repair ensures that the application is aware of any internal errors that may occur during certificate verification. This prevents the unexpected return value of `SSL_ERROR_WANT_RETRY_VERIFY` from `SSL_get_error()`, which can cause applications to behave incorrectly.
+
+2.  **Preventing Unexpected Return Values**: By setting the certificate store error to a specific value based on the reason for the error, the repair prevents the unexpected return value of `SSL_ERROR_WANT_RETRY_VERIFY` from `SSL_get_error()`. This ensures that the application receives a meaningful error code that it can handle accordingly.
+
+In summary, the repair provides proper error handling for the `X509_STORE_CTX.verify_cert()` function and prevents unexpected return values from `SSL_get_error()`. This ensures that applications using the OpenSSL library can handle certificate verification errors correctly and avoid unexpected behavior.

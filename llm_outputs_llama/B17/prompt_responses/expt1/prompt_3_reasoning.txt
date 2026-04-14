@@ -1,0 +1,63 @@
+The provided repair addresses a logical vulnerability bug in the original code snippet. The bug is related to the verification of certificate revocation lists (CRLs) in the context of TLS certificate verification.
+
+The original code snippet checks for CRLs corresponding to the subject of the current certificate to verify their integrity. However, it does not properly check for CRLs corresponding to the issuer of the current certificate to check for revocation. This is a critical step in the verification process, as it ensures that the certificate has not been revoked by the issuing certificate authority (CA).
+
+The repair addresses this issue by adding the necessary code to retrieve the CRL corresponding to the issuer of the current certificate and check for revocation. Here's a breakdown of the changes:
+
+1.  Retrieving the CRL corresponding to the issuer:
+
+    ```c
+crls = NULL;
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+  !defined(HAVE_LIBRESSL)
+crls = X509_STORE_CTX_get1_crls(store_ctx, issuer);
+#elif OPENSSL_VERSION_NUMBER >= 0x10000000L && \
+    !defined(HAVE_LIBRESSL)
+crls = X509_STORE_get1_crls(store_ctx, issuer);
+#else
+/* Your OpenSSL is before 1.0.0.  You really need to upgrade. */
+crls = NULL;
+#endif /* OpenSSL-1.1.x and later */
+```
+
+    This code retrieves the CRLs corresponding to the issuer of the current certificate using the `X509_STORE_CTX_get1_crls` or `X509_STORE_get1_crls` function, depending on the OpenSSL version.
+
+2.  Checking for revocation:
+
+    ```c
+for (i = 0; i < sk_X509_CRL_num(crls); i++) {
+  X509_CRL *crl = NULL;
+  X509_REVOKED *revoked = NULL;
+  int j;
+
+  crl = sk_X509_CRL_value(crls, i);
+
+  /* Check for revocation */
+  for (j = 0; j < sk_X509_REVOKED_num(crl->crl->revoked); j++) {
+    revoked = sk_X509_REVOKED_value(crl->crl->revoked, j);
+    if (X509_NAME_cmp(X509_get_subject_name(xs), revoked->name) == 0) {
+      tls_log("certificate has been revoked");
+
+      X509_STORE_CTX_set_error(ctx, X509_V_ERR_CERT_REVOKED);
+      sk_X509_CRL_free(crls);
+      X509_STORE_CTX_cleanup(store_ctx);
+      X509_STORE_CTX_free(store_ctx);
+      return FALSE;
+    }
+  }
+}
+```
+
+    This code iterates through the retrieved CRLs and checks each one for revocation. It does this by comparing the subject name of the current certificate with the names of the revoked certificates in the CRL. If a match is found, it indicates that the certificate has been revoked, and the function returns an error.
+
+3.  Cleanup:
+
+    ```c
+X509_STORE_CTX_cleanup(store_ctx);
+X509_STORE_CTX_free(store_ctx);
+return ok;
+```
+
+    Finally, the repair ensures that the `X509_STORE_CTX` object is properly cleaned up and freed to prevent memory leaks.
+
+In summary, the repair addresses a critical logical vulnerability bug in the original code snippet by adding the necessary code to retrieve the CRL corresponding to the issuer of the current certificate and check for revocation. This ensures that the certificate verification process is complete and accurate, preventing potential security issues.

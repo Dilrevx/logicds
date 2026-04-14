@@ -1,0 +1,13 @@
+The repair adds a critical check to verify if the ChangeCipherSpec (CCS) message is genuinely expected at this point in the handshake by using a flag (s->s3->ccs_allowed). Here’s a step-by-step explanation of how the changes work:
+
+1. First, the code confirms that the record is formatted correctly. It checks that the record’s length is exactly 1, that it starts at the expected offset (offset is 0), and that the message byte equals the expected CCS value (SSL3_MT_CCS). This initial validation ensures that the record’s structure is intact.
+
+2. Next, the repair verifies that the handshake has a valid, negotiated new cipher (s->s3->tmp.new_cipher). This check ensures that the handshake has progressed far enough to have a valid cipher configuration available, preventing an early CCS message from being processed incorrectly.
+
+3. The key enhancement is the introduction of the state check using s->s3->ccs_allowed. This newly added condition ensures that the CCS message is only processed when it is expected by the protocol’s state machine. If s->s3->ccs_allowed is false (or zero), the code raises an unexpected message error (setting an alert) and logs the error, then exits. This step prevents attackers from injecting unsolicited CCS messages which could manipulate the handshake and potentially lead to the use of a zero-length master key.
+
+4. After confirming that a CCS message is valid at the current handshake stage, the flag is immediately cleared by setting s->s3->ccs_allowed to 0. Clearing the flag prevents any further CCS messages from being accepted until the flag is explicitly set again later in the handshake process. This step is crucial to avoid state inconsistencies or repeated processing of CCS messages.
+
+5. The rest of the function follows the original flow. The code then resets the record length, optionally invokes any message callback for logging or debugging, and finally processes the cipher change by setting s->s3->change_cipher_spec to 1. It concludes by calling ssl3_do_change_cipher_spec to complete the handshake transition.
+
+By tying the acceptance of the CCS message directly to a handshake state flag, the repair ensures that only an expected and valid CCS message is processed. This prevents attackers from injecting rogue CCS messages out of turn—a vulnerability that could otherwise allow a zero-length master key to be used, jeopardizing the security of the session. The new check enforces strict sequencing of protocol messages and thereby mitigates the risk associated with the CCS Injection vulnerability.

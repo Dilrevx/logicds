@@ -1,0 +1,133 @@
+<repair>
+void nas::write_pdu(uint32_t lcid, unique_byte_buffer_t pdu)
+{
+  uint8 pd           = 0;
+  uint8 msg_type     = 0;
+  uint8 sec_hdr_type = 0;
+  uint8 emm_cause    = 0;
+
+  logger.info(pdu->msg, pdu->N_bytes, "DL %s PDU", rrc->get_rb_name(lcid));
+
+  // Parse the message security header
+  liblte_mme_parse_msg_sec_header((LIBLTE_BYTE_MSG_STRUCT*)pdu.get(), &pd, &sec_hdr_type);
+  switch (sec_hdr_type) {
+    case LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS:
+    case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT:
+    case LIBLTE_MME_SECURITY_HDR_TYPE_SERVICE_REQUEST:
+      break;
+    case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY:
+    case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED:
+      if ((integrity_check(pdu.get()))) {
+        if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED) {
+          cipher_decrypt(pdu.get());
+        }
+        break;
+      } else {
+        logger.error("Not handling NAS message with integrity check error");
+        return;
+      }
+    case LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT:
+      break;
+    default:
+      logger.error("Not handling NAS message with SEC_HDR_TYPE=%02X", sec_hdr_type);
+      return;
+  }
+
+  // Write NAS pcap
+  if (pcap != nullptr) {
+    pcap->write_nas(pdu->msg, pdu->N_bytes);
+  }
+
+  // Parse the message header
+  liblte_mme_parse_msg_header((LIBLTE_BYTE_MSG_STRUCT*)pdu.get(), &pd, &msg_type);
+  logger.info(pdu->msg, pdu->N_bytes, "DL %s Decrypted PDU", rrc->get_rb_name(lcid));
+
+  // drop messages if integrity protection isn't applied (see TS 24.301 Sec. 4.4.4.2)
+  if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS) {
+    switch (msg_type) {
+      case LIBLTE_MME_MSG_TYPE_IDENTITY_REQUEST: // special case for IMSI is checked in parse_identity_request()
+      case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REQUEST:
+      case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REJECT:
+      case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+      case LIBLTE_MME_MSG_TYPE_DETACH_ACCEPT:
+      case LIBLTE_MME_MSG_TYPE_TRACKING_AREA_UPDATE_REJECT:
+      case LIBLTE_MME_MSG_TYPE_ACTIVATE_DEDICATED_EPS_BEARER_CONTEXT_REQUEST:
+      case LIBLTE_MME_MSG_TYPE_DEACTIVATE_EPS_BEARER_CONTEXT_REQUEST:
+      case LIBLTE_MME_MSG_TYPE_MODIFY_EPS_BEARER_CONTEXT_REQUEST:
+      case LIBLTE_MME_MSG_TYPE_ACTIVATE_TEST_MODE:
+      case LIBLTE_MME_MSG_TYPE_CLOSE_UE_TEST_LOOP:
+        break;
+      case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT:
+        liblte_mme_parse_service_reject((LIBLTE_BYTE_MSG_STRUCT*)pdu.get(), &emm_cause);
+        if (emm_cause == 25) {
+          break;
+        }
+        [[fallthrough]];
+      case LIBLTE_MME_MSG_TYPE_EMM_INFORMATION:
+      case LIBLTE_MME_MSG_TYPE_EMM_STATUS:
+      case LIBLTE_MME_MSG_TYPE_DETACH_REQUEST:
+        logger.error("Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X without integrity protection!",
+                     msg_type,
+                     sec_hdr_type);
+        return;
+      default:
+        logger.error("Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X without integrity protection!",
+                     msg_type,
+                     sec_hdr_type);
+        return;
+    }
+  }
+
+  // Reserved for Security Mode Command (Sec 9.3.1)
+  if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT &&
+      msg_type != LIBLTE_MME_MSG_TYPE_SECURITY_MODE_COMMAND) {
+    logger.error("Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X. Security header type reserved!",
+                 msg_type,
+                 sec_hdr_type);
+    return;
+  }
+
+  switch (msg_type) {
+    case LIBLTE_MME_MSG_TYPE_ATTACH_ACCEPT:
+      parse_attach_accept(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+      parse_attach_reject(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REQUEST:
+      parse_authentication_request(lcid, std::move(pdu), sec_hdr_type);
+      break;
+    case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REJECT:
+      parse_authentication_reject(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_IDENTITY_REQUEST:
+      parse_identity_request(std::move(pdu), sec_hdr_type);
+      break;
+    case LIBLTE_MME_MSG_TYPE_SECURITY_MODE_COMMAND:
+      parse_security_mode_command(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT:
+      parse_service_reject(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_ESM_INFORMATION_REQUEST:
+      parse_esm_information_request(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_EMM_INFORMATION:
+      parse_emm_information(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_EMM_STATUS:
+      parse_emm_status(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_DETACH_REQUEST:
+      parse_detach_request(lcid, std::move(pdu));
+      break;
+    case LIBLTE_MME_MSG_TYPE_OPEN_UE_TEST_LOOP:
+    case LIBLTE_MME_MSG_TYPE_DEACTIVATE_TEST_MODE:
+      gw->set_test_loop_mode(gw_interface_nas::TEST_LOOP_INACTIVE);
+      break;
+    default:
+      logger.error("Not handling NAS message with MSG_TYPE=%02X", msg_type);
+      return;
+  }
+}
+</repair>

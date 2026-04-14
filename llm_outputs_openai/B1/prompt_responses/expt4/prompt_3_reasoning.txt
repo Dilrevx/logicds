@@ -1,0 +1,18 @@
+The repair changes the logic in the absence of a CertificateVerify message. Originally, the code checked for a missing CertificateVerify message only if the certificate’s type included signing capabilities (checked with (type & EVP_PKT_SIGN)). This allowed attackers to bypass client authentication when using DH certificates since they don’t support signing, effectively enabling access without proof of possession of the corresponding private key.
+
+In the repaired version, if a client certificate (peer) was provided but no CertificateVerify message was received, the function always treats this as an error. Here’s what happens step by step:
+
+1. The check for a missing CertificateVerify message remains:
+  if (s->s3->tmp.message_type != SSL3_MT_CERTIFICATE_VERIFY)
+
+2. Instead of conditionally checking the certificate type with (type & EVP_PKT_SIGN), the repair simply checks if a certificate was presented by evaluating if (peer != NULL). This means that regardless of the certificate’s inherent signing capabilities (or lack thereof), the server now strictly enforces the requirement that a CertificateVerify message must be present.
+
+3. If a certificate was provided but no CertificateVerify message was sent, the code assigns an error code for an unexpected message (al = SSL_AD_UNEXPECTED_MESSAGE) and logs an error (SSLerr) indicating a missing verify message. Then, it jumps to the error handling section, effectively terminating the connection or rejecting the handshake.
+
+4. If no certificate was provided (peer == NULL), the code bypasses the certificate verification step and continues processing normally (ret = 1).
+
+This change fixes the vulnerability by closing the gap that allowed clients, using DH certificates (which normally do not support signing), to bypass the authenticity check. Since the DER-based Diffie-Hellman certificate could have been used without sending a proof-of-possession of the private key, attackers might craft handshake messages that are accepted without the proper CertificateVerify message. 
+
+By unconditionally requiring the CertificateVerify message when a client certificate is present, the remediation enforces the TLS protocol requirements more strictly. This ensures that every certificate-authenticated client must demonstrate knowledge of the corresponding private key via the CertificateVerify process, closing the loophole that could have provided unauthorized access.
+
+Overall, the repair strengthens the authentication step in the TLS handshake by uniformly requiring the CertificateVerify message, regardless of the certificate's algorithm. This prevents attackers from exploiting the protocol’s flexibility with DH certificates and ensures the server only accepts handshakes backed by genuine proof-of-possession.

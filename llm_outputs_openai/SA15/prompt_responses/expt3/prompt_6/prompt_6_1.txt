@@ -1,0 +1,80 @@
+Below is an example of how the critical logic change might look after applying the repair. In the original code the TLV “success” condition was accepted without further evaluation, so the patch adds an extra validation step that confirms Phase 2 was properly completed. (Note: the surrounding code and variable names have been adapted for illustration.)
+
+────────────────────────────────────────────
+/* Example snippet from the PEAP processing function */
+
+/* ... previously processed code ... */
+
+if (tlv_status == EAP_TLV_SUCCESS) {
+    if (forced_failure) {
+        /* Previous behavior for forced failure remains unchanged */
+        resp_status = EAP_STATUS_FAILURE;
+        auth_decision = DECISION_FAIL;
+    } else {
+        /* NEW: Verify that Phase 2 authentication met all security requirements */
+        if (!phase2_is_sufficient(auth_data)) {
+            /* Phase 2 validation failed, so do not accept authentication even 
+               though the TLV indicates success */
+            resp_status = EAP_STATUS_FAILURE;
+            auth_decision = DECISION_FAIL;
+            wpa_printf(MSG_INFO, "PEAP: Phase 2 validation failed; "
+                       "rejecting authentication");
+        } else {
+            /* Only if Phase 2 is valid, accept the TLV success response */
+            resp_status = EAP_STATUS_SUCCESS;
+            auth_decision = DECISION_ACCEPT;
+            wpa_printf(MSG_DEBUG, "PEAP: TLV success and Phase 2 validated");
+        }
+    }
+} else {
+    /* Handle non-success TLV status as before */
+    resp_status = EAP_STATUS_FAILURE;
+    auth_decision = DECISION_FAIL;
+}
+
+/* ... remaining code ... */
+
+/*
+ * phase2_is_sufficient() is an additional validation function that examines the current
+ * state (including any necessary decryption or other Phase 2 criteria) to confirm that
+ * the second authentication phase has been completed securely.
+ *
+ * For security, this function must verify that:
+ *   - the decryption has been successfully performed,
+ *   - any required session information is valid,
+ *   - and all negotiated parameters meet the security requirements.
+ *
+ * A negative result indicates that the authentication must not be accepted.
+ */
+int phase2_is_sufficient(struct eap_peap_data *data)
+{
+    /* Implementation details will vary depending on the design:
+     *
+     * - Check if the Phase 2 decryption completed and yielded valid credentials.
+     * - Confirm that the necessary negotiation (e.g., inner EAP method negotiation)
+     *   actually occurred.
+     *
+     * For illustration purposes, assume the function returns 1 if valid, 0 otherwise.
+     */
+    if (!data->phase2_complete) {
+        return 0;
+    }
+
+    /* Additional checks for session keys, method state or other necessary parameters... */
+    /* ... */
+
+    return 1;
+}
+────────────────────────────────────────────
+
+Explanation:
+
+1. After receiving a TLV Success indication (tlv_status == EAP_TLV_SUCCESS), the code first checks if forced failure is activated. If it is, the response remains a failure as before.
+
+2. If forced failure is not active, before accepting the TLV success the new code calls phase2_is_sufficient(). This function checks that all critical criteria for Phase 2 (such as successful decryption or proper inner authentication) have been met.
+
+3. If phase2_is_sufficient() returns false (i.e. the necessary security checks were not satisfied), then the function treats the authentication as a failure, setting both the response and decision to failure.
+
+4. Only if phase2_is_sufficient() verifies that all requirements for Phase 2 are satisfied does the code accept the authentication and proceed with a success result.
+
+By inserting this additional condition, the repair ensures that an attacker cannot bypass the essential Phase 2 authentication (by sending an EAP-TLV Success packet) and impersonate a secure Enterprise Wi-Fi network.

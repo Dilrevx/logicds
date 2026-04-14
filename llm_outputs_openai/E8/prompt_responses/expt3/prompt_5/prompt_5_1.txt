@@ -1,0 +1,51 @@
+Below is an example of how you might adjust the message‐handling routine. In this version a new branch is added to handle an authentication reject message. Before processing the message, the code checks whether a security context is already active. If it is, an error is logged and the function returns without further message processing. Otherwise, the message is parsed normally. (Note that the original code snippet only showed the service reject branch; this patch illustrates how to split out the authentication reject handling so that messages arriving in plaintext are rejected when they should not be processed in an insecure context.)
+
+For example, the revised code might look like this:
+
+------------------------------------------------------------
+switch (msg_type)
+{
+    // New branch: authentication reject messages are now handled cautiously.
+    case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REJECT:
+    {
+        if (is_security_context_active())
+        {
+            // Log an error and abort further processing if a security context is already established.
+            log_error("Received authentication reject in active security context; dropping message.");
+            return;  // Stop further processing of this message.
+        }
+        // If no secure context exists, handle the authentication reject message normally.
+        parse_authentication_reject(lcid, std::move(pdu));
+        break;
+    }
+
+    // Adjusted Service Reject handling (if required): ensure we're not inadvertently processing a message insecurely.
+    case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT:
+    {
+        if (is_security_context_active())
+        {
+            // Optionally: log this scenario if such messages should not normally be received under secure conditions.
+            log_error("Received Service Reject in active security context; dropping message.");
+            return;
+        }
+        parse_service_reject(lcid, std::move(pdu));
+        break;
+    }
+
+    // Other message types are unchanged.
+    case LIBLTE_MME_MSG_TYPE_ESM_INFORMATION_REQUEST:
+        // Normal processing for ESM information request.
+        parse_esm_information_request(lcid, std::move(pdu));
+        break;
+
+    // ... additional cases ...
+}
+------------------------------------------------------------
+
+Explanation of Key Changes:
+1. We added a branch for LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REJECT. This branch first checks via the function is_security_context_active() whether the system currently holds an established secure context.
+2. If the secure context exists, an error message is logged (using log_error) and returns immediately. This prevents further processing of an authentication reject message that might otherwise be accepted in plaintext.
+3. If there is no secure context, the message is safe to process, so parse_authentication_reject() is called to handle the message as usual.
+4. Similarly, you can optionally add a similar check for a service reject message (or other sensitive messages) to prevent their insecure processing if a secure context is already in place.
+
+This repair ensures that plaintext messages which are not expected under an established secure communication session are not processed, thereby mitigating the vulnerability described.

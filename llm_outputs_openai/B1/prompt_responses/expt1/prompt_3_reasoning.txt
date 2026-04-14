@@ -1,0 +1,22 @@
+The repair primarily addresses a logical vulnerability arising from processing a CertificateVerify message when no certificate—and therefore no public key—is available. In the originally supplied code, if s->session->peer was NULL (or if X509_get_pubkey() failed), the function would continue processing even though a crucial element (the public key needed for verification) was missing. This could lead to undefined behavior or potential security flaws during signature verification.
+
+Here’s how the repair fixes the issue:
+
+1. Initialization and Retrieval of Certificate and Public Key:
+  • The code calls s->method->ssl_get_message() to fetch the CertificateVerify message.
+  • It checks if s->session->peer exists. If it does, it retrieves the peer certificate and extracts the associated public key using X509_get_pubkey(). If not, both peer and pkey are set to NULL.
+
+2. Validation of the Public Key:
+  • Immediately after setting up the peer and public key, the repair introduces a check: if (pkey == NULL). This is critical because the subsequent steps depend on having a valid public key to verify the signature.
+  • If there is no valid certificate (i.e., no public key), the code sets an alert level (al = SSL_AD_HANDSHAKE_FAILURE), logs an error (using SSLerr with an appropriate error code SSL_R_NO_CERTIFICATE_PRESENT), and then aborts the verification by setting ret = -1 and jumping to the cleanup section (using goto err).
+
+3. Signature Verification:
+  • After ensuring that a valid public key exists, the repair proceeds to determine the digest to use by calling EVP_get_digestbynid() based on the public key type.
+  • It then initializes the digest context for verification using EVP_VerifyInit_ex(). The further steps include preparing any additional data (not detailed in the snippet) for verification.
+  • The code performs the actual verification using EVP_VerifyFinal(), comparing the computed digest against the received signature. If verification fails, it similarly aborts the process, logging an error.
+
+4. Cleanup:
+  • Whether verification succeeds or fails, the repair ensures that allocated resources (like the EVP_MD_CTX and the public key held in pkey) are properly released.
+  • The use of goto err helps in unifying cleanup and error handling, reducing potential for resource leaks.
+
+Overall, the repair enforces an essential precondition: the CertificateVerify message must be associated with a valid certificate and public key. By explicitly rejecting messages that lack these credentials, the fix prevents an attacker from sending a structurally valid but semantically incorrect message, thereby upholding the security integrity of the handshake.

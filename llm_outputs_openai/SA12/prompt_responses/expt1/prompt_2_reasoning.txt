@@ -1,0 +1,24 @@
+The repair introduces several important checks and procedures that close gaps which previously allowed a Finished message to be accepted even if it didn’t meet all protocol criteria. Here’s the walkthrough:
+
+1. Verification of Input Data Length:  
+   The repair first checks whether the remaining bytes in the input buffer (using inOutIdx[0] to locate the start of the finished message data) are sufficient to contain a finished message. Since the expected finished message MAC is 32 bytes, the code compares (size - inOutIdx[0]) against 32. If there isn’t enough data, an error is triggered and an appropriate error code is returned. This prevents any buffer under-read or misinterpretation of short input messages that could be exploited.
+
+2. Retrieval and Validation of the Finished Secret:  
+   The repair retrieves a “finished secret” from the SSL object. If the secret is null (which might indicate an internal error or misconfiguration), the function logs an error and returns an error code. This step ensures that the secret used to compute the expected Finished message hash is valid and available.
+
+3. Calculation of the Expected Finished MAC:  
+   A helper function is employed to compute the finished message MAC. This function uses both the secret and the transcript hash (a complete representation of prior exchange) to generate the expected MAC. Checking the return value from the hash computation allows an early exit if there is an error, ensuring that the Finished message isn’t validated under a faulty state.
+
+4. Constant-Time Comparison of Calculated and Provided MACs:  
+   The computed MAC is compared with the provided MAC from the input buffer. The comparison is done in constant time to prevent timing side-channel attacks that might reveal information about the secret. This is the core fix for the logical vulnerability: previously, a non-constant time or a weak comparison might have erroneously accepted incorrect finished messages. The use of a constantTimeEquals function makes sure that regardless of where a mismatch occurs during the comparison, the time taken to compare is the same, thereby not leaking any sensitive information.
+
+5. Index Management and Optional “Sniff” Mode:  
+   Finally, if the message is not in “sniff” mode (where it is intentionally left unconsumed for further processing), the input index is advanced by the size of the finished MAC. This ensures subsequent processing (or further messages) that rely on the current index will only begin after the finished message. In “sniff” mode the index is not moved, which can be useful for diagnostic or non-invasive checks without disrupting the normal flow.
+
+Overall, these changes ensure that the Finished message:
+• Has the correct length and is read completely.  
+• Is derived from a valid secret and computed correctly.  
+• Is compared securely to thwart timing attacks.  
+• Advances the input buffer accurately depending on the mode.
+
+This results in a tighter and more secure verification process that addresses the logical vulnerability and prevents potential misinterpretation or exploitation by invalid Finished messages.

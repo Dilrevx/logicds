@@ -1,0 +1,17 @@
+The fix addresses the vulnerability by ensuring that when the code finds an alternate chain, the bookkeeping for the untrusted certificate count remains accurate. In the original code, when an alternate chain was found, the loop would pop certificates off the chain and decrement the untrusted counter (ctx->last_untrusted) manually for each certificate removed. This manual decrement risked falling out of sync with the actual number of certificates remaining in the chain. If the counter became inaccurate, it could lead to misinterpretation of a leaf certificate’s role and allow a non-CA (leaf) certificate to be mistakenly treated as if it were part of a properly validated CA chain.
+
+In the repaired version, two changes correct this vulnerability:
+
+1. During the pruning phase for an alternative chain (inside the “while (j-- > 1)” loop), the repair removes the per-iteration decrement of the untrusted counter. The code still pops extra certificates off the chain, thereby eliminating the undesired chain portion, but it no longer adjusts the counter with each pop.
+
+2. After the removal loop finishes, the repair recalculates the untrusted counter by explicitly setting it to the number of certificates left in the chain (using sk_X509_num(ctx->chain)). This ensures that the counter accurately reflects the actual chain state.
+
+By deferring the update of the counter until after all unnecessary certificates have been removed, the fix guarantees consistent and accurate tracking of untrusted certificates. This prevents an attacker from manipulating the untrusted counter in a way that might allow a valid leaf certificate to bypass proper CA role verification.
+
+With the accurate bookkeeping restored, subsequent verification steps—such as name constraints, revocation status, and policy checking—operate on the correct number of untrusted certificates and correctly identify whether the chain ultimately terminates at a trusted issuer. This means that if the defensive logic detects that the chain does not have the proper CA credentials at the appropriate place, the chain will correctly be flagged as untrusted.
+
+In summary, the repair eradicates the security hole by:
+• Eliminating erroneous manual adjustments of the untrusted certificate counter during the pruning process.
+• Resetting the counter based on the actual length of the remaining chain once pruning is complete.
+
+These modifications ensure that certificate chains are evaluated precisely and that only chains meeting the intended trust requirements will be accepted, effectively closing the window of vulnerability that allowed an attacker to spoof a Certification Authority role using a leaf certificate.

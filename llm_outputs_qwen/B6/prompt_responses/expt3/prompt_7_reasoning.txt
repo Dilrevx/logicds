@@ -1,0 +1,27 @@
+The vulnerability in the provided code lies in how the Common Name (CN) of an X.509 certificate is verified against the expected hostname. Specifically, the issue arises when the Subject Alternative Name (SAN) extension is present in the certificate. The current implementation checks the CN against all entries in the SAN extension without considering the type of each entry. This can lead to a situation where an attacker could obtain a certificate for an IP address (IPv4 or IPv6) and use it to impersonate a hostname, as the code does not differentiate between DNS names and other types of SAN entries.
+
+To understand the repair, let's first delve into the structure of the Subject Alternative Name extension. The SAN extension can contain multiple types of names, such as:
+
+- **DNS Name (Type 2):** This is the most common type, representing the domain name associated with the certificate.
+- **IP Address (Type 7):** This represents an IP address (either IPv4 or IPv6) associated with the certificate.
+- **Email (Type 1):** Represents an email address associated with the certificate.
+- **Directory Name (Type 4):** Represents a directory name associated with the certificate.
+- **Uniform Resource Identifier (Type 6):** Represents a URI associated with the certificate.
+
+The original code iterates through all entries in the SAN extension and checks each one against the expected common name (`cn`). This means that if there is an IP address in the SAN list, it will be compared against the expected hostname, which can lead to a false positive match if the IP address happens to match the byte sequence of the hostname string.
+
+The repair addresses this issue by modifying the loop that checks the SAN entries. Specifically, it adds a condition to ensure that only DNS names (type 2) are considered for comparison with the expected common name. Here’s how the repair works:
+
+1. **Check SAN Extension Presence:** The code first checks if the SAN extension is present in the certificate using `crt->ext_types & MBEDTLS_X509_EXT_SUBJECT_ALT_NAME`.
+
+2. **Iterate Through SAN Entries:** If the SAN extension is present, the code iterates through each entry in the SAN list.
+
+3. **Filter DNS Names:** For each entry, the code now checks if the type of the entry is 2 (DNS name) before performing the comparison. This is done using `if( cur->type == 2 && x509_crt_check_cn( &cur->buf, cn, cn_len ) == 0 )`. This ensures that only DNS names are compared against the expected common name.
+
+4. **Break on Match:** If a matching DNS name is found, the loop breaks, indicating a successful match.
+
+5. **Check for Mismatch:** If no matching DNS name is found after checking all entries, the `MBEDTLS_X509_BADCERT_CN_MISMATCH` flag is set, indicating a mismatch.
+
+6. **Fallback to Subject CN:** If the SAN extension is not present, the code falls back to checking the common name in the subject field of the certificate, similar to the original implementation.
+
+By implementing this filter, the repair ensures that the certificate verification process correctly matches the expected hostname against DNS names in the SAN extension, thereby preventing potential mismatches with IP addresses or other types of SAN entries. This strengthens the security of the certificate verification process by ensuring that only relevant information is used for matching, thus mitigating the risk of man-in-the-middle attacks where an attacker might exploit the misinterpretation of SAN entries.

@@ -1,0 +1,29 @@
+The provided code snippet is part of a larger function responsible for verifying the signature algorithm used by a peer during a TLS handshake. The vulnerability described indicates that the current implementation might allow a peer to use a different signature algorithm in the `certificate_verify` message compared to what was specified in the `certificate` message, potentially bypassing intended security checks.
+
+### Analysis of the Vulnerability
+
+In the original code, there are multiple conditional checks to ensure that the signature algorithm (`sigAlgo`) used in the `certificate_verify` message matches the type of key present in the `certificate` message. For example, if the peer sends an ED25519 signature, the code checks whether an ED25519 public key is present in the certificate. If not, it sets an error and exits the verification process.
+
+However, the vulnerability arises from the fact that the checks are not comprehensive enough. Specifically, the Falcon signature algorithms (falcon_level1_sa_algo and falcon_level5_sa_algo) share the same key presence flag (`ssl->peerFalconKeyPresent`). This means that if a peer sends a Falcon Level 1 signature, the code does not verify whether a Falcon Level 1 public key is present; it only checks for any Falcon public key. Similarly, for RSA, the code checks for the presence of any RSA key without distinguishing between PKCS#1.5 and RSA-PSS signatures.
+
+### Repair Explanation
+
+To address these issues, the repair involves refining the logic to ensure that the specific signature algorithm matches the corresponding key type in the certificate. Here's how each part of the repair addresses the vulnerability:
+
+1. **ED25519 and ED448 Checks**:
+   - These checks remain unchanged because they already correctly verify that the specific EdDSA algorithm corresponds to the presence of the correct EdDSA key type.
+
+2. **ECC Checks**:
+   - Similarly, the ECC checks are unchanged as they correctly ensure that an ECC DSA signature corresponds to the presence of an ECC DSA key.
+
+3. **PQC (Post-Quantum Cryptography) Falcon Checks**:
+   - The original code had separate checks for Falcon Level 1 and Level 5 signatures, both using the same `ssl->peerFalconKeyPresent` flag. This could lead to a situation where a peer uses a Falcon Level 1 signature with a Falcon Level 5 public key, or vice versa, without triggering an error.
+   - **Repair**: The repair combines these checks into a single condition that verifies whether any Falcon public key is present. However, this alone would not fix the issue of signature-key mismatch. To fully address the vulnerability, the code should ideally distinguish between Falcon Level 1 and Level 5 keys. Since the original code does not provide separate flags for different Falcon levels, this repair assumes that the presence of any Falcon key is sufficient, which is a compromise. A more secure approach would involve maintaining separate flags for each Falcon level.
+
+4. **RSA Checks**:
+   - The original code checks for the presence of any RSA key when a PKCS#1.5 signature is used, which is incorrect. It should specifically check for an RSA key when a PKCS#1.5 signature is used.
+   - **Repair**: The repair adds a check to ensure that an RSA key is present when a PKCS#1.5 signature is used. Additionally, it ensures that an RSA key is present and RSA-PSS is enabled when an RSA-PSS signature is used.
+
+### Conclusion
+
+The repair aims to ensure that the signature algorithm used in the `certificate_verify` message corresponds to the key type present in the `certificate` message. By making these changes, the code becomes more robust against attempts to bypass the intended security checks by using mismatched signature algorithms and keys. However, for full security, especially in cases like Falcon where multiple levels are involved, it would be advisable to maintain separate flags for each distinct key type and signature algorithm combination.

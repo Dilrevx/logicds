@@ -1,0 +1,49 @@
+The provided repair addresses the CCS Injection vulnerability by ensuring that the `SSL3_FLAGS_CCS_OK` flag, which indicates that a ChangeCipherSpec (CCS) message can be processed, is only set after the master secret has been successfully derived and validated through the `ssl3_get_finished()` function. This change aligns with best practices for mitigating the CCS Injection vulnerability, which can allow attackers to hijack sessions or obtain sensitive information by manipulating the TLS handshake process.
+
+### Understanding the Vulnerability
+
+The CCS Injection vulnerability arises from improper handling of ChangeCipherSpec messages during the TLS handshake process. In a typical TLS handshake, the client and server negotiate encryption parameters, exchange keys, and then send a `ChangeCipherSpec` message to indicate that they are switching to the agreed-upon encryption parameters. The `Finished` message follows, confirming that both parties have received and accepted the handshake messages.
+
+However, in vulnerable implementations, the `ChangeCipherSpec` message might be processed before the `Finished` message is fully validated. This allows an attacker to inject a `ChangeCipherSpec` message, causing the parties to prematurely switch to using a null or weak encryption key, such as a zero-length master key. This can lead to session hijacking or exposure of sensitive information.
+
+### Analysis of the Buggy Code
+
+In the original buggy code snippet, the `SSL3_FLAGS_CCS_OK` flag is set immediately upon entering the `Finished` state (`HandshakeStates.SSL3_ST_CR_FINISHED_A` or `HandshakeStates.SSL3_ST_CR_FINISHED_B`). This means that the system is indicating readiness to accept a `ChangeCipherSpec` message without ensuring that the `Finished` message has been successfully validated and the master secret has been derived.
+
+```java
+case HandshakeStates.SSL3_ST_CR_FINISHED_A:
+case HandshakeStates.SSL3_ST_CR_FINISHED_B:
+    System.out.println("Client: In Finished state, setting CCS_OK");
+    ret = ssl3_get_finished();
+    if (ret <= 0)
+        return ret;
+    state.handshakeStage = HandshakeStates.SSL_ST_OK;
+    break;
+```
+
+The call to `ssl3_get_finished()` is intended to validate the `Finished` message, but setting `SSL3_FLAGS_CCS_OK` immediately afterward bypasses the necessary checks to ensure the integrity and authenticity of the handshake.
+
+### Explanation of the Repair
+
+The repair modifies the code to set the `SSL3_FLAGS_CCS_OK` flag only after confirming that the master secret has been derived and the `Finished` message has been successfully validated. This is done by checking the `masterSecretDerived` flag, which should be set true only after the master secret has been computed and verified.
+
+```java
+case HandshakeStates.SSL3_ST_CR_FINISHED_A:
+case HandshakeStates.SSL3_ST_CR_FINISHED_B:
+    System.out.println("Client: In Finished state, setting CCS_OK");
+    ret = ssl3_get_finished();
+    if (ret <= 0)
+        return ret;
+    // Ensure CCS is only set after successful validation of the finished message
+    if (state.masterSecretDerived) {
+        state.SSL3_FLAGS_CCS_OK |= 0x0080;
+    }
+    state.handshakeStage = HandshakeStates.SSL_ST_OK;
+    break;
+```
+
+By introducing this check, the system ensures that the `ChangeCipherSpec` message can only be processed after the handshake has reached a secure state where the master secret is known and valid. This prevents attackers from injecting a `ChangeCipherSpec` message at an inappropriate time, thus mitigating the risk of CCS Injection.
+
+### Conclusion
+
+The repair effectively secures the TLS handshake process by enforcing proper sequencing and validation of messages. It ensures that critical flags, such as `SSL3_FLAGS_CCS_OK`, are only set when all preceding steps in the handshake have been successfully completed and verified. This approach aligns with security best practices and helps protect against sophisticated attacks like CCS Injection, thereby safeguarding the confidentiality and integrity of data transmitted over TLS connections.

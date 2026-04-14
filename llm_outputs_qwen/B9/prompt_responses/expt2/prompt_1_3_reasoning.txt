@@ -1,0 +1,46 @@
+The repair addresses a critical vulnerability in the provided code snippet related to the verification of digital signatures in a TLS v1.3 handshake process. Specifically, the issue arises when the signature algorithm (`sigAlgo`) used in the `certificate_verify` message does not match the type of public key present in the `certificate` message from the peer. This mismatch could potentially allow an attacker to bypass the intended certificate verification checks, leading to man-in-the-middle (MITM) attacks or other security breaches.
+
+### Vulnerability Analysis
+
+In the original code, there were several conditional checks to ensure that the signature algorithm corresponds to the type of public key present on the peer's certificate:
+
+- **ED25519 and ED448**: The code checks if the signature algorithm is ED25519 or ED448 and verifies that the corresponding key is present.
+- **ECC (Elliptic Curve Cryptography)**: It checks if the signature algorithm is ECC and confirms the presence of an ECC key.
+- **Post-Quantum Cryptography (PQC)**: For Falcon, it checks both Falcon levels (1 and 5) and ensures the presence of a Falcon key.
+- **RSA**: It verifies RSA keys for both PKCS#1.5 and PSS signature algorithms.
+
+However, the issue with the Falcon key checks and RSA PKCS#1.5 checks is that they do not enforce the same level of strict validation as the other cases:
+
+- **Falcon Keys**: The code had separate checks for each Falcon level (1 and 5), but it did not properly verify if the presence of a Falcon key was confirmed before using the `falcon_key_present` flag. If the `falcon_key_present` flag was not set correctly, it could lead to bypassing the signature verification.
+  
+- **RSA PKCS#1.5**: The RSA PKCS#1.5 check only logs a message and exits with an error if the signature algorithm is PKCS#1.5 but the RSA key is not present. However, it does not actually prevent the process from continuing further if this condition is met, which could allow an attacker to use a mismatched signature algorithm.
+
+### Repair Explanation
+
+The repair aims to ensure that for all types of keys and signature algorithms, if there is a mismatch, the process will immediately terminate with an error, preventing any further execution that could lead to security vulnerabilities.
+
+1. **Unified Falcon Key Check**:
+   - The repair consolidates the checks for both Falcon Level 1 and Level 5 into a single condition:
+     ```c
+     if ((args->sigAlgo == falcon_level1_sa_algo || args->sigAlgo == falcon_level5_sa_algo) && !ssl->peerFalconKeyPresent) {
+         WOLFSSL_MSG("Peer sent Falcon sig but not Falcon cert");
+         ret = SIG_VERIFY_E;
+         goto exit_dcv;
+     }
+     ```
+   - This change ensures that any Falcon signature algorithm will be validated against the presence of a Falcon key, thus preventing a mismatch from going unnoticed.
+
+2. **RSA PKCS#1.5 Validation**:
+   - The repair modifies the RSA PKCS#1.5 check to set the return value and exit the function similarly to how other mismatches are handled:
+     ```c
+     if (args->sigAlgo == rsa_sa_algo && !ssl->peerRsaKeyPresent) {
+         WOLFSSL_MSG("Peer sent PKCS#1.5 algo but not RSA cert");
+         ret = SIG_VERIFY_E;
+         goto exit_dcv;
+     }
+     ```
+   - By setting `ret = SIG_VERIFY_E` and using `goto exit_dcv;`, the code ensures that any attempt to use an RSA PKCS#1.5 signature without a corresponding RSA key will result in an immediate termination of the signature verification process, similar to other mismatches.
+
+### Conclusion
+
+These modifications ensure that the TLS handshake process strictly enforces the correspondence between the signature algorithm and the type of public key present in the certificate. This enforcement prevents any potential misuse or bypass of the intended security measures, thereby mitigating the risk of MITM attacks and other forms of cryptographic tampering. The repairs enhance the robustness and security of the TLS v1.3 implementation by ensuring that all signature-algorithm-to-key-type mappings are rigorously validated.

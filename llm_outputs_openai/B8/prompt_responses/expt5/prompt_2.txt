@@ -1,0 +1,56 @@
+<repair>
+    if (*extMsgType == server_hello) {
+    #if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
+        PreSharedKey* psk = NULL;
+        TLSX* pskExt = TLSX_Find(ssl->extensions, TLSX_PRE_SHARED_KEY);
+        if (pskExt != NULL)
+            psk = (PreSharedKey*)pskExt->data;
+        while (psk != NULL && !psk->chosen)
+            psk = psk->next;
+    #endif
+
+        /* Check for presence of at least one of the mandatory extensions.
+           In TLS 1.3 a valid ServerHello MUST include either a pre shared key extension
+           with a valid chosen PSK, or a key share extension so that the IKM is derived
+           from ephemeral key exchange.
+           If neither extension is provided, abort the handshake instead of using a
+           predictable default value. */
+        TLSX* keyShareExt = TLSX_Find(ssl->extensions, TLSX_KEY_SHARE);
+    #if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
+        if (psk == NULL && keyShareExt == NULL) {
+            /* Neither PSK nor key share extension present: abort handshake */
+            return WS_FATAL_ERROR;  /* Replace WS_FATAL_ERROR with your proper fatal error code */
+        }
+    #else
+        if (keyShareExt == NULL) {
+            /* No key share extension present: abort handshake */
+            return WS_FATAL_ERROR;  /* Replace WS_FATAL_ERROR with your proper fatal error code */
+        }
+    #endif
+
+    #if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
+        if (psk == NULL) {
+            /* PSK not provided, but key share extension is present. Instead of using a zeroed
+               (predictable) IKM buffer, fill the buffer with a random value so that the derived
+               master secret is not predictable. */
+            ssl->options.resuming = 0;
+            ssl->arrays->psk_keySz = MAX_PSK_KEY_LEN;
+            if (wc_RNG_GenerateBlock(ssl->rng, ssl->arrays->psk_key, MAX_PSK_KEY_LEN) != 0)
+                return WS_FATAL_ERROR;  /* Replace with proper error handling */
+        }
+        else {
+            if ((ret = SetupPskKey(ssl, psk, 0)) != 0)
+                return ret;
+            ssl->options.pskNegotiated = 1;
+        }
+    #endif
+
+        ssl->keys.encryptionOn = 1;
+        ssl->options.serverState = SERVER_HELLO_COMPLETE;
+    }
+    else {
+        ssl->options.tls1_3 = 1;
+        ssl->options.serverState = SERVER_HELLO_RETRY_REQUEST_COMPLETE;
+        ret = RestartHandshakeHash(ssl);
+    }
+</repair>

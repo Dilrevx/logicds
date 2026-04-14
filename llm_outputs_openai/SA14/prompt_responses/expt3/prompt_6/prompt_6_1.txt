@@ -1,0 +1,58 @@
+Below is an example patch that fixes the flaw. In this example, we assume that the affected code is located in the TLS handshake state processing function (for example, in the Finished state handler), and that the SSL handshake state structure (here referenced as “s”) contains a flags field (here, s->s3->flags) that is examined later when a ChangeCipherSpec (CCS) message is received. The repair explicitly marks a flag (here defined as SSL3_FLAGS_ALLOW_CCS) indicating that a CCS message is allowed at that point in the handshake. (In your actual code base the names of the function, variables, or constants may differ.)
+
+────────────────────────────────────────────────────────
+/* Before repair (vulnerable snippet) */
+if (s->state == SSL3_ST_SR_FINISHED) {
+    /* In the original code, no explicit flag is set to indicate that a CCS message is expected.
+       (This omission is what lets an attacker force a zero-length master key.) */
+    ret = ssl3_get_finished(s, p, n);
+    if (ret <= 0)
+        return ret;
+    s->state = SSL3_ST_SR_HANDSHAKE_DONE;
+}
+
+/* ...later in the code, a CCS message might be received at an unexpected time... */
+ 
+────────────────────────────────────────────────────────
+  
+Below is the patched code that fixes the vulnerability by explicitly marking that a CCS message is allowed only after the Finished message is received:
+
+────────────────────────────────────────────────────────
+/* After repair (patched snippet) */
+if (s->state == SSL3_ST_SR_FINISHED) {
+    /* 
+     * Fix: Explicitly allow a CCS message by setting the corresponding flag.
+     * This ensures that any later CCS message is validated to be part of the proper sequence.
+     * The bitwise OR adds the SSL3_FLAGS_ALLOW_CCS flag to the existing flags.
+     */
+    s->s3->flags |= SSL3_FLAGS_ALLOW_CCS;
+
+    /* Proceed to obtain the Finished message */
+    ret = ssl3_get_finished(s, p, n);
+    if (ret <= 0)
+        return ret;
+
+    /* Once the Finished message is confirmed, transition the handshake state 
+       to the final state indicating a successful handshake */
+    s->state = SSL3_ST_SR_HANDSHAKE_DONE;
+}
+
+/* 
+ * Later in the handshake processing code, when a CCS message is received, the presence 
+ * (or absence) of SSL3_FLAGS_ALLOW_CCS is checked to determine if it is valid.
+ */
+────────────────────────────────────────────────────────
+
+Explanation:
+
+1. When the state is SSL3_ST_SR_FINISHED (i.e. the endpoint is expecting the Finished message from its peer), the program now first sets the flag SSL3_FLAGS_ALLOW_CCS. This explicitly tells later sections of the code that a ChangeCipherSpec (CCS) message is valid at this point.
+
+2. After setting the flag, the routine calls ssl3_get_finished() to obtain the Finished message. If this process fails (indicated by a non-positive return value), the function returns immediately, avoiding advancing an incomplete handshake state.
+
+3. Only after successfully retrieving the Finished message does the handshake state transition to SSL3_ST_SR_HANDSHAKE_DONE.
+
+4. With this order of operations, any later invocation that processes a CCS message will verify the flag and thereby only permit it when it is strictly expected as part of a correctly completed handshake.
+
+By ensuring the flag is set at the precise moment when a CCS message is truly anticipated, this repair prevents an attacker from injecting a CCS early in the handshake—a condition that in the original code might have triggered the use of a zero-length master key.
+
+This patch effectively neutralizes the CCS Injection vulnerability as described.

@@ -1,0 +1,15 @@
+The repair first preserves the original PSK processing logic. It searches for a Pre-Shared Key extension (PSK) in the Server Hello message and iterates through potential PSK candidates until one marked as “chosen” is found. If no PSK is found, it sets the session to a non-resuming state and zeroes-out the PSK key buffer. Otherwise, it attempts to set up the PSK key by calling SetupPskKey and marks the session as having successfully negotiated a PSK.
+
+The vulnerability existed because, if the handshake did not negotiate a valid PSK and also lacked key share information, the code would continue using a default, predictable IKM value to generate the session master secret. This predictable material could be exploited by an eavesdropper to potentially reconstruct the key and intercept or modify session communications.
+
+To mitigate this risk, the repair introduces an additional safety check immediately after the PSK processing. Specifically, it inspects whether either a valid PSK has been negotiated (indicated by the ssl->options.pskNegotiated flag) or a valid key share has been provided (indicated by a non-zero ssl->session.namedGroup value). The namedGroup field normally holds the identifier for the key share extension required by TLS 1.3. If both these conditions fail (i.e., no valid PSK and the namedGroup remains zero), the function returns an error (EXT_MISSING) immediately.
+
+This check is crucial because it prevents the handshake from continuing when neither secure form of key material is present. If the function were allowed to proceed, it might fall back to using a default, zeroed-out IKM, which is predictable and thus insecure. By halting the handshake in such cases, the code avoids using insecure key derivation parameters, thereby ensuring session master secrets are only generated from secure, unpredictable input.
+
+In summary, the repair fixes the vulnerability by:
+
+1. Retaining the original PSK lookup and processing logic.
+2. Adding a conditional check that examines whether a valid PSK was negotiated or a proper key share (non-zero namedGroup) is set.
+3. Preventing the handshake from continuing (by returning EXT_MISSING) if both required components are absent, effectively stopping the derivation of session keys using insecure default materials.
+
+This direct intervention ensures that insecure, predictable keys are never used, significantly enhancing the security of TLS 1.3 sessions even if one side of the connection is potentially controlled by a malicious actor.

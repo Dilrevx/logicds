@@ -1,0 +1,12 @@
+The repair modifies the behavior when no valid PSK (pre-shared key) is found. In the original code, if no PSK was found (the pointer psk became NULL), the code zeroed out the PSK buffer (using XMEMSET) and continued. This resulted in the generation of a predictable Input Key Material (IKM) value when neither a PSK nor a key share extension was provided, which is a vulnerability: an attacker might exploit the predictability of the IKM to compromise the security of the TLS session.
+
+In the repaired code, when no valid PSK is found (psk == NULL), instead of silently falling back to the default zeroed array, the handshake is explicitly aborted. Here's a breakdown of the repair:
+
+1. The code traverses through the PSK list (if present) checking for a PSK that has been chosen (psk->chosen). This hasn't changed from the original.
+2. When psk remains NULL (meaning no valid PSK extension was provided), the repair logs a message to indicate that the handshake is being aborted because a valid PSK or acceptable key share extension is missing.
+3. More importantly, it uses an explicit error mechanism (via ERROR_OUT) to abort the handshake by jumping to a cleanup label with an error code (WS_TLS_HANDSHAKE_INCOMPLETE). This stops the TLS 1.3 handshake process rather than falling back to using the insecure, predictable, zero-filled PSK buffer.
+4. If a valid PSK is found, then it proceeds normally by setting up the PSK key and marking that a PSK has been negotiated.
+
+By aborting the handshake, the repair ensures that the session master secret is never generated from a predictable IKM. This prevents an eavesdropper or malicious server from ever having the opportunity to force usage of a weak key derivation material, thereby addressing the vulnerability described.
+
+In summary, the repair enhances security by enforcing that a valid PSK (or key share) must be provided to continue a TLS 1.3 handshake. If none is available, the session is terminated, ensuring that no predictable key material is used, and thus upholding the integrity of the key derivation process during the TLS handshake.

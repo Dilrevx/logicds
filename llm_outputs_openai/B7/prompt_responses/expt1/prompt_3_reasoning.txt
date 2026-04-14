@@ -1,0 +1,27 @@
+The repair addresses a logical flaw in the snippet where error codes for a certificate chain might be cleared erroneously. Originally, the code was indiscriminately clearing the error X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY for the last certificate (assumed to be the root) in the chain. However, if the certificate isn’t truly self-issued (i.e., not its own issuer), that error might indicate a genuine problem, and clearing it would hide the issue.
+
+The key change in the repair is the added check:
+
+ if (X509_check_issued(last, last) == X509_V_OK &&
+  chain->cert_errors[depth] == X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY)
+  chain->cert_errors[depth] = X509_V_OK;
+
+Here's a step-by-step explanation:
+
+1. Verification of Self-Issuance:
+ • The function X509_check_issued(last, last) is used to confirm that the certificate is indeed self-issued. This function compares the certificate’s issuer with its subject.
+ • If a certificate truly is self-issued (e.g., a root certificate which signs itself), the function returns X509_V_OK. This condition ensures that only certificates that are self-signed have their error potentially cleared.
+
+2. Conditional Error Clear:
+ • Only after confirming the certificate is self-issued does the code check whether the error X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY is present.
+ • This prevents the scenario where non-self-signed certificates (which might have this error legitimately) have their error code reset incorrectly, thereby masking a valid security issue.
+
+3. Chain Addition Verification:
+ • The code proceeds to add the chain to the verification context’s store (assumed to be a stack) using sk_X509_verify_chain_push.
+ • A check ensures that if pushing the chain fails due to memory allocation issues or similar, the appropriate error is returned, preventing further processing.
+
+4. Update of Chain Counter:
+ • Once the chain is added successfully, it increments the total count of chains in the context.
+ • Finally, the function returns success (1).
+
+In summary, by introducing the self-signed check, the repaired code ensures that only a certificate that is confirmed to be a true root certificate (self-issued) clears the specific issuer error. This aligns the error handling more closely with the intended security logic, preserving vital error information for non-self-signed certificates and thus preventing the vulnerability where investigators might overlook a significant verification failure.

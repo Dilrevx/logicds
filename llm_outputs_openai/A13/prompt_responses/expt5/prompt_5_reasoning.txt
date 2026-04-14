@@ -1,0 +1,13 @@
+The repair adds an extra condition to decide whether the DLZ-specific permission check needs to be performed. Previously, the code only performed the DLZ lookup if the normal zone table lookup had failed (i.e., result != ISC_R_SUCCESS). However, this logic was insufficient because there could be zones that exist in the zone table yet are marked as DLZ zones. These zones require the DLZ permission check regardless of the normal lookup result.
+
+In the modified code, the condition now reads:
+  if (result != ISC_R_SUCCESS || (client->foundzone != NULL && client->foundzone->type == dns_zone_dlz))
+This compound condition ensures that, even if the normal lookup is successful, the function proceeds with the DLZ-specific check when the found zone is designated as a DLZ type.
+
+Once inside the conditional block, the code checks whether there are any DLZ databases available (using ISC_LIST_EMPTY). If available, it calls dns_dlzallowzonexfr to determine if the zone transfer is authorized according to DLZ rules. If the DLZ function returns ISC_R_NOPERM (no permission), the code formats error messages with the zone name and class and logs an error message before setting the result to DNS_R_REFUSED and jumping to a failure routine.
+
+If the DLZ check returns any result other than success, the code treats it as non-authoritative by using the FAILQ macro with a DNS_R_NOTAUTH error. In the case of success, the is_dlz flag is set, which helps the rest of the system understand that the zone transfer involves a DLZ zone and that the DLZ-specific permissions have been verified.
+
+This change fixes the vulnerability by ensuring that all zones flagged as DLZ—whether or not a normal zone table lookup was successful—are subjected to proper DLZ permission checks. It prevents scenarios where a zone transfer might bypass the intended DLZ authorization. Essentially, the vulnerability was that DLZ zones could potentially be transferred without the necessary checks if the normal lookup succeeded; the repair closes this loophole by always invoking the DLZ check when the zone is explicitly identified as DLZ.
+
+Overall, the repair improves security by forcing the code to explicitly account for DLZ zones through the additional check against the zone type, thereby enforcing the DLZ zone transfer permissions uniformly and eliminating the opportunity for unauthorized zone transfers.

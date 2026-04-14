@@ -1,0 +1,124 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+An issue was discovered in tls_verify_crl. Failure to check for the appropriate field of a CRL entry (checking twice for subject, rather than once for subject and once for issuer) prevents some valid CRLs from being taken into account, and can allow clients whose certificates have been revoked to proceed with a connection to the server.
+</vulnerability_description>
+Here is the buggy source code:
+<buggy_code>
+    public static int tls_verify_crl(int ok, X509StoreCtx ctx) {
+        int i = 0, n = 0, res = 0;
+        X509Name subject = null;
+        X509Name issuer = null;
+        X509Certificate xs = null;
+        CrlList crls = null;
+        X509StoreCtx storeCtx = null;
+        if (Commons.tls_crl_store == null) {
+            return ok;
+        }
+        Commons.tls_log("CRL store present, checking client certificate against configured CRLs");
+        xs = ctx.getCurrentCert();
+        subject = xs.getSubjectName();
+        Commons.pr_trace_msg("verifying cert: subject = '%s'", subject.toString());
+        issuer = xs.getIssuerName();
+        Commons.pr_trace_msg("verifying cert: issuer = '%s'", issuer.toString());
+        storeCtx = X509StoreCtx.newInstance();
+        if (storeCtx.init(Commons.tls_crl_store, null, null) <= 0) {
+            Commons.tls_log("error initializing CRL store context");
+            storeCtx.free();
+            return ok;
+        }
+        if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 && !Commons.HAVE_LIBRESSL) {
+            crls = storeCtx.get1_crls(subject);
+        }
+        else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 && !Commons.HAVE_LIBRESSL) {
+            crls = Commons.get1_crls(storeCtx, subject);
+        }
+        else {
+            crls = null;
+        }
+        if (crls != null) {
+            for (i = 0; i < crls.size(); i++) {
+                Crl crl = crls.get(i);
+                Commons.tls_log("CA CRL: Issuer: " + issuer.toString());
+                PubKey pubkey = xs.getPublicKey();
+                res = crl.verify(pubkey);
+                if (res <= 0) {
+                    Commons.tls_log("invalid signature on CRL");
+                    ctx.setError(Commons.X509_V_ERR_CRL_SIGNATURE_FAILURE);
+                    crls.free();
+                    storeCtx.cleanup();
+                    storeCtx.free();
+                    return Commons.FALSE;
+                }
+                res = crl.nextUpdateCmp();
+                if (res == 0) {
+                    Commons.tls_log("CRL has invalid nextUpdate field");
+                    ctx.setError(Commons.X509_V_ERR_ERROR_IN_CRL_NEXT_UPDATE_FIELD);
+                    crls.free();
+                    storeCtx.cleanup();
+                    storeCtx.free();
+                    return Commons.FALSE;
+                }
+                if (res < 0) {
+                    Commons.tls_log("CRL is expired, revoking all certificates until an updated CRL is obtained");
+                    ctx.setError(Commons.X509_V_ERR_CRL_HAS_EXPIRED);
+                    crls.free();
+                    storeCtx.cleanup();
+                    storeCtx.free();
+                    return Commons.FALSE;
+                }
+            }
+            crls.free();
+            crls = null;
+        }
+        if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_1 && !Commons.HAVE_LIBRESSL) {
+            crls = storeCtx.get1_crls(subject);
+        }
+        else if (Commons.OPENSSL_VERSION_NUMBER >= Commons.OPENSSL_1_0 && !Commons.HAVE_LIBRESSL) {
+            crls = Commons.get1_crls(storeCtx, subject);
+        }
+        else {
+            crls = null;
+        }
+        if (crls != null) {
+            for (i = 0; i < crls.size(); i++) {
+                Crl crl = crls.get(i);
+                n = crl.revokedCount();
+                for (int j = 0; j < n; j++) {
+                    X509Revoked revoked = crl.getRevoked(j);
+                    SerialNumber sn = revoked.getSerialNumber();
+                    if (sn.equals(xs.getSerialNumber())) {
+                        Commons.tls_log(
+                                "certificate with serial number " + sn +
+                                        " revoked per CRL from issuer '" + issuer.toString() + "'");
+                        ctx.setError(Commons.X509_V_ERR_CERT_REVOKED);
+                        crls.free();
+                        storeCtx.cleanup();
+                        storeCtx.free();
+                        return Commons.FALSE;
+                    }
+                }
+            }
+            crls.free();
+        }
+        storeCtx.cleanup();
+        storeCtx.free();
+        return ok;
+    }
+
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair addresses the vulnerability by changing the parameter used to retrieve certificate revocation lists (CRLs) from the wrong value to the correct one. Originally, the code was mistakenly calling the CRL retrieval function with the certificate's subject rather than its issuer. This mistake resulted in the CRL lookup being performed with duplicate criteria for the subject, completely ignoring the issuer. Consequently, some valid CRLs would be bypassed, and revoked certificates might be erroneously allowed to establish connections.
+
+The first step in the repair was to identify that the CRL retrieval function was receiving an inappropriate parameter. During the verification process, it became clear that the certificate’s issuer is the correct field to check when looking up CRLs. The issuer field of a certificate points to the certificate authority that issued the certificate, making it the legitimate reference point to validate whether a certificate has been revoked.
+
+Once the mistake was identified, the next step was to update the code by modifying the function calls. In environments using a newer version of OpenSSL (version 1.1 or later) without LibreSSL, the function that retrieves the CRLs was originally called with the subject field. The repair instead calls the same function with the issuer field to ensure that the CRLs correspond correctly to the issuing authority. The same corrective measure was applied for OpenSSL version 1.0 environments, where an alternative function call was used. In both cases, the parameter change ensures that the certificate’s issuer is properly referenced when retrieving the CRLs.
+
+This change has the effect of maintaining the integrity of security validations. By verifying against the issuer, the software now properly checks that the CRL entry is related to the certificate authority that issued the certificate. This is crucial because it aligns with standard practices in certificate validation, where the CRL should be issued by the trusted entity responsible for certifying the certificates. It prevents an attacker from exploiting the vulnerability by hoping that a revoked certificate might slip through the verification process.
+
+In summary, the repair process involved pinpointing the incorrect use of the CRL lookup parameter, recognizing the need to check the issuer rather than the subject, updating the function calls accordingly for both newer and older versions of OpenSSL, and verifying that the changes improve the robustness of the certificate validation process. This fix closes the gap that allowed revoked certificates to proceed with potentially insecure connections, thereby reinforcing the security of the connection validation process.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

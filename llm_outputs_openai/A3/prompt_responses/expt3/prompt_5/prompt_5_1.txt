@@ -1,0 +1,46 @@
+Below is one way to fix the vulnerability. Recall that the issue was that when a legacy custom cipher is passed that was created with an undefined NID (and thus might be matched against the provider’s NULL cipher), the initialization functions would “upgrade” the legacy cipher to a provider cipher—resulting in the plaintext being output as ciphertext. The fix is to add extra conditions (by checking a new “origin” field) so that if the cipher comes from the legacy custom method, we always branch to the legacy handling code rather than attempting a substitution with a provider cipher.
+
+In our patched code the idea is to check two new conditions:
+
+1. If the primary cipher is non-null and its “origin” field indicates that it was created using the legacy method, then we know to handle it in the legacy branch.
+2. Even if ctx->cipher is null, if the fetched cipher (or some context field maintained for legacy ciphers) is present and flagged as coming from the legacy custom method, we likewise transition to the legacy branch.
+
+Below is what the repaired snippet might look like. (Note that the names for the origin-check (such as LEGACY_ORIGIN) or helper function (EVP_CIPHER_get_origin) depend on your actual implementation. Adjust these as needed for your codebase.)
+
+------------------------------------------------------------
+/* Patched code snippet */
+    if (ctx->engine != NULL
+#if !defined(OPENSSL_NO_ENGINE) && !defined(FIPS_MODULE)
+            || tmpimpl != NULL
+#endif
+            || impl != NULL
+            /* New condition #1: Check if the primary cipher was created using legacy methods */
+            || (ctx->cipher != NULL &&
+                EVP_CIPHER_get_origin(ctx->cipher) == LEGACY_ORIGIN)
+            /* New condition #2: Check if the context still holds a legacy-generated cipher even if the primary cipher pointer is NULL */
+            || (ctx->cipher == NULL &&
+                ctx->fetched_cipher != NULL &&
+                EVP_CIPHER_get_origin(ctx->fetched_cipher) == LEGACY_ORIGIN)) {
+
+        if (ctx->cipher == ctx->fetched_cipher)
+            ctx->cipher = NULL;
+        EVP_CIPHER_free(ctx->fetched_cipher);
+        ctx->fetched_cipher = NULL;
+        goto legacy;
+    }
+------------------------------------------------------------
+
+Step by step explanation:
+
+1. The original code checked for various non-NULL pointers (like an engine, tmpimpl, or impl) to decide whether to use the “legacy” branch. However, the problem was that a legacy custom cipher with an undefined NID was not detected.
+2. We add two extra disjunct conditions:
+   - The first new condition explicitly tests if ctx->cipher exists and its “origin” is marked as legacy.
+   - The second condition handles the scenario where the primary ctx->cipher is NULL but a fetched legacy cipher is still present.
+3. If any one of these conditions is true, the code frees the fetched cipher (after cleaning up pointer state) and jumps to the legacy branch.
+4. This prevents the later code from mistakenly using a legacy cipher (with a bad, undefined NID) to search for a provider-based cipher (which may retrieve the NULL cipher).
+
+This patch thereby prevents the unintended matching of an undefined cipher to the NULL cipher. Make sure that your EVP_CIPHER structure (or equivalent) includes and properly sets an “origin” field (or appropriate flag) so that EVP_CIPHER_get_origin() can reliably indicate whether a cipher was created via legacy APIs (with the constant LEGACY_ORIGIN).
+
+The exact names and constants used in the patch (for example, LEGACY_ORIGIN and EVP_CIPHER_get_origin()) may differ in your implementation; they serve here as placeholders for the mechanism with which your code marks legacy-origin ciphers.
+
+Using this fix, the vulnerability—where a legacy custom cipher with an undefined identifier is erroneously replaced by an equivalent NULL cipher from the providers—is mitigated.

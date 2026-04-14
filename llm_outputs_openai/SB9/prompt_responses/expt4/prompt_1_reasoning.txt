@@ -1,0 +1,20 @@
+The repair ensures that the server’s certificate is correctly checked against the signature algorithm used during the handshake. In TLS 1.3, the certificate_verify message must be signed using the key provided in the certificate. The original code did a series of if-statements without clear mutual exclusivity, which might allow certificate verification to be bypassed if a different key type—but one still recognized by the code—was used.
+
+Here’s how the repair addresses the vulnerability:
+
+1. Clear handling per signature algorithm:  
+   Each signature algorithm is handled in its own block using if/else if statements. This ensures that only one branch is taken and that the check is explicit. For example, when the signature algorithm matches ED25519, it now explicitly checks that the certificate contains an ED25519 key. If not, an error is returned. This prevents scenarios where a mismatched key might slip through.
+
+2. Consolidation for similar algorithms:  
+   The repair consolidates the similar checks for Falcon Level 1 and Level 5 into a single block. This reduces repetition and ensures that regardless of which Falcon signature is used, the certificate must contain the corresponding Falcon key.
+
+3. Explicit rejection of RSA PKCS#1.5:  
+   The original code contained a separate check for rsa_sa_algo which returns an "invalid parameter" error. TLS 1.3 disallows RSA PKCS#1.5 for the certificate_verify message. The repaired code now explicitly rejects the rsa_sa_algo signature by returning an error. This prevents the certificate check from being bypassed by a fallback to RSA PKCS#1.5.
+
+4. Handling unknown algorithms:  
+   The final else block catches any unexpected or unknown signature algorithm by logging an error and aborting the handshake. This ensures that if an algorithm outside those explicitly supported is encountered, the peer cannot exploit that to bypass certificate checks.
+
+5. Improved messaging:  
+   The log messages now clearly state that the certificate does not contain the key for the signature algorithm that was used in the certificate_verify message. This clarity helps with debugging and logging security events, ensuring that any discrepancies are flagged immediately.
+
+Overall, the changes ensure that if the signature algorithm in the certificate_verify message doesn’t match the key type presented in the certificate, the handshake is properly aborted. This tight coupling of the expected signature algorithm with the corresponding key present in the certificate eliminates the risk where an attacker might manipulate the handshake (by using a signature algorithm not represented by the certificate) to bypass certificate verification, thus fixing the vulnerability described.

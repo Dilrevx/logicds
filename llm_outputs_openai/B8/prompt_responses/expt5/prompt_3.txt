@@ -1,0 +1,38 @@
+<repair>
+    if (*extMsgType == server_hello) {
+#if defined(HAVE_SESSION_TICKET) || !defined(NO_PSK)
+        PreSharedKey* psk = NULL;
+        TLSX* extPsk = TLSX_Find(ssl->extensions, TLSX_PRE_SHARED_KEY);
+        TLSX* extKeyShare = TLSX_Find(ssl->extensions, TLSX_KEY_SHARE);
+        if (extPsk != NULL)
+            psk = (PreSharedKey*)extPsk->data;
+        while (psk != NULL && !psk->chosen)
+            psk = psk->next;
+        /* If neither a valid pre-shared key nor a key share are provided, abort the handshake
+           with a "missing_extension" alert to prevent use of a default, predictable IKM. */
+        if (psk == NULL && extKeyShare == NULL) {
+            /* Signal a missing extension error */
+            return SSL_FATAL_ERROR_MISSING_EXTENSION;
+        }
+        if (psk == NULL) {
+            ssl->options.resuming = 0;
+            ssl->arrays->psk_keySz = 0;
+            XMEMSET(ssl->arrays->psk_key, 0, MAX_PSK_KEY_LEN);
+        }
+        else {
+            if ((ret = SetupPskKey(ssl, psk, 0)) != 0)
+                return ret;
+            ssl->options.pskNegotiated = 1;
+        }
+#endif
+
+        ssl->keys.encryptionOn = 1;
+        ssl->options.serverState = SERVER_HELLO_COMPLETE;
+    }
+    else {
+        ssl->options.tls1_3 = 1;
+        ssl->options.serverState = SERVER_HELLO_RETRY_REQUEST_COMPLETE;
+
+        ret = RestartHandshakeHash(ssl);
+    }
+</repair>
