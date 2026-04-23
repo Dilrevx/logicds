@@ -1,0 +1,52 @@
+<repair>
+def _read_from_sections(user, collection_url, permission):
+    """Get regex sections."""
+    import os
+    import re
+    from io import StringIO
+    from configparser import ConfigParser  # Use configparser in Python 3
+
+    filename = os.path.expanduser(config.get("rights", "file"))
+    rights_type = config.get("rights", "type").lower()
+    # Pass a dict for safe interpolation; avoid exposing sensitive data via user input.
+    regex = ConfigParser({"login": user, "path": collection_url})
+    
+    if rights_type in DEFINED_RIGHTS:
+        log.LOGGER.debug("Rights type '%s'" % rights_type)
+        # Use read_file instead of deprecated readfp.
+        regex.read_file(StringIO(DEFINED_RIGHTS[rights_type]))
+    elif rights_type == "from_file":
+        log.LOGGER.debug("Reading rights from file %s" % filename)
+        if not regex.read(filename):
+            log.LOGGER.error("File '%s' not found for rights" % filename)
+            return False
+    else:
+        log.LOGGER.error("Unknown rights type '%s'" % rights_type)
+        return False
+
+    for section in regex.sections():
+        re_user = regex.get(section, "user")
+        re_collection = regex.get(section, "collection")
+        log.LOGGER.debug(
+            "Test if '%s:%s' matches against '%s:%s' from section '%s'" %
+            (user, collection_url, re_user, re_collection, section))
+        user_match = re.match(re_user, user)
+        if user_match:
+            try:
+                # Safely format the collection regex using captured groups, but
+                # catch potential formatting errors.
+                re_collection_formatted = re_collection.format(*user_match.groups())
+            except Exception as e:
+                log.LOGGER.error("Error formatting collection regex in section '%s': %s" % (section, str(e)))
+                continue
+
+            if re.match(re_collection_formatted, collection_url):
+                log.LOGGER.debug("Section '%s' matches" % section)
+                # Split allowed permissions by comma and strip whitespace.
+                allowed_permissions = [p.strip() for p in regex.get(section, "permission").split(",")]
+                if permission in allowed_permissions:
+                    return True
+            else:
+                log.LOGGER.debug("Section '%s' does not match" % section)
+    return False
+</repair>

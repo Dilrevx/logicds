@@ -1,0 +1,29 @@
+<repair>
+		claims := &Claims{}
+		accessToken, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
+			if t.Method.Alg() != jwt.SigningMethodHS256.Name {
+				return nil, errors.Errorf("unexpected access token signing method=%v, expect %v", t.Header["alg"], jwt.SigningMethodHS256)
+			}
+			if kid, ok := t.Header["kid"].(string); ok {
+				if kid == "v1" {
+					return []byte(secret), nil
+				}
+			}
+			return nil, errors.Errorf("unexpected access token kid=%v", t.Header["kid"])
+		})
+		if err != nil {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid access token")
+		}
+		if !audienceContains(claims.Audience, auth.AccessTokenAudienceName) {
+			return echo.NewHTTPError(http.StatusUnauthorized, fmt.Sprintf("Invalid access token, audience mismatch, got %q, expected %q.", claims.Audience, auth.AccessTokenAudienceName))
+		}
+		generateToken := time.Until(claims.ExpiresAt.Time) < auth.RefreshThresholdDuration
+		// Optionally, set a flag or header to notify the client to refresh the token.
+		if generateToken {
+			c.Response().Header().Set("X-Renew-Token", "true")
+		}
+
+		// Store the validated token or claims in the context for downstream handlers.
+		c.Set("user", claims)
+		return next(c)
+</repair>

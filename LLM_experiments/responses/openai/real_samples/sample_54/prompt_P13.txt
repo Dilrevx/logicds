@@ -1,0 +1,38 @@
+<repair>
+    /* Set restrictive umask so the temporary directory is only accessible by the owner */
+    umask(0077);
+    tmpdir = mkdtemp(template);
+    if (!tmpdir) {
+   	    fuse_log(FUSE_LOG_ERR, "mkdtemp(%s) failed: %m\n", template);
+	    exit(1);
+    }
+    
+    /* Bind mount /proc/self/fd onto the temporary directory */
+    if (mount("/proc/self/fd", tmpdir, NULL, MS_BIND, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc/self/fd, %s, MS_BIND): %m\n", tmpdir);
+        exit(1);
+    }
+    
+    /* Remount the bind mount with nodev and nosuid options to prevent device special file exploitation */
+    if (mount(NULL, tmpdir, NULL, MS_BIND | MS_REMOUNT | MS_NODEV | MS_NOSUID, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "remount %s with nodev,nosuid: %m\n", tmpdir);
+        exit(1);
+    }
+    
+    /* Open the temporary directory; O_PATH returns a descriptor that refers to this directory inode */
+    lo->proc_self_fd = open(tmpdir, O_PATH);
+    if (lo->proc_self_fd == -1) {
+        fuse_log(FUSE_LOG_ERR, "open(%s, O_PATH): %m\n", tmpdir);
+        exit(1);
+    }
+    
+    /* Detach the bind mount and remove the temporary directory immediately */
+    if (umount2(tmpdir, MNT_DETACH) < 0) {
+        fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+        exit(1);
+    }
+    
+    if (rmdir(tmpdir) < 0) {
+        fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+    }
+</repair>

@@ -1,0 +1,113 @@
+public class OtpVerifier {
+
+
+    public void otpVerify(Object context, KrbPaData reqPkt, KrbKdcReq request,
+                          KrbEncTktPart encTktReply, KrbPaData pa,
+                          KdcPreauthCallbacks cb, Object rock, Object moddata,
+                          RespondFn respond, Object arg) {
+        Object armorKey = null;
+        KrbPaOtpReq req = null;
+        RequestState rs;
+        int retval = 0;
+        KrbPaData d;
+        KrbPaData plaintext = new KrbPaData();
+        String[] configOut = new String[]{null};
+        String config;
+
+        /*
+         * --- Added validation for the preauthentication data ---
+         * If the preauth data is null or has zero length, then reject the request.
+         */
+        if (pa == null || pa.getContents() == null || pa.getLength() == 0) {
+            retval = KrbConst.KRB5_PREAUTH_FAILED;
+            OtpUtil.comErr("otp", retval, "Empty or missing preauth data is not allowed");
+            respond.respond(arg, retval, null, null, null);
+            return;
+        }
+
+        encTktReply.setFlags(encTktReply.getFlags() | KrbConst.TKT_FLG_PRE_AUTH);
+
+        armorKey = cb.fastArmor(context, rock);
+        if (armorKey == null) {
+            retval = KrbConst.KRB5KDC_ERR_PREAUTH_FAILED;
+            OtpUtil.comErr("otp", retval, "No armor key found when verifying padata");
+            OtpUtil.k5FreePaOtpReq(context, req);
+            respond.respond(arg, retval, null, null, null);
+            return;
+        }
+
+        d = OtpUtil.makeData(pa.getContents(), pa.getLength());
+        KrbPaOtpReq[] reqOut = new KrbPaOtpReq[]{null};
+        retval = OtpUtil.decodeKrb5PaOtpReq(d, reqOut);
+        if (retval != 0) {
+            OtpUtil.comErr("otp", retval, "Unable to decode OTP request");
+            OtpUtil.k5FreePaOtpReq(context, req);
+            respond.respond(arg, retval, null, null, null);
+            return;
+        }
+        req = reqOut[0];
+
+        /*
+         * --- Added validation for the realm in the OTP request ---
+         * If the OTP request contains a realm name, verify it matches the client’s realm.
+         * This prevents an attacker from supplying an arbitrary realm.
+         */
+        if (req.getRealm() != null && !req.getRealm().equalsIgnoreCase(request.getClient().getRealm())) {
+            retval = KrbConst.KRB5_PREAUTH_FAILED;
+            OtpUtil.comErr("otp", retval, "OTP request realm does not match client realm");
+            OtpUtil.k5FreePaOtpReq(context, req);
+            respond.respond(arg, retval, null, null, null);
+            return;
+        }
+
+        retval = OtpUtil.decryptEncdata(context, armorKey, req, plaintext);
+        if (retval != 0) {
+            OtpUtil.comErr("otp", retval, "Unable to decrypt nonce");
+            OtpUtil.k5FreePaOtpReq(context, req);
+            respond.respond(arg, retval, null, null, null);
+            return;
+        }
+
+        retval = OtpUtil.nonceVerify(context, armorKey, plaintext);
+        if (retval != 0) {
+            retval = OtpUtil.timestampVerify(context, plaintext);
+        }
+        OtpUtil.krb5FreeDataContents(context, plaintext);
+        if (retval != 0) {
+            OtpUtil.comErr("otp", retval, "Unable to verify nonce or timestamp");
+            OtpUtil.k5FreePaOtpReq(context, req);
+            respond.respond(arg, retval, null, null, null);
+            return;
+        }
+
+        int[] allocRet = new int[]{0};
+        rs = OtpUtil.k5alloc(allocRet);
+        retval = allocRet[0];
+        if (rs == null) {
+            OtpUtil.k5FreePaOtpReq(context, req);
+            respond.respond(arg, retval, null, null, null);
+            return;
+        }
+        rs.setArg(arg);
+        rs.setRespond(respond);
+
+        retval = cb.getString(context, rock, "otp", configOut);
+        if (retval == 0 && configOut[0] == null) {
+            retval = KrbConst.KRB5_PREAUTH_FAILED;
+        }
+        if (retval != 0) {
+            rs = null;
+            OtpUtil.k5FreePaOtpReq(context, req);
+            respond.respond(arg, retval, null, null, null);
+            return;
+        }
+        config = configOut[0];
+
+        OtpUtil.otpStateVerify(moddata, cb.eventContext(context, rock),
+                request.getClient(), config, req, null, rs);
+        cb.freeString(context, rock, config);
+
+        OtpUtil.k5FreePaOtpReq(context, req);
+    }
+
+}

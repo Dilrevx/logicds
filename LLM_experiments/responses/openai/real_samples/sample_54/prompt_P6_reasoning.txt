@@ -1,0 +1,57 @@
+The temporary directory is now validated and secured before it is used. First, after creating the directory with mkdtemp(), the code checks that the directory actually exists by calling lstat() and confirming that it is a directory. This prevents situations where an attacker might replace or modify the directory (for example, with a symlink) after its creation. 
+
+Then, the code ensures that the permissions on the temporary directory are strictly set to 0700; this means that only the owner (the privileged daemon) has access to it. Restrictive permissions are critical to prevent unprivileged or remote users (or even guest processes) from writing files (like device special files) into the shared directory in a way that could allow them to escalate privileges.
+
+When mounting /proc/self/fd to the temporary directory, the code then reopens the directory with additional flags (O_DIRECTORY and O_NOFOLLOW). The O_NOFOLLOW flag is crucial: it prevents the open() call from following symbolic links, which helps mitigate symlink attacks that might let a malicious user create a file that points somewhere it shouldn’t. By ensuring that the file descriptor comes only from a genuine directory (and not a link that might be redirecting to a device), the risk of unauthorized host device access is reduced.
+
+Finally, the code cleans up by unmounting the bind mount and removing the temporary directory. This sequence of secure operations ensures that the temporary directory used to acquire a file descriptor for /proc/self/fd is only accessible by the appropriate process with strictly controlled permissions. 
+
+<repair>
+    tmpdir = mkdtemp(template);
+    if (!tmpdir) {
+        fuse_log(FUSE_LOG_ERR, "mkdtemp(%s): %m\n", template);
+        exit(1);
+    }
+
+    {
+        struct stat st;
+        if (lstat(tmpdir, &st) < 0) {
+            fuse_log(FUSE_LOG_ERR, "lstat(%s): %m\n", tmpdir);
+            unlink(tmpdir);
+            exit(1);
+        }
+        if (!S_ISDIR(st.st_mode)) {
+            fuse_log(FUSE_LOG_ERR, "%s is not a directory\n", tmpdir);
+            unlink(tmpdir);
+            exit(1);
+        }
+        /* Ensure permissions are strictly 0700 to prevent unauthorized guest modifications. */
+        if ((st.st_mode & 07777) != 0700 && chmod(tmpdir, 0700) < 0) {
+            fuse_log(FUSE_LOG_ERR, "chmod(%s, 0700): %m\n", tmpdir);
+            unlink(tmpdir);
+            exit(1);
+        }
+    }
+
+    if (mount("/proc/self/fd", tmpdir, NULL, MS_BIND, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc/self/fd, %s, MS_BIND): %m\n",
+                 tmpdir);
+        exit(1);
+    }
+
+    /* Now we can get our /proc/self/fd directory file descriptor */
+    lo->proc_self_fd = open(tmpdir, O_PATH | O_DIRECTORY | O_NOFOLLOW);
+    if (lo->proc_self_fd == -1) {
+        fuse_log(FUSE_LOG_ERR, "open(%s, O_PATH): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (umount2(tmpdir, MNT_DETACH) < 0) {
+        fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (rmdir(tmpdir) < 0) {
+        fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+    }
+</repair>

@@ -1,0 +1,57 @@
+<repair>
+    public boolean readFromSections(String user, String collectionUrl, String permission) {
+        String filename = Config.get("rights", "file");
+        String rightsType = Config.get("rights", "type").toLowerCase();
+        Map<String, String> defaults = new HashMap<String, String>();
+        // Sanitize the user input by escaping regex metacharacters.
+        // This ensures that any placeholder substitutions in rights definitions use a literal value.
+        defaults.put("login", Pattern.quote(user));
+        defaults.put("path", collectionUrl);
+        
+        ConfigParser regex = new ConfigParser(defaults);
+        if (DefinedRights.has(rightsType)) {
+            Log.debug("Rights type '%s'", rightsType);
+            regex.readFp(DefinedRights.get(rightsType));
+        } else if ("from_file".equals(rightsType)) {
+            Log.debug("Reading rights from file %s", filename);
+            if (!regex.read(filename)) {
+                Log.error("File '%s' not found for rights", filename);
+                return false;
+            }
+        } else {
+            Log.error("Unknown rights type '%s'", rightsType);
+            return false;
+        }
+    
+        for (String section : regex.sections()) {
+            String reUser = regex.get(section, "user");
+            String reCollection = regex.get(section, "collection");
+            Log.debug(
+                    "Test if '%s:%s' matches against '%s:%s' from section '%s'",
+                    user, collectionUrl, reUser, reCollection, section);
+            Matcher userMatch;
+            try {
+                userMatch = Pattern.compile(reUser).matcher(user);
+            } catch (PatternSyntaxException e) {
+                // Skip sections with an invalid regex pattern
+                continue;
+            }
+            if (userMatch.lookingAt()) {
+                String formatted = formatCollection(reCollection, userMatch);
+                try {
+                    if (Pattern.compile(formatted).matcher(collectionUrl).lookingAt()) {
+                        Log.debug("Section '%s' matches", section);
+                        if (regex.get(section, "permission").contains(permission)) {
+                            return true;
+                        }
+                    } else {
+                        Log.debug("Section '%s' does not match", section);
+                    }
+                } catch (PatternSyntaxException e) {
+                    // Skip sections with an invalid collection regex
+                }
+            }
+        }
+        return false;
+    }
+</repair>

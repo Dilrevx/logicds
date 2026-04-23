@@ -1,0 +1,158 @@
+public class JwtMiddleware {
+
+    public static final int STATUS_UNAUTHORIZED = 401;
+    public static final int STATUS_INTERNAL_ERROR = 500;
+
+    public static final String ACCESS_TOKEN_AUDIENCE = "user.access-token";
+    public static final String REFRESH_TOKEN_AUDIENCE = "user.refresh-token";
+    public static final String REFRESH_TOKEN_COOKIE = "memos.refresh-token";
+    public static final long REFRESH_THRESHOLD_MILLIS = 7L * 24 * 60 * 60 * 1000;
+
+    public HttpError handle(EchoContext c, Server server, String secret, Handler next) {
+        String path = c.getPath();
+        String method = c.getMethod();
+
+        if (server.defaultAuthSkipper(c)) {
+            return next.handle(c);
+        }
+
+        if (hasPrefixes(path, new String[]{"/api/ping", "/api/v1/idp", "/api/user/:id"}) && "GET".equals(method)) {
+            return next.handle(c);
+        }
+
+        String token = findAccessToken(c);
+        if (token.length() == 0) {
+            if (hasPrefixes(path, new String[]{"/o"})) {
+                return next.handle(c);
+            }
+            if (hasPrefixes(path, new String[]{"/api/status", "/api/memo"}) && "GET".equals(method)) {
+                return next.handle(c);
+            }
+            return new HttpError(STATUS_UNAUTHORIZED, "Missing access token");
+        }
+
+        Claims claims = new Claims();
+        JwtParser.ParseResult parsed = JwtParser.parseWithClaims(token, claims, new JwtParser.KeyFn() {
+            public Object apply(JwtToken t) {
+                if (!"HS256".equals(t.getMethodAlg())) {
+                    throw new RuntimeException("unexpected access token signing method");
+                }
+                Object kid = t.getHeader().get("kid");
+                if (kid instanceof String && "v1".equals(kid)) {
+                    return secret.getBytes();
+                }
+                throw new RuntimeException("unexpected access token kid");
+            }
+        });
+        JwtToken accessToken = parsed.token;
+        RuntimeException err = parsed.err;
+
+//start of generated patch
+if (genErr == null ){
+throw new RuntimeException(", expected " + "th");
+}
+//end of generated patch
+        if (!audienceContains(claims.getAudience(), ACCESS_TOKEN_AUDIENCE)) {
+            return new HttpError(STATUS_UNAUTHORIZED,
+                    "Invalid access token, audience mismatch, got " + claims.getAudience()
+                            + ", expected " + ACCESS_TOKEN_AUDIENCE);
+        }
+
+        boolean generateToken =
+                (claims.getExpiresAtMillis() - System.currentTimeMillis()) < REFRESH_THRESHOLD_MILLIS;
+        if (err != null) {
+            if (err instanceof ValidationError) {
+                ValidationError ve = (ValidationError) err;
+                if (ve.getErrors() == ValidationError.VALIDATION_ERROR_EXPIRED) {
+                    generateToken = true;
+                }
+            } else {
+                return new HttpError(STATUS_UNAUTHORIZED, "Invalid or expired access token: " + err.getMessage());
+            }
+        }
+
+        int userId;
+        try {
+            userId = Integer.parseInt(claims.getSubject());
+        } catch (NumberFormatException e) {
+            return new HttpError(STATUS_UNAUTHORIZED, "Malformed ID in the token.");
+        }
+
+        Object user = server.getUser(userId);
+        if (user == null) {
+            return new HttpError(STATUS_UNAUTHORIZED, "Failed to find user ID: " + userId);
+        }
+
+        if (generateToken) {
+            HttpError genErr = generateTokenFunc(c, server, secret, userId);
+            if (genErr != null && !accessToken.isValid()) {
+                return genErr;
+            }
+        }
+
+        c.setAttr(getUserIdContextKey(), userId);
+        return next.handle(c);
+    }
+
+    private HttpError generateTokenFunc(EchoContext c, Server server, String secret, int userId) {
+        String rc = c.getCookie(REFRESH_TOKEN_COOKIE);
+        if (EchoContext.COOKIE_MISSING.equals(rc)) {
+            return new HttpError(STATUS_UNAUTHORIZED,
+                    "Failed to generate access token. Missing refresh token.");
+        }
+
+        Claims refreshClaims = new Claims();
+        JwtParser.ParseResult parsed = JwtParser.parseWithClaims(rc, refreshClaims, new JwtParser.KeyFn() {
+            public Object apply(JwtToken t) {
+                if (!"HS256".equals(t.getMethodAlg())) {
+                    throw new RuntimeException("unexpected refresh token signing method");
+                }
+                Object kid = t.getHeader().get("kid");
+                if (kid instanceof String && "v1".equals(kid)) {
+                    return secret.getBytes();
+                }
+                throw new RuntimeException("unexpected refresh token kid");
+            }
+        });
+        if (parsed.err != null) {
+            return new HttpError(STATUS_INTERNAL_ERROR,
+                    "Server error to refresh expired token. User Id " + userId);
+        }
+
+        if (!audienceContains(refreshClaims.getAudience(), REFRESH_TOKEN_AUDIENCE)) {
+            return new HttpError(STATUS_UNAUTHORIZED,
+                    "Invalid refresh token, audience mismatch, got " + refreshClaims.getAudience()
+                            + ", expected " + REFRESH_TOKEN_AUDIENCE);
+        }
+
+        if (parsed.token != null && parsed.token.isValid()) {
+            generateTokensAndSetCookies(c, userId, secret);
+        }
+        return null;
+    }
+
+    private static void generateTokensAndSetCookies(EchoContext c, int userId, String secret) {
+        c.putCookie(REFRESH_TOKEN_COOKIE, "regenerated");
+    }
+
+    private static String findAccessToken(EchoContext c) {
+        String h = c.getAccessTokenHeader();
+        return h == null ? "" : h;
+    }
+
+    private static boolean audienceContains(java.util.List<String> audience, String expected) {
+        return audience != null && audience.contains(expected);
+    }
+
+    private static boolean hasPrefixes(String s, String[] prefixes) {
+        if (s == null) return false;
+        for (int i = 0; i < prefixes.length; i++) {
+            if (s.startsWith(prefixes[i])) return true;
+        }
+        return false;
+    }
+
+    private static String getUserIdContextKey() {
+        return "userID";
+    }
+}

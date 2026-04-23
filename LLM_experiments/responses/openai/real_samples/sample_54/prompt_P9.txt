@@ -1,0 +1,51 @@
+<repair>
+    /* Create a temporary directory in a location not accessible to guests.
+     * The template should point to a secure, private directory.
+     * Also, immediately restrict its permissions so that only the owner (root)
+     * can access it.
+     */
+    tmpdir = mkdtemp(template);
+    if (!tmpdir) {
+        fuse_log(FUSE_LOG_ERR, "mkdtemp(%s) failed: %m\n", template);
+        exit(1);
+    }
+    
+    if (chmod(tmpdir, 0700) < 0) {
+        fuse_log(FUSE_LOG_ERR, "chmod(%s, 0700) failed: %m\n", tmpdir);
+        exit(1);
+    }
+    
+    /*
+     * Bind-mount /proc/self/fd onto the temporary directory.
+     * Use the MS_RDONLY flag to ensure that the mounted directory cannot be
+     * modified by users. Combined with the secure mode on tmpdir,
+     * this prevents a privileged guest (who may share the virtio-fs directory)
+     * from manipulating files (e.g. creating a device special file).
+     */
+    if (mount("/proc/self/fd", tmpdir, NULL, MS_BIND | MS_RDONLY, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc/self/fd, %s, MS_BIND | MS_RDONLY) failed: %m\n",
+                 tmpdir);
+        exit(1);
+    }
+    
+    /* Now obtain our /proc/self/fd directory file descriptor.
+     * Using O_DIRECTORY and O_PATH reinforces that we only want a handle to the directory.
+     */
+    lo->proc_self_fd = open(tmpdir, O_PATH | O_DIRECTORY);
+    if (lo->proc_self_fd == -1) {
+        fuse_log(FUSE_LOG_ERR, "open(%s, O_PATH | O_DIRECTORY) failed: %m\n", tmpdir);
+        exit(1);
+    }
+    
+    /* Unmount the temporary directory and remove it immediately to
+     * eliminate any window during which a guest could misuse the shared directory.
+     */
+    if (umount2(tmpdir, MNT_DETACH) < 0) {
+        fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH) failed: %m\n", tmpdir);
+        exit(1);
+    }
+    
+    if (rmdir(tmpdir) < 0) {
+        fuse_log(FUSE_LOG_ERR, "rmdir(%s) failed: %m\n", tmpdir);
+    }
+</repair>

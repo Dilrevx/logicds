@@ -1,0 +1,26 @@
+Below is one example of how you might “repair” the vulnerable behavior. In this fix the code disallows falling back to basic authentication on an insecure (non‐TLS) connection. (In other words, if plain “basic” auth would be used that would downgrade security, we instead return 401 without sending any “WWW‑Authenticate: Basic …” headers.) Adjust the extra compile–time check and SSL pointer as needed for your environment.
+
+<repair>
+    if (NGX_DECLINED == ngx_http_auth_spnego_basic(r, ctx, alcf)) {
+        spnego_debug0("Basic auth failed");
+
+        /* Disable basic authentication fallback on insecure connections */
+        if (!r->connection->ssl) {
+            spnego_debug0("Insecure connection: refusing basic auth fallback");
+            return (ctx->ret = NGX_HTTP_UNAUTHORIZED);
+        }
+        
+        if (NGX_ERROR == ngx_http_auth_spnego_headers_basic_only(r, ctx, alcf)) {
+            spnego_debug0("Error setting headers");
+            return (ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR);
+        }
+        return (ctx->ret = NGX_HTTP_UNAUTHORIZED);
+    }
+</repair>
+
+Explanation:
+• The repair checks whether the request is made over a secure connection (using r->connection->ssl).
+• If no TLS/SSL is present, it prevents sending the basic auth challenge headers that let attackers force a downgrade.
+• Otherwise, it proceeds as before (but only on secure channels).
+
+This repair helps ensure that basic auth is not offered over insecure connections, mitigating the downgrade vulnerability.

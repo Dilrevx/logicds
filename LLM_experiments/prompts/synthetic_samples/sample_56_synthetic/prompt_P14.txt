@@ -1,0 +1,75 @@
+Provide a repair for the mentioned buggy code snippet below to fix a vulnerability.
+Provide repaired code between <repair> and </repair> tags. Do not provide any extra text explanation.
+The code between <repair> and </repair> will be directly copied to replace the code between <buggy_code> and </buggy_code>.
+Here is the vulnerability description of the buggy source code:
+<vulnerability_description>
+Improper Access Control in Pypi calibreweb.
+
+</vulnerability_description>
+Here is the buggy source code:
+<buggy_code>
+        if ("POST".equals(request.getMethod())) {
+            Map<String, String> toSave = request.getForm();
+            if (!currentUser.roleEditShelfs() && "on".equals(toSave.get("is_public"))) {
+                return ShelfResponse.redirect("/web/index",
+                        "Sorry you are not allowed to create a public shelf", "error");
+            }
+            String isPublicRaw = toSave.get("is_public");
+            int isPublic = (isPublicRaw != null && !isPublicRaw.isEmpty()) ? 1 : 0;
+            if (Config.configKoboSync) {
+                shelf.setKoboSync(toSave.get("kobo_sync") != null);
+                if (shelf.isKoboSync()) {
+                    Session.archiveDelete(currentUser.getId(), shelf.getUuid());
+                    try {
+                        Session.commit();
+                    } catch (Exception e) {
+                        Session.rollback();
+                    }
+                }
+            }
+            String shelfTitle = toSave.getOrDefault("title", "");
+            if (checkShelfIsUnique(shelf, shelfTitle, isPublic, shelfId)) {
+                shelf.setName(shelfTitle);
+                shelf.setIsPublic(isPublic);
+                String shelfAction;
+                String flashText;
+                if (shelfId == null) {
+                    shelf.setUserId(currentUser.getId());
+                    Session.add(shelf);
+                    shelfAction = "created";
+                    flashText = "Shelf " + shelfTitle + " created";
+                } else {
+                    shelfAction = "changed";
+                    flashText = "Shelf " + shelfTitle + " changed";
+                }
+                try {
+                    Session.commit();
+                    Logger.info("Shelf " + shelfTitle + " " + shelfAction);
+                    return ShelfResponse.redirect("/shelf/show_shelf?id=" + shelf.getId(),
+                            flashText, "success");
+                } catch (CalibreErrors.OperationalError ex) {
+                    Session.rollback();
+                    Logger.error("Settings DB is not Writeable");
+                } catch (CalibreErrors.InvalidRequestError ex) {
+                    Session.rollback();
+                    Logger.error("Settings DB is not Writeable");
+                } catch (Exception ex) {
+                    Session.rollback();
+                    Logger.error("There was an error");
+                }
+</buggy_code>
+Here is a repair description to fix the buggy source code
+<repair_description>
+The repair simplifies and strengthens the way the code determines whether a shelf should be public, ensuring that only an explicit "on" flag results in a public shelf. Initially, both the buggy and repaired versions first check if the HTTP method is POST and fetch the form data. They both proceed to verify whether the current user has sufficient privileges to create or modify a public shelf. If the user isn’t permitted and the form explicitly indicates a public shelf by using the string “on,” an error response is returned. This access control check remains in both versions.
+
+The key difference lies in how the “is_public” flag is processed. In the original code, the value of the “is_public” parameter is retrieved into a temporary string variable, and then a check is performed to see if that string is not null and not empty. This simplistic check is vulnerable because it allows any nonempty input (even if not exactly “on”) to be interpreted as a positive flag, potentially leading to unintended exposure or elevation of privileges.
+
+In the repaired version, instead of checking just for non-null and non-empty values, the code explicitly compares the retrieved value to the string “on.” By doing so, the repair tightens the validation logic, making sure that only a deliberate “on” input triggers the shelf to be public. This explicit comparison prevents bypasses wherein an attacker might set the value to any other non-empty string that would have been mistakenly accepted as a valid public marker in the original code.
+
+The rest of the code remains essentially unchanged. After determining the public status, the repair continues by handling specific configurations such as KoboSync: if the shelf is marked for syncing with Kobo, it triggers an archive deletion for the current user’s shelf and attempts a commit to preserve consistency. Error handling around database commits also remains intact, ensuring that any operational or request errors result in a rollback and appropriate logging.
+
+Next, the shelf title is obtained with a default to an empty string when not provided. The function then verifies the uniqueness of the shelf based on the title, public flag, and an identifier. If everything is in order, the shelf’s name and public status are set. Depending on whether this is a new shelf or an update, different messages are logged, and changes are committed to the database. Error handling ensures that any exceptions lead to a rollback of the session to prevent inconsistent state, with errors logged accordingly.
+
+Overall, the repair specifically addresses the vulnerability by ensuring that the public flag is only enabled if the value is exactly “on.” This focused change prevents unauthorized elevation to public shelves and mends the improper access control issue without altering the intended behavior for other functionalities such as syncing and general shelf management.
+</repair_description>
+Provide a repair for the mentioned code snippet to fix the vulnerability.

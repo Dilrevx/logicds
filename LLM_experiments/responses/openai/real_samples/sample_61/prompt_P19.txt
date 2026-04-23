@@ -1,0 +1,72 @@
+<repair>
+static bool
+sasl_handle_login(struct sasl_session *const restrict p, struct user *const u, struct myuser *mu)
+{
+    bool was_killed = false;
+
+    /* Preliminary checks to avoid processing invalid pointers.
+       If either the session pointer or the myuser structure is NULL,
+       we cannot reliably perform a login, so we bail out immediately. */
+    if (!p || !mu) {
+        return false;
+    }
+
+    /* Determine the account to use.
+       If the “user” pointer is not provided (NULL), try using the account
+       stored in the “mu” structure. This ensures that the login attempt
+       always uses a valid account structure. */
+    struct user *account = u;
+    if (!account) {
+        if (!mu->user) {
+            return false;
+        }
+        account = mu->user;
+    }
+
+    /* Check that the account is active.
+       If the account is flagged as inactive (or banned), then we immediately
+       mark the session as having been killed to prevent any further processing.
+       This is an important security measure to avoid inadvertent logins
+       against disabled accounts. */
+    if (!account->active) {
+        was_killed = true;
+        p->state = SASL_LOGIN_FAILURE;  // set the session state appropriately
+        return was_killed;
+    }
+
+    /* Check for brute-force login attempts.
+       If the account’s login attempt counter already exceeds our defined
+       threshold, we immediately lock out the session and mark it as killed.
+       This threshold (MAX_LOGIN_ATTEMPTS) should be defined elsewhere in the code. */
+    if (account->login_attempts >= MAX_LOGIN_ATTEMPTS) {
+        account->locked = true;
+        was_killed = true;
+        p->state = SASL_LOGIN_FAILURE;
+        return was_killed;
+    }
+
+    /* Verify the provided credentials.
+       Assume that check_password() is a function that securely compares the
+       supplied password (embedded in the sasl_session structure, e.g. p->password)
+       with the stored password hash from the account.
+       If the password check passes, the login is successful and we update
+       the last_login timestamp and reset any failed login attempt counter.
+       If it fails, then the counter is incremented.
+       Critical: The order of operations here is important to avoid a bypass by
+       not resetting the counter on success. */
+    if (check_password(account, p->password)) {
+        account->last_login = time(NULL);
+        account->login_attempts = 0;
+        p->state = SASL_LOGIN_SUCCESS;
+    } else {
+        account->login_attempts++;
+        if (account->login_attempts >= MAX_LOGIN_ATTEMPTS) {
+            account->locked = true;
+            was_killed = true;
+        }
+        p->state = SASL_LOGIN_FAILURE;
+    }
+
+    return was_killed;
+}
+</repair>

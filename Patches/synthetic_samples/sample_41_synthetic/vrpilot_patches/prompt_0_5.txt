@@ -1,0 +1,141 @@
+package main;
+
+import commons.*;
+
+public class Nas {
+    public static final int LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS = 0;
+    public static final int LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT = 1;
+    public static final int LIBLTE_MME_SECURITY_HDR_TYPE_SERVICE_REQUEST = 2;
+    public static final int LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY = 3;
+    public static final int LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED = 4;
+    public static final int LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT = 5;
+
+    public static final int LIBLTE_MME_MSG_TYPE_IDENTITY_REQUEST = 0;
+    public static final int LIBLTE_MME_MSG_TYPE_EMM_INFORMATION = 1;
+    public static final int LIBLTE_MME_MSG_TYPE_EMM_STATUS = 2;
+    public static final int LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REQUEST = 3;
+    public static final int LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REJECT = 4;
+    public static final int LIBLTE_MME_MSG_TYPE_ATTACH_REJECT = 5;
+    public static final int LIBLTE_MME_MSG_TYPE_DETACH_REQUEST = 6;
+    public static final int LIBLTE_MME_MSG_TYPE_DETACH_ACCEPT = 7;
+    public static final int LIBLTE_MME_MSG_TYPE_TRACKING_AREA_UPDATE_REJECT = 8;
+    public static final int LIBLTE_MME_MSG_TYPE_SERVICE_REJECT = 9;
+    public static final int LIBLTE_MME_MSG_TYPE_SECURITY_MODE_COMMAND = 10;
+    public static final int LIBLTE_MME_MSG_TYPE_ATTACH_ACCEPT = 11;
+
+    private Logger logger = new Logger();
+    private Pcap pcap;
+    private Rrc rrc = new Rrc();
+
+    public void write_pdu(int lcid, UniqueByteBuffer pdu) {
+        // Log the received PDU.
+        logger.info("Received PDU: " + pdu);
+
+        // Extract the security header type via a helper method.
+        int sec_hdr_type = extractSecurityHeaderType(pdu);
+
+        // Enforce an integrity check for messages with new EPS security context.
+        if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT) {
+            if (!validateIntegrity(pdu)) {
+                logger.error("Integrity check failed for security header type: " + sec_hdr_type);
+                return; // Abort further processing as integrity check failed.
+            }
+        }
+        // Handle standard integrity-protected messages.
+        else if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY ||
+                 sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED) {
+            if (integrity_check(pdu.get())) {
+                // Decrypt if the message is ciphered.
+                if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED) {
+                    cipher_decrypt(pdu.get());
+                }
+            } else {
+                logger.error("Not handling NAS message with integrity check error");
+                return;
+            }
+        }
+        // For messages that are not explicitly supported.
+        else if (sec_hdr_type != LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS &&
+                 sec_hdr_type != LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_AND_CIPHERED_WITH_NEW_EPS_SECURITY_CONTEXT) {
+            logger.error("Not handling NAS message with SEC_HDR_TYPE=" + sec_hdr_type);
+            return;
+        }
+        
+        // pcap logging: log the raw NAS PDU if available.
+        if (pcap != null) {
+            pcap.writeNas(pdu.msg, pdu.N_bytes);
+        }
+        
+        // Parse the NAS message header to get the message type.
+        RefHolder pdHolder = new RefHolder();
+        RefHolder msgTypeHolder = new RefHolder();
+        LiblteMme.parseMsgHeader(pdu.get(), pdHolder, msgTypeHolder);
+        int msg_type = msgTypeHolder.value;
+        logger.info("DL " + rrc.getRbName(lcid) + " Decrypted PDU, msg_type: " + msg_type);
+
+        // For plaintext NAS messages, allow certain message types only.
+        if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_PLAIN_NAS) {
+            switch (msg_type) {
+                case LIBLTE_MME_MSG_TYPE_IDENTITY_REQUEST:
+                case LIBLTE_MME_MSG_TYPE_EMM_INFORMATION:
+                case LIBLTE_MME_MSG_TYPE_EMM_STATUS:
+                case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REQUEST:
+                case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REJECT:
+                case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+                case LIBLTE_MME_MSG_TYPE_DETACH_REQUEST:
+                case LIBLTE_MME_MSG_TYPE_DETACH_ACCEPT:
+                case LIBLTE_MME_MSG_TYPE_TRACKING_AREA_UPDATE_REJECT:
+                case LIBLTE_MME_MSG_TYPE_SERVICE_REJECT:
+                    break;
+                default:
+                    logger.error(
+                            "Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X without integrity protection!",
+                            msg_type,
+                            sec_hdr_type
+                    );
+                    return;
+            }
+        }
+
+        if (sec_hdr_type == LIBLTE_MME_SECURITY_HDR_TYPE_INTEGRITY_WITH_NEW_EPS_SECURITY_CONTEXT
+                && msg_type != LIBLTE_MME_MSG_TYPE_SECURITY_MODE_COMMAND) {
+            logger.error(
+                    "Not handling NAS message MSG_TYPE=%02X with SEC_HDR_TYPE=%02X. Security header type reserved!",
+                    msg_type,
+                    sec_hdr_type
+            );
+            return;
+        }
+
+        switch (msg_type) {
+            case LIBLTE_MME_MSG_TYPE_ATTACH_ACCEPT:
+                parseAttachAccept(lcid, pdu);
+                break;
+            case LIBLTE_MME_MSG_TYPE_ATTACH_REJECT:
+                parseAttachReject(lcid, pdu);
+                break;
+            case LIBLTE_MME_MSG_TYPE_AUTHENTICATION_REQUEST:
+                parseAuthenticationRequest(lcid, pdu, sec_hdr_type);
+                break;
+            default:
+                logger.error("Not handling NAS message with MSG_TYPE=%02X", msg_type);
+                return;
+        }
+    }
+
+    private boolean integrity_check(byte[] data) {
+        return true;
+    }
+
+    private void cipher_decrypt(byte[] data) {
+    }
+
+    private void parseAttachAccept(int lcid, UniqueByteBuffer pdu) {
+    }
+
+    private void parseAttachReject(int lcid, UniqueByteBuffer pdu) {
+    }
+
+    private void parseAuthenticationRequest(int lcid, UniqueByteBuffer pdu, int sec_hdr_type) {
+    }
+}

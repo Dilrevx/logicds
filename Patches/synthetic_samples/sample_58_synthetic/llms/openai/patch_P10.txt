@@ -1,0 +1,58 @@
+public class AuthUserMiddleware {
+
+    public static final String CTX_UUID_KEY = "uuid";
+
+    private final AuthService authService;
+
+    public AuthUserMiddleware(AuthService authService) {
+        this.authService = authService;
+    }
+
+
+    public void adminAuth(GinContext ctx) {
+        String token = extractToken(ctx);
+        if (token == null || token.isEmpty()) {
+            handleResponse(ctx, AuthError.unauthorized(AuthError.UNAUTHORIZED_REASON));
+            ctx.abort();
+            return;
+        }
+
+        AuthService.CacheResult result = authService.getAdminUserCacheInfo(ctx, token);
+        UserInfo userInfo = result.userInfo;
+        Exception err = result.err;
+
+        // Handle errors or missing user info
+        if (err != null || userInfo == null) {
+            handleResponse(ctx, AuthError.forbidden(AuthError.UNAUTHORIZED_REASON));
+            ctx.abort();
+            return;
+        }
+        
+        // Verify that the user has admin privileges
+        if (!userInfo.isAdmin()) {
+            handleResponse(ctx, AuthError.forbidden("Admin privileges required"));
+            ctx.abort();
+            return;
+        }
+
+        // Additional check for deleted users
+        if (userInfo.getUserStatus() == UserStatus.DELETED) {
+            handleResponse(ctx, AuthError.unauthorized(AuthError.UNAUTHORIZED_REASON));
+            ctx.abort();
+            return;
+        }
+        
+        // Set the authenticated admin user in the context
+        ctx.set(CTX_UUID_KEY, userInfo);
+        ctx.next();
+    }
+
+
+    private static String extractToken(GinContext ctx) {
+        return ctx.getToken();
+    }
+
+    private static void handleResponse(GinContext ctx, AuthError error) {
+        ctx.setResponseError(error);
+    }
+}

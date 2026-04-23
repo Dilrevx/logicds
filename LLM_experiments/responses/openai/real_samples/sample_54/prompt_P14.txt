@@ -1,0 +1,55 @@
+<repair>
+    tmpdir = mkdtemp(template);
+    if (!tmpdir) {
+   	    fuse_log(FUSE_LOG_ERR, "mkdtemp(%s): %m\n", template);
+   	    exit(1);
+    }
+
+    /*
+     * Use bind mount flags to disable device creation and suid execution.
+     * This limits what can be done with the mounted directory.
+     */
+    if (mount("/proc/self/fd", tmpdir, NULL,
+              MS_BIND | MS_NODEV | MS_NOSUID, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc/self/fd, %s, MS_BIND|MS_NODEV|MS_NOSUID): %m\n",
+                 tmpdir);
+        exit(1);
+    }
+
+    /*
+     * Open the temporary directory with extra restrictions to avoid symlink attacks.
+     * O_DIRECTORY ensures we’re opening a directory,
+     * and O_NOFOLLOW prevents following a symlink, which together mitigate
+     * possible device special file substitution.
+     */
+    lo->proc_self_fd = open(tmpdir, O_PATH | O_DIRECTORY | O_NOFOLLOW);
+    if (lo->proc_self_fd == -1) {
+        fuse_log(FUSE_LOG_ERR, "open(%s, O_PATH|O_DIRECTORY|O_NOFOLLOW): %m\n", tmpdir);
+        exit(1);
+    }
+
+    /* Verify that the opened file descriptor is indeed a directory */
+    {
+        struct stat st;
+        if (fstat(lo->proc_self_fd, &st) < 0) {
+            fuse_log(FUSE_LOG_ERR, "fstat(%s): %m\n", tmpdir);
+            close(lo->proc_self_fd);
+            exit(1);
+        }
+        if (!S_ISDIR(st.st_mode)) {
+            fuse_log(FUSE_LOG_ERR, "%s is not a directory\n", tmpdir);
+            close(lo->proc_self_fd);
+            exit(1);
+        }
+    }
+
+    /* Clean up the temporary mount point */
+    if (umount2(tmpdir, MNT_DETACH) < 0) {
+        fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (rmdir(tmpdir) < 0) {
+        fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+    }
+</repair>

@@ -1,0 +1,70 @@
+<repair>
+func VerifyGet(cfg schema.AuthenticationBackendConfiguration) middlewares.RequestHandler {
+	refreshProfile, refreshProfileInterval := getProfileRefreshSettings(cfg)
+
+	return func(ctx *middlewares.AutheliaCtx) {
+		ctx.Logger.Tracef("Headers=%s", ctx.Request.Header.String())
+		targetURL, err := ctx.GetOriginalURL()
+		if err != nil {
+			ctx.Error(fmt.Errorf("Unable to parse target URL: %s", err), operationFailedMessage)
+			return
+		}
+
+		// Only allow HTTPS and WSS schemes.
+		if !isSchemeHTTPS(targetURL) && !isSchemeWSS(targetURL) {
+			ctx.Logger.Error(fmt.Errorf("Scheme of target URL %s must be secure since cookies are "+
+				"only transported over a secure connection for security reasons", targetURL.String()))
+			ctx.ReplyUnauthorized()
+			return
+		}
+
+		// Ensure the URL path is normalized.
+		// This prevents crafted malformed paths (for example, with extra dots or slashes)
+		// from bypassing the intended authentication mechanism.
+		canonicalPath := path.Clean(targetURL.Path)
+		if canonicalPath != targetURL.Path {
+			ctx.Logger.Error(fmt.Errorf("target URL path %s is not normalized", targetURL.Path))
+			ctx.ReplyUnauthorized()
+			return
+		}
+
+		// Verify that the URL is under the protected domain.
+		if !isURLUnderProtectedDomain(targetURL, ctx.Configuration.Session.Domain) {
+			ctx.Logger.Error(fmt.Errorf("The target URL %s is not under the protected domain %s",
+				targetURL.String(), ctx.Configuration.Session.Domain))
+			ctx.ReplyUnauthorized()
+			return
+		}
+
+		isBasicAuth, username, name, groups, emails, authLevel, err := verifyAuth(ctx, targetURL, refreshProfile, refreshProfileInterval)
+		method := ctx.XForwardedMethod()
+
+		if err != nil {
+			ctx.Logger.Error(fmt.Sprintf("Error caught when verifying user authorization: %s", err))
+
+			if err := updateActivityTimestamp(ctx, isBasicAuth, username); err != nil {
+				ctx.Error(fmt.Errorf("Unable to update last activity: %s", err), operationFailedMessage)
+				return
+			}
+
+			handleUnauthorized(ctx, targetURL, isBasicAuth, username, method)
+			return
+		}
+
+		authorized := isTargetURLAuthorized(ctx.Providers.Authorizer, *targetURL, username, groups, ctx.RemoteIP(), method, authLevel)
+		switch authorized {
+		case Forbidden:
+			ctx.Logger.Infof("Access to %s is forbidden to user %s", targetURL.String(), username)
+			ctx.ReplyForbidden()
+		case NotAuthorized:
+			handleUnauthorized(ctx, targetURL, isBasicAuth, username, method)
+		case Authorized:
+			setForwardedHeaders(&ctx.Response.Header, username, name, groups, emails)
+		}
+
+		if err := updateActivityTimestamp(ctx, isBasicAuth, username); err != nil {
+			ctx.Error(fmt.Errorf("Unable to update last activity: %s", err), operationFailedMessage)
+		}
+	}
+}
+</repair>

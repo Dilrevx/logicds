@@ -1,0 +1,46 @@
+public class AuthUserMiddleware {
+
+    public static final String CTX_UUID_KEY = "uuid";
+
+    private final AuthService authService;
+
+    public AuthUserMiddleware(AuthService authService) {
+        this.authService = authService;
+    }
+
+    // Main middleware processing method
+    public void process(GinContext ctx) {
+        // First extract the token from the request context
+        String token = extractToken(ctx);
+
+        // Look up the cached admin user info based on the token.
+        AuthService.CacheResult result = authService.getAdminUserCacheInfo(ctx, token);
+        UserInfo userInfo = result.userInfo;
+        Exception err = result.err;
+
+        if (err != null) {
+            handleResponse(ctx, AuthError.forbidden(AuthError.UNAUTHORIZED_REASON));
+            ctx.abort();
+            return;
+        }
+
+        if (userInfo != null) {
+            // If the user was marked as deleted, reject the request.
+            if (userInfo.getUserStatus() == UserStatus.DELETED) {
+                handleResponse(ctx, AuthError.unauthorized(AuthError.UNAUTHORIZED_REASON));
+                ctx.abort();
+                return;
+            }
+            ctx.set(CTX_UUID_KEY, userInfo);
+        }
+        ctx.next();
+    }
+
+    private static String extractToken(GinContext ctx) {
+        return ctx.getToken();
+    }
+
+    private static void handleResponse(GinContext ctx, AuthError error) {
+        ctx.setResponseError(error);
+    }
+}

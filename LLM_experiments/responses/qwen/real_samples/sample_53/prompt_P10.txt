@@ -1,0 +1,39 @@
+<repair>
+int _mkp_stage_30(struct plugin *p,
+        struct client_session *cs,
+        struct session_request *sr)
+{
+    mk_ptr_t referer;
+    char *decoded_uri;
+    (void) p;
+    (void) cs;
+
+    // Decode the URI to prevent bypassing access restrictions via encoded characters
+    decoded_uri = mk_api->str_decode_url(sr->uri.data, sr->uri.len);
+    if (!decoded_uri) {
+        PLUGIN_TRACE("[FD %i] Close connection, invalid URL encoding", cs->socket);
+        mk_api->header_set_http_status(sr, MK_CLIENT_BAD_REQUEST);
+        return MK_PLUGIN_RET_CLOSE_CONX;
+    }
+
+    PLUGIN_TRACE("[FD %i] Mandril validating URL", cs->socket);
+    if (mk_security_check_url(decoded_uri) < 0) {
+        PLUGIN_TRACE("[FD %i] Close connection, blocked URL", cs->socket);
+        mk_api->header_set_http_status(sr, MK_CLIENT_FORBIDDEN);
+        free(decoded_uri);
+        return MK_PLUGIN_RET_CLOSE_CONX;
+    }
+
+    PLUGIN_TRACE("[FD %d] Mandril validating hotlinking", cs->socket);
+    referer = mk_api->header_get(&sr->headers_toc, "Referer", strlen("Referer"));
+    if (mk_security_check_hotlink(decoded_uri, sr->host, referer) < 0) {
+        PLUGIN_TRACE("[FD %i] Close connection, deny hotlinking.", cs->socket);
+        mk_api->header_set_http_status(sr, MK_CLIENT_FORBIDDEN);
+        free(decoded_uri);
+        return MK_PLUGIN_RET_CLOSE_CONX;
+    }
+
+    free(decoded_uri);
+    return MK_PLUGIN_RET_NOT_ME;
+}
+</repair>

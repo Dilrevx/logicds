@@ -1,0 +1,47 @@
+<repair>
+def create_edit_shelf(shelf, page_title, page, shelf_id=False):
+    from flask import abort, flash, redirect, url_for
+    from datetime import datetime
+
+    sync_only_selected_shelves = current_user.kobo_only_shelves_sync
+
+    # If this is an edit action, ensure the shelf exists and belongs to the current user.
+    if shelf_id:
+        shelf_obj = calibre_db.session.query(ub.Shelf).filter(
+            ub.Shelf.id == shelf_id,
+            ub.Shelf.user_id == current_user.id
+        ).first()
+        if not shelf_obj:
+            abort(404)  # Shelf not found or not owned by the current user.
+
+        # Update shelf details safely.
+        shelf_obj.title = shelf.title
+        # If you are tracking update times, update the timestamp.
+        shelf_obj.updated_at = datetime.utcnow()
+
+    else:
+        # When creating a new shelf that is eligible for Kobo sync, ensure that if the
+        # user's settings enforce syncing only one shelf, they do not exceed that limit.
+        # It’s critical to check the kobo_sync flag on the incoming shelf object.
+        is_sync = getattr(shelf, 'kobo_sync', False)
+        if sync_only_selected_shelves and is_sync:
+            sync_count = calibre_db.session.query(ub.Shelf).filter(
+                ub.Shelf.user_id == current_user.id,
+                ub.Shelf.kobo_sync.is_(True)
+            ).count()
+            # Enforce that the user can sync only one shelf.
+            if sync_count >= 1:
+                flash("You are allowed to sync only one shelf.", "error")
+                return redirect(url_for('shelf_page'))
+
+        # Create a new shelf and assign the current user as owner.
+        shelf_obj = ub.Shelf(
+            user_id=current_user.id,
+            title=shelf.title,
+            kobo_sync=is_sync
+        )
+        calibre_db.session.add(shelf_obj)
+
+    calibre_db.session.commit()
+    return redirect(url_for(page))
+</repair>

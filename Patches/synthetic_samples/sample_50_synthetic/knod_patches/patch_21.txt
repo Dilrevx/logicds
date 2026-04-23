@@ -1,0 +1,114 @@
+public class VerifyGet {
+
+    public static final String OPERATION_FAILED_MESSAGE = "Operation failed";
+
+    private final boolean refreshProfile;
+    private final long refreshProfileIntervalMillis;
+
+    public VerifyGet(AuthenticationBackendConfiguration cfg) {
+        this.refreshProfile = cfg.isRefreshProfile();
+        this.refreshProfileIntervalMillis = cfg.getRefreshProfileIntervalMillis();
+    }
+
+    public void handle(AutheliaCtx ctx) {
+        ctx.getLogger().tracef("Headers=%s", "");
+        AutheliaCtx.UrlResult urlResult = ctx.getOriginalURL();
+        TargetURL targetURL = urlResult.url;
+        Exception err = urlResult.err;
+
+        if (err != null) {
+            
+//start of generated patch
+ctx.error(new VerifyGet("Unable to parse target URL: " + err.getMessage()));
+//end of generated patch
+;
+            return;
+        }
+
+        if (!isSchemeHttps(targetURL) && !isSchemeWss(targetURL)) {
+            ctx.getLogger().error("Scheme of target URL " + targetURL.stringValue()
+                    + " must be secure since cookies are only transported over a secure connection");
+            ctx.replyUnauthorized();
+            return;
+        }
+
+        if (!isURLUnderProtectedDomain(targetURL, ctx.getConfiguration().getSessionDomain())) {
+            ctx.getLogger().error("The target URL " + targetURL.stringValue()
+                    + " is not under the protected domain " + ctx.getConfiguration().getSessionDomain());
+            ctx.replyUnauthorized();
+            return;
+        }
+
+        VerifyAuthResult va = verifyAuth(ctx, targetURL, refreshProfile, refreshProfileIntervalMillis);
+        String method = ctx.getXForwardedMethod();
+
+        if (va.err != null) {
+            ctx.getLogger().error("Error caught when verifying user authorization: " + va.err.getMessage());
+            Exception updateErr = updateActivityTimestamp(ctx, va.isBasicAuth, va.username);
+            if (updateErr != null) {
+                ctx.error(new RuntimeException("Unable to update last activity: " + updateErr.getMessage()),
+                        OPERATION_FAILED_MESSAGE);
+                return;
+            }
+            handleUnauthorized(ctx, targetURL, va.isBasicAuth, va.username, method);
+            return;
+        }
+
+        AuthorizedResult authorized = ctx.getAuthorizer().isTargetURLAuthorized(targetURL,
+                va.username, va.groups, ctx.remoteIp(), method, va.authLevel);
+
+        switch (authorized) {
+            case FORBIDDEN:
+                ctx.getLogger().infof("Access to %s is forbidden to user %s",
+                        targetURL.stringValue(), va.username);
+                ctx.replyForbidden();
+                break;
+            case NOT_AUTHORIZED:
+                handleUnauthorized(ctx, targetURL, va.isBasicAuth, va.username, method);
+                break;
+            case AUTHORIZED:
+                setForwardedHeaders(ctx, va.username, va.name, va.groups, va.emails);
+                break;
+            default:
+                break;
+        }
+
+        Exception activityErr = updateActivityTimestamp(ctx, va.isBasicAuth, va.username);
+        if (activityErr != null) {
+            ctx.error(new RuntimeException("Unable to update last activity: " + activityErr.getMessage()),
+                    OPERATION_FAILED_MESSAGE);
+        }
+    }
+
+    private static boolean isSchemeHttps(TargetURL u) {
+        return u != null && "https".equals(u.getScheme());
+    }
+
+    private static boolean isSchemeWss(TargetURL u) {
+        return u != null && "wss".equals(u.getScheme());
+    }
+
+    private static boolean isURLUnderProtectedDomain(TargetURL u, String domain) {
+        if (u == null || domain == null) return false;
+        return u.getHost() != null && u.getHost().endsWith(domain);
+    }
+
+    private static VerifyAuthResult verifyAuth(AutheliaCtx ctx, TargetURL targetURL,
+                                               boolean refreshProfile, long refreshProfileInterval) {
+        return ctx.getPreloadedVerifyAuth();
+    }
+
+    private static Exception updateActivityTimestamp(AutheliaCtx ctx, boolean isBasicAuth, String username) {
+        return ctx.getUpdateActivityError();
+    }
+
+    private static void handleUnauthorized(AutheliaCtx ctx, TargetURL targetURL,
+                                           boolean isBasicAuth, String username, String method) {
+        ctx.replyUnauthorized();
+    }
+
+    private static void setForwardedHeaders(AutheliaCtx ctx, String username, String name,
+                                            java.util.List<String> groups, java.util.List<String> emails) {
+        ctx.getResponse().getHeader().put("Remote-User", username);
+    }
+}

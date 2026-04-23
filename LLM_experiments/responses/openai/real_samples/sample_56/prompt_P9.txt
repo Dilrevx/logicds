@@ -1,0 +1,60 @@
+<repair>
+if request.method == "POST":
+    to_save = request.form.to_dict()
+
+    # For updates, ensure that the current user has rights to modify this shelf.
+    # If editing an existing shelf (shelf_id is truthy), verify ownership or sufficient privileges.
+    if shelf_id:
+        # Assume that only the owner or users with elevated privileges (role_edit_shelfs) may edit.
+        if shelf.user_id != current_user.id and not current_user.role_edit_shelfs():
+            flash(_("You are not allowed to edit this shelf"), category="error")
+            return redirect(url_for('web.index'))
+
+    # Only allow setting the shelf as public if the current user is allowed to.
+    # To avoid any tampering, ignore any public settings if the user lacks privileges.
+    if not current_user.role_edit_shelfs():
+        if to_save.get("is_public") in ["on", "1", "true"]:
+            flash(_("Sorry, you are not allowed to create a public shelf"), category="error")
+            return redirect(url_for('web.index'))
+        is_public = 0
+    else:
+        # Only mark as public if the checkbox value is exactly "on".
+        is_public = 1 if to_save.get("is_public") == "on" else 0
+
+    if config.config_kobo_sync:
+        shelf.kobo_sync = True if to_save.get("kobo_sync") else False
+        if shelf.kobo_sync:
+            ub.session.query(ub.ShelfArchive).filter(
+                ub.ShelfArchive.user_id == current_user.id,
+                ub.ShelfArchive.uuid == shelf.uuid
+            ).delete()
+            ub.session_commit()
+
+    shelf_title = to_save.get("title", "")
+    if check_shelf_is_unique(shelf, shelf_title, is_public, shelf_id):
+        shelf.name = shelf_title
+        shelf.is_public = is_public
+        if not shelf_id:
+            # On creation, ensure the shelf is associated with the current user.
+            shelf.user_id = int(current_user.id)
+            ub.session.add(shelf)
+            shelf_action = "created"
+            flash_text = _(u"Shelf %(title)s created", title=shelf_title)
+        else:
+            shelf_action = "changed"
+            flash_text = _(u"Shelf %(title)s changed", title=shelf_title)
+        try:
+            ub.session.commit()
+            log.info(u"Shelf {} {}".format(shelf_title, shelf_action))
+            flash(flash_text, category="success")
+            return redirect(url_for('shelf.show_shelf', shelf_id=shelf.id))
+        except (OperationalError, InvalidRequestError) as ex:
+            ub.session.rollback()
+            log.debug_or_exception(ex)
+            log.error("Settings DB is not Writeable")
+            flash(_("Settings DB is not Writeable"), category="error")
+        except Exception as ex:
+            ub.session.rollback()
+            log.debug_or_exception(ex)
+            flash(_(u"There was an error"), category="error")
+</repair>

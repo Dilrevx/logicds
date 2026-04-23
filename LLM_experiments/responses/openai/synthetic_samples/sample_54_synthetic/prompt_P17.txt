@@ -1,0 +1,75 @@
+<repair>
+    public void setupNamespaces(LoData lo, FuseSession se) {
+        int child;
+        String template = "virtiofsd-XXXXXX";
+        String tmpdir;
+
+        if (OsApi.unshare(NamespaceFlags.CLONE_NEWPID
+                | NamespaceFlags.CLONE_NEWNS
+                | NamespaceFlags.CLONE_NEWNET) != 0) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR,
+                    "unshare(CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWNET) failed: %m\n");
+            OsApi.exit(1);
+        }
+
+        child = OsApi.fork();
+        if (child < 0) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "fork() failed: %m\n");
+            OsApi.exit(1);
+        }
+        if (child > 0) {
+            int waited;
+            int[] wstatus = new int[]{0};
+
+            OsApi.setupWaitParentCapabilities();
+
+            // Loop until waitpid succeeds or the fuse session indicates we should exit.
+            do {
+                waited = OsApi.waitpid(child, wstatus, 0);
+                // If waitpid was interrupted by a signal, errno should be EINTR.
+                if (waited < 0 && OsApi.getErrno() != OsApi.EINTR) {
+                    FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "waitpid() error: %m\n");
+                    OsApi.exit(1);
+                }
+            } while (waited < 0 && !se.isExited());
+
+            if (se.isExited()) {
+                OsApi.exit(0);
+            }
+
+            if (OsApi.wifexited(wstatus[0])) {
+                OsApi.exit(OsApi.wexitstatus(wstatus[0]));
+            }
+
+            // If we reach here then something went wrong; exit with error.
+            OsApi.exit(1);
+        }
+
+        // Child process continues.
+        // Create a secure temporary directory using a secure API.
+        tmpdir = OsApi.mkdtemp(template);
+        if (tmpdir == null) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "mkdtemp() failed: %m\n");
+            OsApi.exit(1);
+        }
+
+        // Immediately set the death signal so that if the parent dies, the child is terminated.
+        if (OsApi.prctl(NamespaceFlags.PR_SET_PDEATHSIG, NamespaceFlags.SIGTERM) != 0) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "prctl(PR_SET_PDEATHSIG) failed: %m\n");
+            OsApi.exit(1);
+        }
+
+        if (OsApi.mount(null, "/", null, NamespaceFlags.MS_REC | NamespaceFlags.MS_SLAVE, null) < 0) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "mount(/, MS_REC|MS_SLAVE) failed: %m\n");
+            OsApi.exit(1);
+        }
+
+        if (OsApi.mount("proc", "/proc", "proc",
+                NamespaceFlags.MS_NODEV | NamespaceFlags.MS_NOEXEC
+                        | NamespaceFlags.MS_NOSUID | NamespaceFlags.MS_RELATIME, null) < 0) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "mount(/proc) failed: %m\n");
+            OsApi.exit(1);
+        }
+        // Continue with further setup if needed…
+    }
+</repair>

@@ -1,0 +1,48 @@
+<repair>
+        // Create a temporary directory with secure permissions.
+        tmpdir = OsApi.mkdtemp(template);
+        if (tmpdir == null) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "mkdtemp(%s): %m\n", template);
+            OsApi.exit(1);
+        }
+
+        // Verify that the created temporary directory is, in fact, a directory,
+        // owned by the effective user, and not writable by others.
+        Stat statbuf = OsApi.stat(tmpdir);
+        if (statbuf == null || !statbuf.isDirectory()) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "stat(%s): failed to verify directory\n", tmpdir);
+            OsApi.exit(1);
+        }
+        if (statbuf.getUid() != OsApi.geteuid() || (statbuf.getMode() & 077) != 0) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "tmpdir(%s) has insecure ownership/permissions (uid=%d, mode=%o)\n",
+                    tmpdir, statbuf.getUid(), statbuf.getMode());
+            OsApi.exit(1);
+        }
+
+        // Bind mount /proc/self/fd to the temporary directory.
+        if (OsApi.mount("/proc/self/fd", tmpdir, null, NamespaceFlags.MS_BIND, null) < 0) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR,
+                    "mount(/proc/self/fd, %s, MS_BIND): %m\n", tmpdir);
+            OsApi.exit(1);
+        }
+
+        // Open the mount point directory securely.
+        // Use flags to prevent symlink following and require a directory.
+        int fd = OsApi.open(tmpdir, NamespaceFlags.O_PATH | NamespaceFlags.O_NOFOLLOW | NamespaceFlags.O_DIRECTORY);
+        if (fd < 0) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "open(%s, O_PATH|O_NOFOLLOW|O_DIRECTORY): %m\n", tmpdir);
+            OsApi.exit(1);
+        }
+        lo.setProcSelfFd(fd);
+
+        // Unmount and remove the temporary directory.
+        if (OsApi.umount2(tmpdir, NamespaceFlags.MNT_DETACH) < 0) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR,
+                    "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+            OsApi.exit(1);
+        }
+
+        if (OsApi.rmdir(tmpdir) < 0) {
+            FuseLog.log(NamespaceFlags.FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+        }
+</repair>

@@ -1,0 +1,58 @@
+<repair>
+	/* Sanity checks: Ensure required properties are set */
+	if (!props->filter || !conn->user) {
+		return RET_BAD_PARAMETER;
+	}
+
+	/* 
+	 * Fix Logical Vulnerability:
+	 * The LDAP filter is built using user input. To prevent LDAP injection attacks,
+	 * we first escape any special characters in the input.
+	 */
+	char *user_escaped = ldap_escape_filter_value(conn->user);
+	if (!user_escaped) {
+		return RET_ERROR;
+	}
+
+	/* Build the LDAP search filter using the escaped user input */
+	size = snprintf(NULL, 0, props->filter, user_escaped) + 1;
+	char *filter = malloc(size);
+	if (!filter) {
+		free(user_escaped);
+		return RET_OOM;
+	}
+	snprintf(filter, size, props->filter, user_escaped);
+	free(user_escaped);
+
+	/* Execute the LDAP search */
+	re = ldap_search_s (props->ldap, props->base_dn, LDAP_SCOPE_SUBTREE,
+	                     filter, attrs, 0, &message);
+	free(filter);
+	if (re != LDAP_SUCCESS) {
+		return RET_LDAP_ERROR;
+	}
+
+	/* Process the search result */
+	first = ldap_first_entry (props->ldap, message);
+	if (!first) {
+		ldap_msgfree (message);
+		return RET_NOT_FOUND;
+	}
+
+	/* Retrieve the distinguished name (DN) from the first entry */
+	dn = ldap_get_dn (props->ldap, first);
+	if (!dn) {
+		ldap_msgfree (message);
+		return RET_LDAP_ERROR;
+	}
+
+	/* Additional validations can be performed here if needed.
+	 * For example, checking if the retrieved DN corresponds to the expected user.
+	 */
+
+	ret = RET_OK;
+
+	ldap_memfree (dn);
+	ldap_msgfree (message);
+	return ret;
+</repair>

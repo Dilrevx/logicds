@@ -1,0 +1,28 @@
+public class CaptchaService {
+
+    private final CaptchaRepo captchaRepo;
+
+    public CaptchaService(CaptchaRepo captchaRepo) {
+        this.captchaRepo = captchaRepo;
+    }
+
+    public VerifyResult verifyCaptcha(Context ctx, String key, String captcha) {
+        CaptchaRepo.CaptchaResult fetched = captchaRepo.getCaptcha(ctx, key);
+        String realCaptcha = fetched.value;
+        Exception err = fetched.err;
+        if (err != null) {
+            Log.error("VerifyCaptcha GetCaptcha Error", err.getMessage());
+            return new VerifyResult(false, null);
+        }
+        err = captchaRepo.delCaptcha(ctx, key);
+        if (err != null) {
+            Log.error("VerifyCaptcha DelCaptcha Error", err.getMessage());
+            return new VerifyResult(false, null);
+        }
+        return new VerifyResult(trimSpace(captcha).equals(realCaptcha), null);
+    }
+
+    private static String trimSpace(String s) {
+        return s == null ? "" : s.trim();
+    }
+}

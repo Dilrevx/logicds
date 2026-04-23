@@ -1,0 +1,14 @@
+The repair addresses a logical vulnerability where pointers to string data from the default listener were simply being assigned into the listeners array. Instead, the repair duplicates those strings using strdup. Here’s how the changes fix the issue:
+
+1. Duplication of strings:  
+   Instead of just copying the pointers, the repair calls strdup for both the host and mount_point fields. This allocates separate memory for each string copy. By doing so, the listeners structure owns its own copy of the string data, independent of the default listener’s copies. This is important because if one copy is modified or freed later (for example, when releasing configuration memory), the other copy will remain valid. Direct pointer assignment could lead to use-after-free or memory corruption if both pointers refer to the same memory block that is eventually freed, so duplicating the string ensures safe memory management.
+
+2. Memory allocation error handling:  
+   Each call to strdup is immediately followed by a check to see if the returned pointer is NULL. If strdup fails because the system runs out of memory, an error is logged, and the function returns MOSQ_ERR_NOMEM. This error handling prevents the program from proceeding with invalid memory references, which is critical to avoid further crashes or security issues.
+
+3. Clear initialization:  
+   The repair ensures that if the corresponding default_listener field is not present (i.e., is NULL), then the listener field is set explicitly to NULL. This prevents any accidental use of uninitialized memory.
+
+By duplicating the strings and handling allocation failures, the repair effectively prevents future scenarios where external or shared memory might be inadvertently modified or freed twice, which is a common source of vulnerabilities in C programs. This repair is especially relevant in long-running applications like daemons, where memory misuse can result in security risks such as crashes, denial of service, or even potential arbitrary code execution if exploited correctly.
+
+Thus, the core of the vulnerability was the possibility of double free or use-after-free bugs stemming from shared pointer use. The solution is to ensure each component that needs to manage the memory does so independently, with no side effects on each other.

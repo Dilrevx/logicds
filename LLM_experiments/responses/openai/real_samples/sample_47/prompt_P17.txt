@@ -1,0 +1,88 @@
+<repair>
+{
+    const char *submitted_otp;
+    size_t submitted_len;
+    const char *expected_otp;
+    size_t expected_len;
+
+    /* Check that pa-data is present */
+    if (pa == NULL || pa->contents == NULL || pa->length == 0) {
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+
+    /* Extract the submitted OTP from the pa-data.
+       (Assume that the OTP is stored in pa->contents as a plain string.) */
+    submitted_otp = (const char *) pa->contents;
+    submitted_len = pa->length;
+
+    /* For the expected OTP value, we assume that moddata (properly set up earlier)
+       now points to a structure that stores the expected OTP string and its length.
+       For example, suppose moddata is defined as:
+           typedef struct {
+               char *expected;
+               size_t expected_len;
+           } otp_data;
+       and that a valid pointer has been set up. */
+    if (moddata == NULL) {
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+    {
+        otp_data *otp = (otp_data *) moddata;
+        if (otp->expected == NULL || otp->expected_len == 0) {
+            respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+            return;
+        }
+        expected_otp = otp->expected;
+        expected_len = otp->expected_len;
+    }
+
+    /* Check that the submitted OTP length matches the expected OTP length.
+       This also prevents leaking information via timing differences. */
+    if (submitted_len != expected_len) {
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+
+    /* Vulnerability fix:
+       Instead of using a standard memcmp which might return early,
+       use a constant‐time memory comparison so as to avoid timing attacks.
+       Many libraries provide a constant‐time compare function; here we assume
+       a function called timing_safe_memcmp is available. If not, a portable
+       implementation is provided below. */
+#if defined(HAVE_TIMING_SAFE_MEMCMP)
+    if (timing_safe_memcmp(submitted_otp, expected_otp, expected_len) != 0) {
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+#else
+    {
+        size_t i;
+        unsigned char diff = 0;
+        const unsigned char *s1 = (const unsigned char *) submitted_otp;
+        const unsigned char *s2 = (const unsigned char *) expected_otp;
+        for (i = 0; i < expected_len; i++)
+            diff |= s1[i] ^ s2[i];
+        if (diff) {
+            respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+            return;
+        }
+    }
+#endif
+
+    /* Successfully verified OTP.
+       (Insert any additional OTP post-verification code here such as logging,
+       updating usage counters, or invalidating the OTP.  Also, be sure to clear
+       sensitive data from memory if necessary.) */
+
+    /* Example: zeroing out the submitted OTP buffer if it was allocated dynamically.
+       If pa->contents is allocated and mutable, consider cleansing it:
+         memset(pa->contents, 0, pa->length);
+       (Be cautious if the memory is not owned by this function.) */
+
+    /* Continue processing the authenticated request.
+       The enc_tkt_reply is prepared for a successful pre-authentication */
+    respond(arg, 0, enc_tkt_reply);
+}
+</repair>

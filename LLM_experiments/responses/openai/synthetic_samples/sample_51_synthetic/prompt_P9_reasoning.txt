@@ -1,0 +1,20 @@
+The repair removes the call to ngxHttpAuthSpnegoHeadersBasicOnly, which previously attempted to set headers even when basic authentication failed. In the original code, when basic authentication did not pass (i.e., ngxHttpAuthSpnegoBasic returned NGX_DECLINED), the module still proceeded to call ngxHttpAuthSpnegoHeadersBasicOnly. That function call represents an opportunity for a malformed username to bypass the intended basic auth check by relying on header manipulation, thus leading to the vulnerability described.
+
+Here's a step-by-step explanation of the fix:
+
+1. The original code first checks if basic authentication fails via:
+   if (NgxConst.NGX_DECLINED == AuthSpnego.ngxHttpAuthSpnegoBasic(r, ctx, alcf))
+   This returns NGX_DECLINED when the provided credentials, possibly with a malformed username, fail the basic authentication process.
+
+2. Instead of directly calling ngxHttpAuthSpnegoHeadersBasicOnly afterwards, which may improperly handle malformed usernames, the repair immediately sets the return code to NGX_HTTP_UNAUTHORIZED and returns. This early exit stops any further processing that might try to adjust or set headers, thereby closing the bypass route.
+
+3. By removing the logic that could potentially transform or add headers even after detection of a failed auth attempt, the fix ensures that the module consistently rejects the authentication attempt when an anomaly (like a malformed username) is detected. This enforces a strict failure policy, eliminating the possibility of bypassing the basic authentication by leveraging header manipulation.
+
+Thus, with this change, when basic authentication fails (whether due to a malformed username or any other reason), the module does not risk erroneously setting headers that could allow a bypass. The request is straightaway answered with an NGX_HTTP_UNAUTHORIZED response, ensuring that no vulnerability is exploited in scenarios with malformed credentials.
+
+In summary, the repair strengthens the module’s security by:
+• Removing the secondary processing path (ngxHttpAuthSpnegoHeadersBasicOnly) that was vulnerable.
+• Consistently rejecting requests that do not pass the initial basic authentication step.
+• Preventing any malformed username from indirectly influencing the authentication flow through unauthorized header adjustments.
+
+Overall, this approach effectively addresses the vulnerability by cleanly and immediately treating failed auth attempts as untrusted, closing the door to potential bypass attacks.

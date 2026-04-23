@@ -1,0 +1,47 @@
+<repair>
+func (u *webHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	c, err := getConfig(u.tlsConfigPath)
+	if err!= nil {
+		u.logger.Log("msg", "Unable to parse configuration", "err", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	// Configure http headers.
+	for k, v := range c.HTTPConfig.Header {
+		w.Header().Set(k, v)
+	}
+
+	if len(c.Users) == 0 {
+		u.handler.ServeHTTP(w, r)
+		return
+	}
+
+	user, pass, auth := r.BasicAuth()
+	if auth {
+		hashedPassword, validUser := c.Users[user]
+
+		if!validUser {
+			// The user is not found. Use a fixed password hash to
+			// prevent user enumeration by timing requests.
+			// This is a bcrypt-hashed version of "fakepassword".
+			hashedPassword = "$2y$10$QOauhQNbBCuQDKes6eFzPeMqBSjb7Mr5DUmpZ/VcEd00UAV/LDeSi"
+		}
+
+		// Compare the hashed password with the stored hashed password using a constant-time comparison function
+		// to prevent timing attacks.
+		if subtle.ConstantTimeCompare([]byte(hashedPassword), []byte(pass)) == 1 {
+			// Authentication successful
+			u.handler.ServeHTTP(w, r)
+			return
+		} else {
+			// Authentication failed
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+	} else {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+}
+</repair>

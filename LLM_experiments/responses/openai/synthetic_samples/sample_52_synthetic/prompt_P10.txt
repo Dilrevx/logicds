@@ -1,0 +1,72 @@
+<repair>
+    public RetT cherokeeValidatorLdapCheck(LdapContext ldap, Connection conn) {
+        int re;
+        RetT ret;
+        int size;
+        String dn;
+        LdapMessage[] message = new LdapMessage[]{null};
+        LdapMessage first;
+        String[] attrs = new String[]{ LdapApi.LDAP_NO_ATTRS, null };
+        LdapProps props = ldap.getProps();
+
+        // Added check for empty username or password to prevent unauthenticated bind bypass.
+        if ((conn.getValidator() == null) ||
+            conn.getValidator().getUser().isEmpty() ||
+            conn.getValidator().getPasswd().isEmpty()) {
+            return RetT.ERROR;
+        }
+
+        size = conn.getValidator().getUser().countCspn(0, "*()");
+        if (size != conn.getValidator().getUser().len) {
+            return RetT.ERROR;
+        }
+
+        ret = LdapApi.initFilter(ldap, props, conn);
+        if (ret != RetT.OK) {
+            return ret;
+        }
+
+        re = LdapApi.searchS(ldap.getConn(), props.basedn.buf, LdapApi.LDAP_SCOPE_SUBTREE,
+                ldap.filter.buf, attrs, 0, message);
+        if (re != LdapApi.LDAP_SUCCESS) {
+            Log.error("ldap search failed: %s", props.filter.buf != null ? props.filter.buf : "");
+            return RetT.ERROR;
+        }
+
+        Log.trace("subtree search (%s): done", ldap.filter.buf != null ? ldap.filter.buf : "");
+
+        re = LdapApi.countEntries(ldap.getConn(), message[0]);
+        if (re != 1) {
+            LdapApi.msgFree(message[0]);
+            return RetT.NOT_FOUND;
+        }
+
+        first = LdapApi.firstEntry(ldap.getConn(), message[0]);
+        if (first == null) {
+            LdapApi.msgFree(message[0]);
+            return RetT.NOT_FOUND;
+        }
+
+        dn = LdapApi.getDn(ldap.getConn(), first);
+        if (dn == null) {
+            LdapApi.msgFree(message[0]);
+            return RetT.ERROR;
+        }
+
+        LdapApi.msgFree(message[0]);
+
+        ret = LdapApi.validateDn(props, dn, conn.getValidator().getPasswd().buf);
+        if (ret != RetT.OK) {
+            return ret;
+        }
+
+        re = LdapApi.unbindS(ldap.getConn());
+        if (re != LdapApi.LDAP_SUCCESS) {
+            return RetT.ERROR;
+        }
+
+        Log.trace("Access to user %s has been granted", conn.getValidator().getUser().buf);
+
+        return RetT.OK;
+    }
+</repair>

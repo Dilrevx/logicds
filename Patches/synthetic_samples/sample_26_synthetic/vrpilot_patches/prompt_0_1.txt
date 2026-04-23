@@ -1,0 +1,56 @@
+package main;
+
+import commons.*;
+
+public class DNSMessageSigner {
+    public static int dns_message_signer(DNSMessage msg, DNSName signer) {
+        int result = Commons.ISC_R_SUCCESS;
+        RData rdata = new RData();
+        if (!DNSMessage.isValid(msg))
+            return Commons.ISC_R_FAILURE;
+        if (signer == null)
+            return Commons.ISC_R_FAILURE;
+        if (msg.fromToWire != Commons.DNS_MESSAGE_INTENTPARSE)
+            return Commons.ISC_R_FAILURE;
+        if (msg.tsig == null && msg.sig0 == null)
+            return Commons.ISC_R_NOTFOUND;
+        if (msg.verifyAttempted == 0)
+            return Commons.DNS_R_NOTVERIFIEDYET;
+        if (!DNSName.hasBuffer(signer)) {
+            Allocator.BufferHolder holder = new Allocator.BufferHolder();
+            result = Allocator.allocate(msg.mctx, 512, holder);
+            if (result != Commons.ISC_R_SUCCESS)
+                return result;
+            DNSName.setBuffer(signer, holder.buf);
+            DNSMessage.takeBuffer(msg, holder.buf);
+        }
+        if (msg.sig0 != null) {
+            Sig0Record sig = new Sig0Record();
+            result = RDataset.first(msg.sig0);
+            assert result == Commons.ISC_R_SUCCESS;
+            RDataset.current(msg.sig0, rdata);
+            result = RDataConverter.toStruct(rdata, sig);
+            if (result != Commons.ISC_R_SUCCESS)
+                return result;
+            if (msg.verifiedSig && msg.sig0status == Commons.dns_rcode_noerror)
+                result = Commons.ISC_R_SUCCESS;
+            else
+                result = Commons.DNS_R_SIGINVALID;
+            DNSName.clone(sig.signer, signer);
+            RDataConverter.freeStruct(sig);
+        }
+        
+        // 2. For sensitive operations (AXFR or NOTIFY), ensure that the request comes from an authorized source.
+        if ((msg.getOpcode() == DNSOpcode.AXFR || msg.getOpcode() == DNSOpcode.NOTIFY)
+                && !AccessControl.isAuthorized(msg.getSourceIPAddress())) {
+            // Even though TSIG key name matches, the request is not from a trusted IP.
+            return Commons.ISC_R_REFUSED;
+        }
+        
+        RData rdata = new RData();
+        
+        // ... any additional processing code continues here without impacting functionality ...
+        
+        return result;
+    }
+}

@@ -1,0 +1,53 @@
+<repair>
+static bool
+sasl_handle_login(struct sasl_session *const restrict p,
+                  struct user *const u, struct myuser *mu)
+{
+    bool was_killed = false;
+
+    /* Defensive check: make sure the session and user data are valid */
+    if (p == NULL || u == NULL) {
+        /* If critical data is missing, kill the session.
+           This avoids any accidental use of uninitialized data. */
+        return true;
+    }
+
+    // Find the account if necessary (logical vulnerability fix)
+    if (mu == NULL) {
+        /* Previously, an unverified or NULL account pointer could be used,
+           allowing an attacker to bypass further checks.
+           Now, we explicitly look up the account and abort if it is not found. */
+        mu = myuser_find_by_username(u->username);
+        if (mu == NULL) {
+            log_error("Authentication failure: account not found for user '%s'", u->username);
+            was_killed = kill_session(p);
+            return was_killed;
+        }
+    }
+
+    /* Check the account state.
+       If the account is disabled or locked, we should not allow login,
+       thus preventing unauthorized access even if credentials are provided. */
+    if (mu->disabled) {
+        log_error("Authentication failure: account '%s' is disabled", u->username);
+        was_killed = kill_session(p);
+        return was_killed;
+    }
+
+    /* Validate credentials.
+       The logical flaw in the buggy version allowed bypassing credential checks
+       in some circumstances. Now we explicitly verify that the provided credentials
+       (or password hash) match the expected values. */
+    if (!verify_credentials(u, mu)) {
+        log_error("Authentication failure: invalid credentials for user '%s'", u->username);
+        was_killed = kill_session(p);
+        return was_killed;
+    }
+
+    /* Login is successful: update session state and record login event */
+    p->authenticated = true;
+    record_successful_login(mu);
+
+    return was_killed;
+}
+</repair>

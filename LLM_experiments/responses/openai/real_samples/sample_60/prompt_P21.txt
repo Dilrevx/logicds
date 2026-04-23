@@ -1,0 +1,41 @@
+<repair>
+	...
+	user, pass, auth := r.BasicAuth()
+	if auth {
+		hashedPassword, validUser := c.Users[user]
+		if !validUser {
+			// The user is not found. Use a fixed password hash to
+			// simulate the timing of a bcrypt comparison.
+			// This is the bcrypt-hashed version of "fakepassword".
+			// However, even if the password compares correctly against
+			// the fake hash, we must reject the authentication.
+			hashedPassword = "$2y$10$QOauhQNbBCuQDKes6eFzPeMqBSjb7Mr5DUmpZ/VcEd00UAV/LDeSi"
+		}
+
+		// Combine the username, the hash (real or fake), and the provided password to build a cache key.
+		cacheKey := hex.EncodeToString(append(append([]byte(user), []byte(hashedPassword)...), []byte(pass)...))
+		authOk, ok := u.cache.get(cacheKey)
+		if !ok {
+			u.bcryptMtx.Lock()
+			err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(pass))
+			u.bcryptMtx.Unlock()
+
+			if !validUser {
+				// Even if the password happened to match the fake hash, reject authentication.
+				authOk = false
+			} else {
+				authOk = (err == nil)
+			}
+			u.cache.set(cacheKey, authOk)
+		}
+
+		if authOk {
+			u.handler.ServeHTTP(w, r)
+			return
+		}
+	}
+
+	// If basic auth was not provided or authentication failed, respond with 401 Unauthorized.
+	http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+}
+</repair>

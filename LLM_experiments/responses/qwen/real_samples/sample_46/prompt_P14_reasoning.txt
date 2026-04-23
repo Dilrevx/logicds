@@ -1,0 +1,64 @@
+The provided repair addresses a security vulnerability in the `check_rpcsec_auth` function within the `kadmind` component of MIT Kerberos. The vulnerability arises from the fact that the original code does not adequately validate the second component of a two-part Kerberos principal when checking for administrative access. Specifically, it fails to prevent a user from leveraging a principal with a wildcard (`*`) in the second component to gain unauthorized administrative privileges.
+
+### Original Vulnerability Analysis
+
+In the original code snippet:
+
+```c
+if (krb5_princ_size(kctx, princ) != 2)
+     goto fail_princ;
+
+c1 = krb5_princ_component(kctx, princ, 0);
+c2 = krb5_princ_component(kctx, princ, 1);
+realm = krb5_princ_realm(kctx, princ);
+if (strncmp(handle->params.realm, realm->data, realm->length) == 0
+    && strncmp("kadmin", c1->data, c1->length) == 0) {
+
+     if (strncmp("history", c2->data, c2->length) == 0)
+          goto fail_princ;
+     else
+          success = 1;
+}
+```
+
+- **Principal Size Check**: The code first checks if the principal has exactly two components. If not, it fails the authentication process.
+- **Component Extraction**: It then extracts the first (`c1`) and second (`c2`) components of the principal.
+- **Realm Comparison**: It compares the realm of the principal with the expected realm (`handle->params.realm`).
+- **First Component Check**: It checks if the first component (`c1`) is "kadmin".
+- **Second Component Check**: It checks if the second component (`c2`) is "history". If it is, the authentication process fails. Otherwise, it grants success.
+
+The critical issue here is that the code does not account for wildcards (`*`) in the second component. A malicious user could create a principal like `kadmin/*`, which would pass the existing checks because the second component is not "history". This would grant them administrative access, which is unintended.
+
+### Specification and Security Considerations
+
+According to the provided specification:
+
+- **Principal**: A Kerberos principal can have multiple components, each of which can be wildcarded using `*`.
+- **Permissions**: Permissions are specified using a string of characters, where lowercase letters allow operations and uppercase letters disallow them.
+- **Target Principal**: This can include back-references to the principal, allowing for complex permission rules.
+
+Given these specifications, it's clear that the system should be able to handle wildcarded principals properly to ensure that only authorized users gain administrative access.
+
+### Repair Explanation
+
+The repair modifies the second component check to explicitly deny any principal with a wildcard (`*`) in the second component:
+
+```c
+if (strncmp(handle->params.realm, realm->data, realm->length) == 0
+    && strncmp("kadmin", c1->data, c1->length) == 0) {
+
+     if (strncmp("history", c2->data, c2->length) == 0 || strncmp("*", c2->data, c2->length) == 0)
+          goto fail_princ;
+     else
+          success = 1;
+}
+```
+
+- **Wildcard Check**: The repair adds an additional condition to check if the second component (`c2`) is a wildcard (`*`). If it is, the authentication process fails (`goto fail_princ`).
+- **Maintaining Existing Checks**: The repair maintains the existing checks for the realm and the first component being "kadmin" and the second component not being "history".
+
+This change ensures that no principal with a wildcard in the second component can bypass the authorization check and gain administrative access. It aligns with the security principles outlined in the specification, particularly the handling of wildcarded principals and the enforcement of strict permission rules.
+
+### Conclusion
+
+By adding a specific check for wildcards in the second component of the principal, the repair effectively mitigates the vulnerability. This ensures that only principals with specific, non-wildcarded permissions can gain administrative access, thereby maintaining the integrity and security of the Kerberos administration system.

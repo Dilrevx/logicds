@@ -1,0 +1,80 @@
+<repair>
+func VerifyGet(cfg schema.AuthenticationBackendConfiguration) middlewares.RequestHandler {
+	refreshProfile, refreshProfileInterval := getProfileRefreshSettings(cfg)
+
+	return func(ctx *middlewares.AutheliaCtx) {
+		ctx.Logger.Tracef("Headers=%s", ctx.Request.Header.String())
+		targetURL, err := ctx.GetOriginalURL()
+
+		if err != nil {
+			ctx.Error(fmt.Errorf("Unable to parse target URL: %s", err), operationFailedMessage)
+			return
+		}
+
+		// Validate the target URL path to prevent malformed URI paths
+		if err := validateURLPath(targetURL.Path); err != nil {
+			ctx.Error(err, "Invalid URL path")
+			return
+		}
+
+		if !isSchemeHTTPS(targetURL) && !isSchemeWSS(targetURL) {
+			ctx.Logger.Error(fmt.Errorf("Scheme of target URL %s must be secure since cookies are "+
+				"only transported over a secure connection for security reasons", targetURL.String()))
+			ctx.ReplyUnauthorized()
+
+			return
+		}
+
+		if !isURLUnderProtectedDomain(targetURL, ctx.Configuration.Session.Domain) {
+			ctx.Logger.Error(fmt.Errorf("The target URL %s is not under the protected domain %s",
+				targetURL.String(), ctx.Configuration.Session.Domain))
+			ctx.ReplyUnauthorized()
+
+			return
+		}
+
+		isBasicAuth, username, name, groups, emails, authLevel, err := verifyAuth(ctx, targetURL, refreshProfile, refreshProfileInterval)
+
+		method := ctx.XForwardedMethod()
+
+		if err != nil {
+			ctx.Logger.Error(fmt.Sprintf("Error caught when verifying user authorization: %s", err))
+
+			if err := updateActivityTimestamp(ctx, isBasicAuth, username); err != nil {
+				ctx.Error(fmt.Errorf("Unable to update last activity: %s", err), operationFailedMessage)
+				return
+			}
+
+			handleUnauthorized(ctx, targetURL, isBasicAuth, username, method)
+
+			return
+		}
+
+		authorized := isTargetURLAuthorized(ctx.Providers.Authorizer, *targetURL, username,
+			groups, ctx.RemoteIP(), method, authLevel)
+
+		switch authorized {
+		case Forbidden:
+			ctx.Logger.Infof("Access to %s is forbidden to user %s", targetURL.String(), username)
+			ctx.ReplyForbidden()
+		case NotAuthorized:
+			handleUnauthorized(ctx, targetURL, isBasicAuth, username, method)
+		case Authorized:
+			setForwardedHeaders(&ctx.Response.Header, username, name, groups, emails)
+		}
+
+		if err := updateActivityTimestamp(ctx, isBasicAuth, username); err != nil {
+			ctx.Error(fmt.Errorf("Unable to update last activity: %s", err), operationFailedMessage)
+		}
+	}
+}
+
+// validateURLPath ensures that the URL path does not contain any malicious patterns
+func validateURLPath(path string) error {
+	// Example validation: check for null bytes or other invalid characters
+	if strings.Contains(path, "\x00") || strings.Contains(path, "..") {
+		return fmt.Errorf("invalid URL path")
+	}
+	return nil
+}
+</repair>

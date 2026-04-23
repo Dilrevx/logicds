@@ -1,0 +1,46 @@
+The repair provided addresses a vulnerability in the Mandril security plugin of the Monkey HTTP Daemon (monkeyd) related to URL decoding and access restrictions. The original buggy code did not properly handle encoded URIs, which allowed attackers to bypass security checks by using obfuscated URLs that contained encoded forward slashes (`%2F`). This could lead to unauthorized access to resources that were otherwise protected.
+
+### Vulnerability Explanation
+
+The vulnerability stems from the fact that the security check on the URI was performed before decoding it. In web applications and HTTP servers, URIs can be percent-encoded to include characters that have special meanings in URLs. For example, the forward slash (`/`) is a delimiter used to separate path segments in URLs. Encoding this character as `%2F` would allow an attacker to craft requests that bypass path-based access control mechanisms if the server does not decode these characters before performing checks.
+
+### Repair Details
+
+The repair introduced in the solution addresses this issue by first decoding the URI before applying the security check. Here's a step-by-step breakdown of the repair:
+
+1. **Decoding the URI**: 
+   ```c
+   char *decoded_uri = mk_api->str_decode_url(sr->uri);
+   ```
+   This line decodes the `sr->uri` string, converting percent-encoded characters like `%2F` back to their original form (`/`). The function `mk_api->str_decode_url` is assumed to be part of the Monkey HTTP Daemon's API, responsible for decoding percent-encoded strings in URIs.
+
+2. **Security Check on Decoded URI**:
+   ```c
+   if (!decoded_uri || mk_security_check_url(decoded_uri) < 0) {
+   ```
+   After decoding, the code performs a security check on the `decoded_uri`. If decoding fails (i.e., `decoded_uri` is `NULL`), or if the security check returns a negative value indicating a violation, the condition is true.
+
+3. **Logging and Response**:
+   ```c
+       mk_mem_free(decoded_uri);
+       PLUGIN_TRACE("[FD %i] Close connection, blocked URL", cs->socket);
+       mk_api->header_set_http_status(sr, MK_CLIENT_FORBIDDEN);
+       return MK_PLUGIN_RET_CLOSE_CONX;
+   ```
+   If the URI violates security policies after decoding, the decoded URI is freed to prevent memory leaks. The system then logs the event, sets the HTTP response status to `403 Forbidden`, and closes the connection to the client.
+
+4. **Memory Management**:
+   ```c
+   mk_mem_free(decoded_uri);
+   ```
+   This final line ensures that the memory allocated for the `decoded_uri` is freed after use, preventing memory leaks. It is crucial to manage memory explicitly in C to avoid issues such as memory leaks, dangling pointers, and buffer overflows.
+
+### Benefits of the Repair
+
+- **Enhanced Security**: By decoding the URI before performing security checks, the system can accurately evaluate the true path being accessed, thus preventing bypasses through encoded characters.
+- **Compliance with Standards**: Properly handling percent-encoded characters aligns with the standards defined in RFC 3986, ensuring that the server processes URLs according to the expected behavior.
+- **Robustness**: The addition of error handling for the `mk_api->str_decode_url` function call ensures that the server handles errors gracefully, maintaining stability even when faced with malformed URIs.
+
+### Conclusion
+
+The repair effectively mitigates the vulnerability by ensuring that all URIs are properly decoded before undergoing security checks. This prevents attackers from bypassing access controls through encoding techniques, thereby enhancing the overall security posture of the Monkey HTTP Daemon. The inclusion of memory management practices also contributes to the robustness and reliability of the application.

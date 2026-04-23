@@ -1,0 +1,62 @@
+The provided repair addresses the issue of improper access control within the CalibreWeb application, specifically focusing on the creation or modification of public shelves. The vulnerability arises from the fact that the original code does not adequately verify whether the current user has the necessary permissions to perform certain actions, such as setting a shelf to be public or enabling Kobo synchronization. This can lead to unauthorized users making changes they should not be able to make, potentially compromising data integrity and security.
+
+### Original Vulnerability
+
+In the original code snippet, there is a check to ensure that only users with the `roleEditShelfs()` permission can set a shelf to be public:
+
+```java
+if (!currentUser.roleEditShelfs() && "on".equals(toSave.get("is_public"))) {
+    return ShelfResponse.redirect("/web/index",
+            "Sorry you are not allowed to create a public shelf", "error");
+}
+```
+
+However, this check is not applied consistently throughout the code. Specifically, the code allows users to enable Kobo synchronization without checking their permissions:
+
+```java
+if (Config.configKoboSync) {
+    shelf.setKoboSync(toSave.get("kobo_sync") != null);
+    if (shelf.isKoboSync()) {
+        Session.archiveDelete(currentUser.getId(), shelf.getUuid());
+        try {
+            Session.commit();
+        } catch (Exception e) {
+            Session.rollback();
+        }
+    }
+}
+```
+
+This means that even if a user does not have the `roleEditShelfs()` permission, they could still enable Kobo synchronization, which might expose sensitive data or lead to other unintended consequences.
+
+### Proposed Repair
+
+The repair introduces an additional permission check before allowing a user to enable Kobo synchronization:
+
+```java
+if (Config.configKoboSync) {
+    shelf.setKoboSync(toSave.get("kobo_sync") != null);
+    if (shelf.isKoboSync() && currentUser.roleEditShelfs()) { // Ensure user has permission to sync
+        Session.archiveDelete(currentUser.getId(), shelf.getUuid());
+        try {
+            Session.commit();
+        } catch (Exception e) {
+            Session.rollback();
+        }
+    }
+}
+```
+
+By adding the `currentUser.roleEditShelfs()` check inside the `if (shelf.isKoboSync())` block, the code ensures that only users with the appropriate permissions can enable Kobo synchronization. This aligns with the existing permission check for setting a shelf to be public and maintains a consistent approach to access control throughout the relevant section of the code.
+
+### Additional Considerations
+
+1. **Consistency**: Ensuring that all actions requiring specific permissions are checked in a consistent manner helps prevent similar vulnerabilities from being introduced in the future. It also makes the code easier to maintain and audit.
+
+2. **Logging and Error Handling**: The code includes robust logging and error handling mechanisms. For example, it logs errors when database operations fail and rolls back transactions to maintain data integrity. These practices are crucial for maintaining system reliability and diagnosing issues.
+
+3. **User Feedback**: When a user attempts to perform an action they are not authorized to do, the code provides clear feedback by redirecting them to the index page with an error message. This improves the user experience by informing them of the issue and guiding them towards appropriate actions.
+
+4. **Security Best Practices**: By implementing proper access control checks, the repair aligns with security best practices. Ensuring that only authorized users can perform sensitive operations is fundamental to protecting against unauthorized access and potential data breaches.
+
+In summary, the repair addresses the vulnerability by ensuring that all critical actions requiring specific permissions are properly checked. This enhances the security of the CalibreWeb application by preventing unauthorized users from making changes they should not be able to make, thereby safeguarding data integrity and maintaining the application's trustworthiness.

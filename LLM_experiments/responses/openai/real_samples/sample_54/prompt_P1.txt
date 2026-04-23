@@ -1,0 +1,36 @@
+<repair>
+    /* Set a restrictive umask so that the temporary directory is only accessible by the owner */
+    mode_t old_umask = umask(0077);
+    tmpdir = mkdtemp(template);
+    umask(old_umask);
+    if (!tmpdir) {
+        fuse_log(FUSE_LOG_ERR, "tmpdir(%s): %m\n", template);
+        exit(1);
+    }
+
+    /*
+     * Bind-mount /proc/self/fd into a temporary directory.
+     * Adding MS_PRIVATE along with MS_BIND ensures the mount is not propagated
+     * to other mount namespaces, reducing the chance that a guest can interfere.
+     */
+    if (mount("/proc/self/fd", tmpdir, NULL, MS_BIND | MS_PRIVATE, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc/self/fd, %s, MS_BIND | MS_PRIVATE): %m\n", tmpdir);
+        exit(1);
+    }
+
+    /* Open the temporary directory with O_PATH and O_DIRECTORY for extra assurance */
+    lo->proc_self_fd = open(tmpdir, O_PATH | O_DIRECTORY);
+    if (lo->proc_self_fd == -1) {
+        fuse_log(FUSE_LOG_ERR, "open(%s, O_PATH | O_DIRECTORY): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (umount2(tmpdir, MNT_DETACH) < 0) {
+        fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (rmdir(tmpdir) < 0) {
+        fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+    }
+</repair>

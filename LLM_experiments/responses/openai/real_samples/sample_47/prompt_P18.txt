@@ -1,0 +1,68 @@
+<repair>
+static void
+otp_verify(krb5_context context, krb5_data *req_pkt, krb5_kdc_req *request,
+           krb5_enc_tkt_part *enc_tkt_reply, krb5_pa_data *pa,
+           krb5_kdcpreauth_callbacks cb, krb5_kdcpreauth_rock rock,
+           krb5_kdcpreauth_moddata moddata,
+           krb5_kdcpreauth_verify_respond_fn respond, void *arg)
+{
+    /* bugfix: fixed Logical vulnerability by enforcing strict OTP input validation */
+
+    /* Ensure that the pa-data pointer and its contents are present.
+       An absent or empty data field could otherwise lead to misinterpretation. */
+    if (pa == NULL || pa->contents == NULL || pa->length == 0) {
+        cb.log(context, rock, 0, "otp_verify: missing or invalid pa-data");
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+
+    /* Copy the OTP input into a fixed size buffer. Ensure that
+       the OTP fits in the buffer and is null-terminated to avoid
+       reading or processing garbage data. */
+    #define OTP_EXPECTED_LEN 6
+    char otp_input[OTP_EXPECTED_LEN + 1];  /* +1 for null terminator */
+    if (pa->length != OTP_EXPECTED_LEN) {
+        cb.log(context, rock, 0, "otp_verify: OTP length is invalid (expected exactly %d digits)", OTP_EXPECTED_LEN);
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+
+    /* Safe copy of OTP. Since OTP is expected to be exactly OTP_EXPECTED_LEN,
+       we check the length and then copy accordingly. */
+    memcpy(otp_input, pa->contents, OTP_EXPECTED_LEN);
+    otp_input[OTP_EXPECTED_LEN] = '\0';
+
+    /* Validate that the OTP consists only of digit characters.
+       This prevents processing malicious input containing invalid characters. */
+    for (int i = 0; i < OTP_EXPECTED_LEN; i++) {
+        if (!isdigit((unsigned char)otp_input[i])) {
+            cb.log(context, rock, 0, "otp_verify: OTP contains non-digit characters");
+            respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+            return;
+        }
+    }
+
+    /*
+     * Verify the provided OTP against the expected value.
+     * For demonstration purposes, we assume that the expected OTP is passed in as moddata.
+     * In a real-world scenario, the expected OTP should be retrieved securely (e.g., from a token store).
+     */
+    const char *expected_otp = (moddata != NULL) ? (const char *)moddata : NULL;
+    if (expected_otp == NULL) {
+        cb.log(context, rock, 0, "otp_verify: no expected OTP available from moddata");
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+
+    if (strncmp(otp_input, expected_otp, OTP_EXPECTED_LEN) != 0) {
+        cb.log(context, rock, 0, "otp_verify: OTP mismatch");
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+
+    /* OTP validation successful; proceed with further processing. */
+    cb.log(context, rock, 0, "otp_verify: OTP verification succeeded");
+    respond(arg, 0, NULL);
+    return;
+}
+</repair>

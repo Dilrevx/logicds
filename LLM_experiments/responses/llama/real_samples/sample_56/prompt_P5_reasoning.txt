@@ -1,0 +1,64 @@
+The provided repair addresses the vulnerability of Improper Access Control in the Pypi calibreweb. The original code snippet did not properly validate user permissions when creating or editing a shelf, allowing unauthorized users to create public shelves.
+
+The repair introduces a crucial check to ensure that only authorized users can create or edit shelves. The `check_shelf_is_unique` function is called to verify that the shelf title does not already exist. If the title is unique, the shelf is created or updated, and the user is redirected to the shelf page.
+
+However, the original repair I provided did not fully address the vulnerability. To properly fix the issue, additional checks and balances are necessary to ensure that only authorized users can create or edit shelves.
+
+A revised repair would involve the following changes:
+
+1.  **Validate user permissions**: Before creating or editing a shelf, the code should check if the current user has the necessary permissions to perform the action. This can be done by calling the `current_user.role_edit_shelfs()` method, which returns a boolean indicating whether the user has the required role.
+
+2.  **Check shelf ownership**: When editing a shelf, the code should verify that the current user is the owner of the shelf. This can be done by comparing the `shelf.user_id` with the `current_user.id`.
+
+3.  **Handle errors and exceptions**: The code should handle errors and exceptions properly, providing informative error messages to the user and logging the issues for debugging purposes.
+
+Here is an updated repair:
+
+```python
+if request.method == "POST":
+    to_save = request.form.to_dict()
+    if not current_user.role_edit_shelfs() and to_save.get("is_public") == "on":
+        flash(_(u"Sorry you are not allowed to create a public shelf"), category="error")
+        return redirect(url_for('web.index'))
+    is_public = 1 if to_save.get("is_public") else 0
+    if config.config_kobo_sync:
+        shelf.kobo_sync = True if to_save.get("kobo_sync") else False
+        if shelf.kobo_sync:
+            ub.session.query(ub.ShelfArchive).filter(ub.ShelfArchive.user_id == current_user.id).filter(
+                ub.ShelfArchive.uuid == shelf.uuid).delete()
+            ub.session_commit()
+    shelf_title = to_save.get("title", "")
+    if check_shelf_is_unique(shelf, shelf_title, is_public, shelf_id):
+        if shelf_id and shelf.user_id!= current_user.id:
+            flash(_(u"You are not the owner of this shelf"), category="error")
+            return redirect(url_for('shelf.show_shelf', shelf_id=shelf.id))
+        shelf.name = shelf_title
+        shelf.is_public = is_public
+        if not shelf_id:
+            shelf.user_id = int(current_user.id)
+            ub.session.add(shelf)
+            shelf_action = "created"
+            flash_text = _(u"Shelf %(title)s created", title=shelf_title)
+        else:
+            shelf_action = "changed"
+            flash_text = _(u"Shelf %(title)s changed", title=shelf_title)
+        try:
+            ub.session.commit()
+            log.info(u"Shelf {} {}".format(shelf_title, shelf_action))
+            flash(flash_text, category="success")
+            return redirect(url_for('shelf.show_shelf', shelf_id=shelf.id))
+        except (OperationalError, InvalidRequestError) as ex:
+            ub.session.rollback()
+            log.debug_or_exception(ex)
+            log.error("Settings DB is not Writeable")
+            flash(_("Settings DB is not Writeable"), category="error")
+        except Exception as ex:
+            ub.session.rollback()
+            log.debug_or_exception(ex)
+            flash(_(u"There was an error"), category="error")
+    else:
+        flash(_(u"Shelf title already exists"), category="error")
+        return redirect(url_for('shelf.show_shelf', shelf_id=shelf.id))
+```
+
+This revised repair ensures that only authorized users can create or edit shelves, and that the user is the owner of the shelf being edited. Additionally, it handles errors and exceptions properly, providing informative error messages to the user and logging the issues for debugging purposes.

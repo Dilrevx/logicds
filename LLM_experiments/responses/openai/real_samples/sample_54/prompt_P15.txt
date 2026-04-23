@@ -1,0 +1,42 @@
+<repair>
+    tmpdir = mkdtemp(template);
+    if (!tmpdir) {
+        fuse_log(FUSE_LOG_ERR, "mkdtemp(%s): %m\n", template);
+        exit(1);
+    }
+
+    if (mount("/proc/self/fd", tmpdir, NULL, MS_BIND, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc/self/fd, %s, MS_BIND): %m\n", tmpdir);
+        if (rmdir(tmpdir) < 0)
+            fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+        exit(1);
+    }
+
+    /* Now we can safely obtain our /proc/self/fd directory file descriptor.
+       Note: Use O_CLOEXEC so that the descriptor does not leak to exec’ed children. */
+    lo->proc_self_fd = open(tmpdir, O_PATH | O_CLOEXEC);
+    if (lo->proc_self_fd == -1) {
+        fuse_log(FUSE_LOG_ERR, "open(%s, O_PATH): %m\n", tmpdir);
+        if (umount2(tmpdir, MNT_DETACH) < 0)
+            fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+        if (rmdir(tmpdir) < 0)
+            fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (umount2(tmpdir, MNT_DETACH) < 0) {
+        fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+        close(lo->proc_self_fd);
+        if (rmdir(tmpdir) < 0)
+            fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (rmdir(tmpdir) < 0)
+        fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+</repair> 
+
+Explanation:
+• On any failure after mounting, the code now properly cleans up by trying to unmount and remove the temporary directory.
+• The open() call now uses O_CLOEXEC to prevent unintended descriptor inheritance.
+• Each error path logs errors and ensures that allocated resources (mounted tmpdir) are released before exiting.

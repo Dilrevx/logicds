@@ -1,0 +1,42 @@
+<repair>
+func VerifyGet(cfg schema.AuthenticationBackendConfiguration) middlewares.RequestHandler {
+	refreshProfile, refreshProfileInterval := getProfileRefreshSettings(cfg)
+
+	return func(ctx *middlewares.AutheliaCtx) {
+		ctx.Logger.Tracef("Headers=%s", ctx.Request.Header.String())
+		targetURL, err := ctx.GetOriginalURL()
+		// bugfix: fixed Logical vulnerability by properly handling the error and ensuring the target URL is valid.
+		if err != nil || targetURL == "" {
+			ctx.Logger.Errorf("Unable to determine target URL: %v", err)
+			ctx.ReplyForbidden("Your request is missing a valid redirect target.")
+			return
+		}
+
+		// If the user is not authenticated, then the request should not continue.
+		if !ctx.IsAuthenticated() {
+			ctx.Logger.Debug("User not authenticated, denying access.")
+			ctx.ReplyUnauthorized("User is not authenticated.")
+			return
+		}
+
+		// Refresh the user's profile if configured to do so.
+		if refreshProfile {
+			// Check if the last refresh timestamp is exceeded by the configured interval.
+			// (Assuming ctx.HasStaleProfile() returns true if the user's profile needs to be reloaded)
+			if ctx.HasStaleProfile(refreshProfileInterval) {
+				if err = ctx.RefreshUserProfile(); err != nil {
+					ctx.Logger.Errorf("Error refreshing user profile: %v", err)
+					ctx.ReplyError("Unable to refresh user profile. Please try again later.")
+					return
+				}
+			}
+		}
+
+		// Store the original target URL in the context for later use if needed.
+		ctx.SetTargetURL(targetURL)
+
+		// Proceed to the next middleware or handler in the chain.
+		ctx.Next()
+	}
+}
+</repair>

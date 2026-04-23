@@ -1,0 +1,53 @@
+Below is one example of a repaired version. In this version we take precautions when using the rights file’s "collection" regex template – namely, we apply re.escape() to every group captured from the first matching regex in order to prevent an attacker‐controlled group value from “injecting” dangerous format fields. In addition, we replace the deprecated readfp() method with read_file(), and use re.fullmatch() to ensure that the whole input is matched. (Depending on your application logic you might wish to change the matching behavior.) 
+
+Below is the repaired code snippet:
+
+<repair>
+def _read_from_sections(user, collection_url, permission):
+    """Get regex sections."""
+    filename = os.path.expanduser(config.get("rights", "file"))
+    rights_type = config.get("rights", "type").lower()
+    regex = ConfigParser({"login": user, "path": collection_url})
+    if rights_type in DEFINED_RIGHTS:
+        log.LOGGER.debug("Rights type '%s'", rights_type)
+        # Use read_file() rather than the deprecated readfp()
+        regex.read_file(StringIO(DEFINED_RIGHTS[rights_type]))
+    elif rights_type == "from_file":
+        log.LOGGER.debug("Reading rights from file %s", filename)
+        # regex.read returns a list of filenames read, so check for emptiness.
+        if not regex.read(filename):
+            log.LOGGER.error("File '%s' not found for rights", filename)
+            return False
+    else:
+        log.LOGGER.error("Unknown rights type '%s'", rights_type)
+        return False
+
+    for section in regex.sections():
+        re_user = regex.get(section, "user")
+        re_collection = regex.get(section, "collection")
+        log.LOGGER.debug(
+            "Testing if '%s:%s' matches against '%s:%s' from section '%s'",
+            user, collection_url, re_user, re_collection, section
+        )
+        # Use fullmatch to ensure the entire string is matched.
+        user_match = re.fullmatch(re_user, user)
+        if user_match:
+            # Prevent potential format string injection by safely escaping matched groups.
+            safe_groups = tuple(re.escape(group) for group in user_match.groups())
+            try:
+                formatted_re_collection = re_collection.format(*safe_groups)
+            except (IndexError, KeyError) as e:
+                log.LOGGER.error("Error formatting regex in section '%s': %s", section, e)
+                continue
+            if re.fullmatch(formatted_re_collection, collection_url):
+                log.LOGGER.debug("Section '%s' matches", section)
+                # Split permissions by comma and trim whitespace before checking.
+                perms = [perm.strip() for perm in regex.get(section, "permission").split(",")]
+                if permission in perms:
+                    return True
+            else:
+                log.LOGGER.debug("Section '%s' does not match", section)
+    return False
+</repair> 
+
+This repair mitigates the format string injection vulnerability (by escaping user-supplied regex groups) as well as other issues by using updated API calls and stricter matching.

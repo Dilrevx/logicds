@@ -1,0 +1,13 @@
+The repair adds two key checks immediately after calling prctl():
+
+1. It ensures that the prctl(PR_SET_PDEATHSIG, SIGTERM) call succeeds by checking its return value. If prctl() fails, the code logs an error and exits. This is important because if prctl() fails and you don't check it, your process might not receive SIGTERM when the parent dies, leaving it running unexpectedly in a potentially isolated or hazardous state.
+
+2. It checks whether the parent process has already terminated by verifying if getppid() returns 1. In Unix-like systems, if a process’s parent terminates, its parent becomes the init (or systemd) process (PID 1), which is not the intended parent for our setup. If the parent has already terminated, the code logs a message and exits, because such an orphaned child might behave in unintended ways or might miss required cleanup or coordination mechanisms provided by the parent.
+
+These improvements fix a logical vulnerability. Originally, after calling prctl(), the child didn't verify whether the setting was applied correctly or if the parent process was still alive. If the parent process had already died, the child could continue execution in an environment inconsistent with the initial assumptions (for example, still trying to remount or reconfigure namespaces under conditions not fully controlled). This could lead to misbehavior or security issues where the child process remains running without the intended safeguards provided by its parent.
+
+By ensuring that prctl() succeeds and that the parent is still alive (i.e., getppid() is not 1), the repair prevents the child process from entering a state where it might incorrectly assume control within the new namespaces. This minimizes the risk that a compromised or unexpected state leads to further privilege escalation or unwanted interactions with system resources.
+
+After these checks, the code proceeds as before with mounting the namespace (changing mount propagation and remounting /proc), confident that the process is in a consistent state relative to its parent. The mount operations remain unchanged, as they fulfill the needed remounting of /proc and propagation control for the new namespace. 
+
+Overall, the repair enhances the robustness of the code by verifying that critical state changes (setting a death signal and confirming the parent's existence) have been applied as expected, thereby closing the logical loophole that could be exploited when the parent process is already terminated.

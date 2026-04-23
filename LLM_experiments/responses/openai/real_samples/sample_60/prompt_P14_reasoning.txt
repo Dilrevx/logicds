@@ -1,0 +1,12 @@
+The repair first moves the bcrypt computation within the locked critical section and adds a double-check on the cache once the lock is acquired. Originally, a goroutine might have proceeded to compute the bcrypt comparison even if another goroutine was already processing the same request concurrently. 
+
+In this updated version, when the bcrypt mutex is acquired, the code rechecks the cache using u.cache.get(cacheKey) to see if another goroutine stored the result in the meantime. By double-checking, it avoids redundant, expensive bcrypt operations if the result was computed by someone else during the lock waiting period.
+
+This change also prevents potential race conditions that could arise due to multiple concurrent bcrypt operations attempting to modify the shared cache simultaneously. By confining both the computation and cache update to the critical section (protected by u.bcryptMtx.Lock() and Unlock()), it ensures that only one goroutine performs the expensive computation while others wait, then reuse the computed result.
+
+Furthermore, if while waiting for the lock another goroutine places the result in the cache, the waiting goroutine can use that cached result directly. This improves performance and ensures consistency. Thus, the critical vulnerability of redundant processing or potential cache timing attacks—where another caller might trigger unnecessary expensive operations—is mitigated with this approach.
+
+In summary, the changes fix the vulnerability by:
+1. Ensuring that all bcrypt operations and cache modifications occur within a controlled critical section, thereby preventing race conditions.
+2. Implementing a double-check pattern inside the critical section to utilize already computed values from the cache, reducing duplicated work.
+3. Guaranteeing thread safety and consistent access to shared resources, which is essential for a utility package like Prometheus Exporter Toolkit that may be exposed via its configuration file (web.yml).

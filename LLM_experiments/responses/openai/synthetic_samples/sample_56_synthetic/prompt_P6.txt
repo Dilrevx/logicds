@@ -1,0 +1,60 @@
+<repair>
+        if ("POST".equals(request.getMethod())) {
+            Map<String, String> toSave = request.getForm();
+            if (!currentUser.roleEditShelfs() && "on".equals(toSave.get("is_public"))) {
+                return ShelfResponse.redirect("/web/index",
+                        "Sorry you are not allowed to create a public shelf", "error");
+            }
+            String isPublicRaw = toSave.get("is_public");
+            int isPublic = (isPublicRaw != null && !isPublicRaw.isEmpty()) ? 1 : 0;
+
+            // Ensure that only the owner or a user with appropriate privileges can modify an existing shelf.
+            if (shelfId != null && !shelf.getUserId().equals(currentUser.getId()) && !currentUser.roleEditShelfs()) {
+                return ShelfResponse.redirect("/web/index",
+                        "Sorry you are not allowed to modify this shelf", "error");
+            }
+
+            if (Config.configKoboSync) {
+                shelf.setKoboSync(toSave.get("kobo_sync") != null);
+                if (shelf.isKoboSync()) {
+                    Session.archiveDelete(currentUser.getId(), shelf.getUuid());
+                    try {
+                        Session.commit();
+                    } catch (Exception e) {
+                        Session.rollback();
+                    }
+                }
+            }
+            String shelfTitle = toSave.getOrDefault("title", "");
+            if (checkShelfIsUnique(shelf, shelfTitle, isPublic, shelfId)) {
+                shelf.setName(shelfTitle);
+                shelf.setIsPublic(isPublic);
+                String shelfAction;
+                String flashText;
+                if (shelfId == null) {
+                    shelf.setUserId(currentUser.getId());
+                    Session.add(shelf);
+                    shelfAction = "created";
+                    flashText = "Shelf " + shelfTitle + " created";
+                } else {
+                    shelfAction = "changed";
+                    flashText = "Shelf " + shelfTitle + " changed";
+                }
+                try {
+                    Session.commit();
+                    Logger.info("Shelf " + shelfTitle + " " + shelfAction);
+                    return ShelfResponse.redirect("/shelf/show_shelf?id=" + shelf.getId(),
+                            flashText, "success");
+                } catch (CalibreErrors.OperationalError ex) {
+                    Session.rollback();
+                    Logger.error("Settings DB is not Writeable");
+                } catch (CalibreErrors.InvalidRequestError ex) {
+                    Session.rollback();
+                    Logger.error("Settings DB is not Writeable");
+                } catch (Exception ex) {
+                    Session.rollback();
+                    Logger.error("There was an error");
+                }
+            }
+        }
+</repair>

@@ -1,0 +1,50 @@
+<repair>
+        // Ensure token is not null or empty
+        String token = findAccessToken(c);
+        if (token == null || token.trim().isEmpty()) {
+            if (hasPrefixes(path, new String[]{"/o"})) {
+                return next.handle(c);
+            }
+            if (hasPrefixes(path, new String[]{"/api/status", "/api/memo"}) && "GET".equals(method)) {
+                return next.handle(c);
+            }
+            return new HttpError(STATUS_UNAUTHORIZED, "Missing access token");
+        }
+
+        // Parse the token and validate its signature algorithm and key identifier.
+        Claims claims = new Claims();
+        JwtParser.ParseResult parsed = JwtParser.parseWithClaims(token, claims, new JwtParser.KeyFn() {
+            public Object apply(JwtToken t) {
+                // Only allow the HS256 algorithm.
+                if (!"HS256".equals(t.getMethodAlg())) {
+                    throw new RuntimeException("unexpected access token signing method");
+                }
+                // Validate the key identifier (kid) strictly.
+                Object kidObj = t.getHeader().get("kid");
+                if (kidObj instanceof String) {
+                    String kid = (String) kidObj;
+                    if ("v1".equals(kid)) {
+                        return secret.getBytes();
+                    }
+                }
+                throw new RuntimeException("unexpected access token kid");
+            }
+        });
+
+        // Check whether token parsing was successful.
+        if (!parsed.isSuccessful()) {
+            return new HttpError(STATUS_UNAUTHORIZED, "Invalid or expired access token");
+        }
+
+        // (Optional) Further claims validation like expiry could be added here if not done automatically.
+        // For example:
+        // if (claims.getExpiryTime() != null && claims.getExpiryTime().before(new Date())) {
+        //     return new HttpError(STATUS_UNAUTHORIZED, "Access token expired");
+        // }
+
+        // Optionally store the validated claims in the context for downstream handlers.
+        c.set("claims", claims);
+
+        return next.handle(c);
+    }
+</repair>

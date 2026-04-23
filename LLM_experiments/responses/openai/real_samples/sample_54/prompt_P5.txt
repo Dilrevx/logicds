@@ -1,0 +1,56 @@
+<repair>
+    /* Create a temporary directory with a secure template. We then immediately restrict its permissions. */
+    tmpdir = mkdtemp(template);
+    if (!tmpdir) {
+        fuse_log(FUSE_LOG_ERR, "mkdtemp(%s): %m\n", template);
+        exit(1);
+    }
+
+    /* Restrict the tmpdir permissions so that only the owner (the daemon) can access it.
+       This prevents an attacker (e.g. a privileged guest user) from tampering with its contents. */
+    if (chmod(tmpdir, S_IRWXU) < 0) {
+        fuse_log(FUSE_LOG_ERR, "chmod(%s, 0700): %m\n", tmpdir);
+        exit(1);
+    }
+
+    /* Bind mount /proc/self/fd onto the temporary directory.
+       Using a private and controlled directory avoids race or TOCTOU issues where an attacker might
+       substitute a malicious file or device node. */
+    if (mount("/proc/self/fd", tmpdir, NULL, MS_BIND, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc/self/fd, %s, MS_BIND): %m\n", tmpdir);
+        exit(1);
+    }
+
+    /* Immediately verify that the tmpdir still refers to a directory. This check helps ensure that
+       no attacker-controlled replacement (e.g. via a symlink attack) has occurred in the meantime. */
+    {
+        struct stat st;
+        if (lstat(tmpdir, &st) < 0) {
+            fuse_log(FUSE_LOG_ERR, "lstat(%s): %m\n", tmpdir);
+            exit(1);
+        }
+        if (!S_ISDIR(st.st_mode)) {
+            fuse_log(FUSE_LOG_ERR, "%s is not a directory; potential attack detected\n", tmpdir);
+            exit(1);
+        }
+    }
+
+    /* Open the directory file descriptor using flags that enforce directory and no further following,
+       reducing the risks of accidental following of symlinks or unintentional inheritance. */
+    lo->proc_self_fd = open(tmpdir, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    if (lo->proc_self_fd == -1) {
+        fuse_log(FUSE_LOG_ERR, "open(%s, O_PATH | O_DIRECTORY): %m\n", tmpdir);
+        exit(1);
+    }
+
+    /* Unmount the temporary mount point and remove the now-unneeded temporary directory.
+       Errors in rmdir() are only logged. */
+    if (umount2(tmpdir, MNT_DETACH) < 0) {
+        fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (rmdir(tmpdir) < 0) {
+        fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+    }
+</repair>

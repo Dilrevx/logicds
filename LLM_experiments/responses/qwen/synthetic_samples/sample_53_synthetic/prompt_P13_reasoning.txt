@@ -1,0 +1,50 @@
+The vulnerability described in the provided code snippet pertains to a security flaw in the Mandril security plugin within the Monkey HTTP Daemon (monkeyd). This flaw allows remote attackers to bypass access restrictions by crafting a URI that includes an encoded forward slash. The issue arises because the original code does not properly decode the URI before checking it against the security rules, which can lead to incorrect validation results.
+
+### Original Code Analysis
+
+In the original code snippet:
+
+```java
+if (MkSecurity.checkUrl(sr.getUri()) < 0) {
+    PluginTrace.trace("[FD %d] Close connection, blocked URL", cs.getSocket());
+    mkApi.headerSetHttpStatus(sr, PluginConst.MK_CLIENT_FORBIDDEN);
+    return PluginConst.MK_PLUGIN_RET_CLOSE_CONX;
+}
+```
+
+The function `MkSecurity.checkUrl(sr.getUri())` is called with the raw URI obtained from the request (`sr.getUri()`). If this function returns a value less than 0, indicating that the URL is blocked or invalid according to the security rules, the connection is closed, and an HTTP status of 403 (Forbidden) is sent to the client.
+
+However, if the URI contains encoded characters, such as `%2F` representing a forward slash `/`, the security check might fail to correctly identify the URL as restricted. This is because the security rules are likely designed to work with decoded URIs, but the input to `checkUrl` is still in its encoded form.
+
+### Vulnerability Exploitation
+
+An attacker could exploit this vulnerability by sending a request with a URI like `/path%2Fto%2Fresource`. If the security rules are set to block `/path/to/resource`, the encoded version would pass the check because the function `checkUrl` sees `%2F` instead of `/`. As a result, the attacker could gain unauthorized access to resources that should be protected.
+
+### Repair Strategy
+
+To address this vulnerability, the URI must be decoded before it is passed to the `MkSecurity.checkUrl` function. Decoding the URI ensures that any encoded characters are converted back to their original form, allowing the security checks to be performed accurately.
+
+### Implementation of the Repair
+
+The repair involves decoding the URI using `java.net.URLDecoder.decode` method before passing it to the security check function. Here is the repaired code:
+
+```java
+String decodedUri = java.net.URLDecoder.decode(sr.getUri(), "UTF-8");
+if (MkSecurity.checkUrl(decodedUri) < 0) {
+    PluginTrace.trace("[FD %d] Close connection, blocked URL", cs.getSocket());
+    mkApi.headerSetHttpStatus(sr, PluginConst.MK_CLIENT_FORBIDDEN);
+    return PluginConst.MK_PLUGIN_RET_CLOSE_CONX;
+}
+```
+
+#### Explanation of the Repair
+
+1. **Decoding the URI**: The line `String decodedUri = java.net.URLDecoder.decode(sr.getUri(), "UTF-8");` decodes the URI string. The `URLDecoder.decode` method converts percent-encoded characters (like `%2F`) back to their original form (like `/`). The second parameter `"UTF-8"` specifies the character encoding used for the decoding process, which is a common standard for web applications.
+
+2. **Passing the Decoded URI**: After decoding, the `decodedUri` variable holds the URI in its original, unencoded form. This decoded URI is then passed to the `MkSecurity.checkUrl` function: `MkSecurity.checkUrl(decodedUri)`. This ensures that the security checks are performed on the actual path requested by the client, rather than on the percent-encoded version.
+
+3. **Maintaining Security Checks**: The rest of the code remains unchanged. If the security check determines that the URI is blocked (i.e., `MkSecurity.checkUrl(decodedUri) < 0`), the connection is closed, and an HTTP 403 status is returned to the client. This behavior ensures that the security rules are enforced correctly, preventing unauthorized access.
+
+### Conclusion
+
+By decoding the URI before performing security checks, the repair effectively mitigates the vulnerability that allowed attackers to bypass access restrictions through encoded URIs. This change ensures that the security rules are applied consistently and accurately, regardless of how the URI is encoded in the request.

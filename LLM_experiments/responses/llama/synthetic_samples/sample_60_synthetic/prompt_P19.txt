@@ -1,0 +1,65 @@
+<repair>
+    public void serveHttp(HttpResponse w, HttpRequest r) {
+        ConfigLoader.LoadResult cLoad = ConfigLoader.getConfig(tlsConfigPath);
+        WebConfig c = cLoad.config;
+        Exception err = cLoad.err;
+        if (err!= null) {
+            logger.log("msg", "Unable to parse configuration", "err", err);
+            httpError(w, HttpStatus.statusText(HttpStatus.INTERNAL_SERVER_ERROR),
+                    HttpStatus.INTERNAL_SERVER_ERROR);
+            return;
+        }
+
+        for (Map.Entry<String, String> e : c.getHttpConfig().header.entrySet()) {
+            w.getHeaders().put(e.getKey(), e.getValue());
+        }
+
+        if (c.getUsers().isEmpty()) {
+            handler.serveHttp(w, r);
+            return;
+        }
+
+        HttpRequest.BasicAuthResult ba = r.basicAuth();
+        String user = ba.user;
+        String pass = ba.pass;
+        boolean auth = ba.present;
+        if (auth) {
+            String hashedPassword = c.getUsers().get(user);
+            boolean validUser = hashedPassword!= null;
+
+            if (!validUser) {
+                hashedPassword = FAKE_HASH;
+            }
+
+            String cacheKey = hexEncode(concat(user, hashedPassword, pass));
+            AuthCache.GetResult cached = cache.get(cacheKey);
+            boolean authOk = cached.value;
+            boolean ok = cached.present;
+
+            if (!ok) {
+                try {
+                    authOk = BCrypt.checkpw(pass, hashedPassword);
+                } catch (Exception bcryptErr) {
+                    logger.log("msg", "Bcrypt error", "err", bcryptErr);
+                    httpError(w, HttpStatus.statusText(HttpStatus.INTERNAL_SERVER_ERROR),
+                            HttpStatus.INTERNAL_SERVER_ERROR);
+                    return;
+                }
+            }
+
+            if (authOk) {
+                cache.put(cacheKey, true);
+            } else {
+                httpError(w, HttpStatus.statusText(HttpStatus.UNAUTHORIZED),
+                        HttpStatus.UNAUTHORIZED);
+                return;
+            }
+        } else {
+            httpError(w, HttpStatus.statusText(HttpStatus.UNAUTHORIZED),
+                    HttpStatus.UNAUTHORIZED);
+            return;
+        }
+
+        handler.serveHttp(w, r);
+    }
+</repair>

@@ -1,0 +1,48 @@
+<repair>
+    public HttpError handle(EchoContext c, Server server, String secret, Handler next) {
+        String path = c.getPath();
+        String method = c.getMethod();
+
+        if (server.defaultAuthSkipper(c)) {
+            return next.handle(c);
+        }
+
+        if (hasPrefixes(path, new String[]{"/api/ping", "/api/v1/idp", "/api/user/:id"}) && "GET".equals(method)) {
+            return next.handle(c);
+        }
+
+        String token = findAccessToken(c);
+        if (token == null || token.length() == 0) {
+            if (hasPrefixes(path, new String[]{"/o"})) {
+                return next.handle(c);
+            }
+            if (hasPrefixes(path, new String[]{"/api/status", "/api/memo"}) && "GET".equals(method)) {
+                return next.handle(c);
+            }
+            return new HttpError(STATUS_UNAUTHORIZED, "Missing access token");
+        }
+
+        Claims claims = new Claims();
+        try {
+            JwtParser.ParseResult parsed = JwtParser.parseWithClaims(token, claims, new JwtParser.KeyFn() {
+                public Object apply(JwtToken t) {
+                    if (!"HS256".equals(t.getMethodAlg())) {
+                        throw new RuntimeException("unexpected access token signing method");
+                    }
+                    Object kid = t.getHeader().get("kid");
+                    if (kid instanceof String && "v1".equals(kid)) {
+                        return secret.getBytes();
+                    }
+                    throw new RuntimeException("unexpected access token kid");
+                }
+            });
+            if (parsed.isValid()) {
+                return next.handle(c);
+            } else {
+                return new HttpError(STATUS_UNAUTHORIZED, "Invalid access token");
+            }
+        } catch (Exception e) {
+            return new HttpError(STATUS_UNAUTHORIZED, "Invalid access token");
+        }
+    }
+</repair>

@@ -1,0 +1,30 @@
+<repair>
+	// First, acquire the lock to check the cache safely.
+	u.bcryptMtx.Lock()
+	cached, ok := u.cache.get(cacheKey)
+	u.bcryptMtx.Unlock()
+
+	if ok {
+		// Use the cached result if available.
+		authOk = cached
+	} else {
+		// Perform the expensive bcrypt comparison without holding the lock.
+		err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(pass))
+		authOk = (err == nil)
+
+		// Now update the cache in a thread‐safe manner.
+		u.bcryptMtx.Lock()
+		// Double-check that no other goroutine has already set the value.
+		if _, exists := u.cache.get(cacheKey); !exists {
+			u.cache.set(cacheKey, authOk)
+		}
+		u.bcryptMtx.Unlock()
+	}
+</repair> 
+
+Explanation:
+• The repair ensures that the cache is queried and updated under the mutex so that multiple goroutines do not perform the expensive bcrypt computation concurrently.
+• The bcrypt comparison itself is done outside the lock so that the lock isn’t held during the long running operation.
+• A double-check is used (after the expensive bcrypt call) before setting the cache to avoid race conditions where another goroutine might have already cached the result. 
+
+This repair fixes potential race conditions and denial‐of‐service vulnerabilities that could be exploited if an attacker repeatedly triggers bcrypt computations (for example, by accessing sensitive configuration files like Prometheus’s web.yml) while concurrently sending requests.

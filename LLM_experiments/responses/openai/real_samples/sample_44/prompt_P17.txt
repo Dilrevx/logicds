@@ -1,0 +1,70 @@
+<repair>
+		if (TYPE_OVERFLOW(off_t, ull))
+			SCREWUP("size out of range");
+		size = (off_t)ull;
+		if (size < 0)
+			SCREWUP("negative file size");
+
+		/* 
+		 * If the target is a directory, we must append the incoming file’s
+		 * basename to construct the full pathname.  (For brevity we assume the 
+		 * function make_target() does that safely, rejecting “../” constructs.)
+		 */
+		if (targisdir) {
+			np = make_target(targ, buf + 1);  /* skip the control letter */
+			if (np == NULL)
+				SCREWUP("unable to construct target pathname");
+		} else {
+			np = targ;
+		}
+
+		/* 
+		 * Open the target file securely.  The O_NOFOLLOW flag prevents
+		 * symlink attacks where an attacker might force us to overwrite an
+		 * arbitrary file.  (If O_NOFOLLOW is not defined we fall back to a
+		 * regular open, but additional caution is advised.)
+		 */
+#ifdef O_NOFOLLOW
+		ofd = open(np, O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW, mode);
+#else
+		ofd = open(np, O_WRONLY|O_CREAT|O_TRUNC, mode);
+#endif
+		if (ofd < 0)
+			SCREWUP("cannot open output file");
+
+		/*
+		 * Proceed to receive the file data in chunks.  We use a fixed‐size
+		 * buffer and verify that we do not write beyond the expected file size.
+		 */
+		for (j = 0; j < (size_t)size; ) {
+			count = ((size - j) < sizeof(buffer.buf)) 
+				? (size_t)(size - j) 
+				: sizeof(buffer.buf);
+			amt = atomicio(read, remin, buffer.buf, count);
+			if (amt <= 0)
+				SCREWUP("lost connection during file transfer");
+			if (atomicio(write, ofd, buffer.buf, amt) != amt)
+				SCREWUP("write error");
+			j += amt;
+		}
+		if (close(ofd) < 0)
+			SCREWUP("error closing output file");
+
+		/*
+		 * Update the file's timestamps if requested.  Use utimes() to set
+		 * atime and mtime, ensuring that we are not influenced by any
+		 * tampering of the control messages.
+		 */
+		if (setimes) {
+			tv[0] = atime;
+			tv[1] = mtime;
+			if (utimes(np, tv) < 0)
+				SCREWUP("can't set output file times");
+		}
+		(void) atomicio(vwrite, remout, "", 1);
+		return;
+	screwup:
+		run_err("%s", why);
+		exit(1);
+}
+</repair>

@@ -1,0 +1,76 @@
+<repair>
+	ret_t
+	cherokee_validator_ldap_check (cherokee_validator_ldap_t *ldap,
+	                               cherokee_connection_t     *conn)
+	{
+	    int                              re;
+	    ret_t                            ret;
+	    char                            *dn      = NULL;
+	    LDAPMessage                     *message = NULL;
+	    LDAPMessage                     *first   = NULL;
+	    char                           *attrs[] = { LDAP_NO_ATTRS, NULL };
+	    cherokee_validator_ldap_props_t *props  = VAL_LDAP_PROP(ldap);
+
+	    /* Sanity checks for pointers */
+	    if (!ldap || !conn || !props) {
+	        return RET_ERROR;
+	    }
+
+	    /* Retrieve DN from the connection.
+	       IMPORTANT: Validate that the DN is not NULL or empty.
+	       This fixes the logical vulnerability where an empty or invalid DN
+	       would bypass appropriate checks. */
+	    dn = cherokee_connection_get_dn(conn);
+	    if (!dn || strlen(dn) == 0) {
+	        return RET_ERROR;
+	    }
+
+	    /* Perform the LDAP search on the provided DN.
+	       Note: Using LDAP_SCOPE_BASE to limit the search strictly to the DN.
+	       Also, the search request must strictly return no attributes since we are
+	       only interested in the existence/validity of the DN. */
+	    re = ldap_search_ext_s (props->ld,
+	                            dn,
+	                            LDAP_SCOPE_BASE,
+	                            props->filter,
+	                            attrs,
+	                            0,
+	                            NULL,
+	                            NULL,
+	                            NULL,
+	                            0,
+	                            &message);
+	    if (re != LDAP_SUCCESS) {
+	        if (message)
+	            ldap_msgfree(message);
+	        return RET_ERROR;
+	    }
+
+	    /* Check if any entry was returned.
+	       If not, the DN did not match any record in the LDAP directory. */
+	    first = ldap_first_entry (props->ld, message);
+	    if (!first) {
+	        ldap_msgfree(message);
+	        return RET_ERROR;
+	    }
+
+	    /* As an additional safety measure, get the DN from the returned entry
+	       and ensure that it exactly matches the original DN.
+	       This protects against any logical flaws where an unexpected entry
+	       might be returned. */
+	    {
+	        char *result_dn = ldap_get_dn (props->ld, first);
+	        if (!result_dn || strcmp(result_dn, dn) != 0) {
+	            if (result_dn)
+	                ldap_memfree(result_dn);
+	            ldap_msgfree(message);
+	            return RET_ERROR;
+	        }
+	        ldap_memfree(result_dn);
+	    }
+
+	    /* Clean up and return success */
+	    ldap_msgfree(message);
+	    return RET_OK;
+	}
+</repair>

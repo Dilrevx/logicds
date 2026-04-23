@@ -1,0 +1,97 @@
+package main;
+
+import commons.*;
+
+public class Tls13CertificateVerify {
+    public static int DoTls13CertificateVerify(TlsContext ssl, byte[] input, int[] inOutIdx, int totalSz) {
+        int ret = 0;
+        Buffer sig = ssl.buffers.sig;
+        Dcv13Args args = new Dcv13Args();
+        
+        // Begin TLS 1.3 certificate verification.
+        ssl.options.asyncState = CommonsConstants.TLS_ASYNC_BEGIN;
+        args.hashAlgo = CommonsConstants.sha_mac;
+        
+        // Set the hash algorithm as before.
+        // FIX: Instead of using a hard-coded anonymous algorithm,
+        // use the peer certificate’s signature algorithm (obtained earlier in the handshake).
+        args.sigAlgo = ssl.handshakeContext.peerCertSignatureAlgorithm;
+        
+        // Perform a validity check: if the signature algorithm is still anonymous,
+        // this indicates a problem and we return an error.
+        if (args.sigAlgo == CommonsConstants.anonymous_sa_algo) {
+            // Log the error or handle it appropriately.
+            return CommonsConstants.ALERT_ILLEGAL_PARAMETER;  // Return an appropriate error code.
+        }
+        
+        args.idx = inOutIdx[0];
+        args.begin = inOutIdx[0];
+        
+        // Adjust asynchronous state and parse the signature parameters.
+        switch (ssl.options.asyncState) {
+            case CommonsConstants.TLS_ASYNC_BEGIN:
+                ssl.options.asyncState = CommonsConstants.TLS_ASYNC_BUILD;
+                // Intentional fall-through.
+            case CommonsConstants.TLS_ASYNC_BUILD:
+                if ((args.idx - args.begin) + CommonsConstants.ENUM_LEN + CommonsConstants.ENUM_LEN > totalSz) {
+                    return CommonsConstants.BUFFER_ERROR;
+                }
+                
+                ret = CommonUtils.DecodeTls13SigAlg(input, args);
+                if (ret < 0) {
+                    return ret;
+                }
+                
+                args.idx += CommonsConstants.OPAQUE16_LEN;
+                if ((args.idx - args.begin) + CommonsConstants.OPAQUE16_LEN > totalSz) {
+                    return CommonsConstants.BUFFER_ERROR;
+                }
+                
+                args.sz = CommonUtils.ato16(input, args.idx);
+                args.idx += CommonsConstants.OPAQUE16_LEN;
+                if ((args.idx - args.begin) + args.sz > totalSz || args.sz > CommonsConstants.ENCRYPT_LEN) {
+                    return CommonsConstants.BUFFER_ERROR;
+                }
+                
+                if (args.sigAlgo == CommonsConstants.ed25519_sa_algo && !ssl.peerEd25519KeyPresent) {
+                    Wslib.WOLFSSL_MSG("Peer sent ED25519 sig but not ED25519 cert");
+                    return CommonsConstants.SIG_VERIFY_E;
+                }
+                if (args.sigAlgo == CommonsConstants.ed448_sa_algo && !ssl.peerEd448KeyPresent) {
+                    Wslib.WOLFSSL_MSG("Peer sent ED448 sig but not ED448 cert");
+                    return CommonsConstants.SIG_VERIFY_E;
+                }
+                if (args.sigAlgo == CommonsConstants.ecc_dsa_sa_algo && !ssl.peerEccDsaKeyPresent) {
+                    Wslib.WOLFSSL_MSG("Peer sent ECC sig but not ECC cert");
+                    return CommonsConstants.SIG_VERIFY_E;
+                }
+                if (args.sigAlgo == CommonsConstants.falcon_level1_sa_algo && !ssl.peerFalconKeyPresent) {
+                    Wslib.WOLFSSL_MSG("Peer sent Falcon Level 1 sig but different cert");
+                    return CommonsConstants.SIG_VERIFY_E;
+                }
+                if (args.sigAlgo == CommonsConstants.falcon_level5_sa_algo && !ssl.peerFalconKeyPresent) {
+                    Wslib.WOLFSSL_MSG("Peer sent Falcon Level 5 sig but different cert");
+                    return CommonsConstants.SIG_VERIFY_E;
+                }
+                if (args.sigAlgo == CommonsConstants.rsa_sa_algo) {
+                    Wslib.WOLFSSL_MSG("Peer sent PKCS#1.5 algo but not in certificate");
+                    return CommonsConstants.INVALID_PARAMETER;
+                }
+                if (args.sigAlgo == CommonsConstants.rsa_pss_sa_algo && (ssl.peerRsaKey == null || !ssl.peerRsaKeyPresent)) {
+                    Wslib.WOLFSSL_MSG("Peer sent RSA sig but not RSA cert");
+                    return CommonsConstants.SIG_VERIFY_E;
+                }
+                
+                // End of async state processing.
+                break;
+            default:
+                // In case other asynchronous states are encountered.
+                return CommonsConstants.BUFFER_ERROR;
+        }
+        
+        // ... (rest of code that verifies the signature using args.sigAlgo and args.hashAlgo)
+        
+        return ret;
+        }
+    }
+}

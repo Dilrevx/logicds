@@ -1,0 +1,39 @@
+<repair>
+    char *sandboxed_dir = "/tmp/sandboxed-fd";
+    struct stat st;
+
+    // Ensure the sandboxed directory exists and is owned by root with correct permissions
+    if (stat(sandboxed_dir, &st) == -1) {
+        if (mkdir(sandboxed_dir, 0755) == -1) {
+            fuse_log(FUSE_LOG_ERR, "mkdir(%s, 0755): %m\n", sandboxed_dir);
+            exit(1);
+        }
+        if (chown(sandboxed_dir, 0, 0) == -1) { // Change owner to root
+            fuse_log(FUSE_LOG_ERR, "chown(%s, 0, 0): %m\n", sandboxed_dir);
+            exit(1);
+        }
+    } else {
+        if (st.st_uid != 0 || (st.st_mode & (S_IWGRP | S_IWOTH))) {
+            fuse_log(FUSE_LOG_ERR, "%s is not securely configured\n", sandboxed_dir);
+            exit(1);
+        }
+    }
+
+    if (mount("/proc/self/fd", sandboxed_dir, NULL, MS_BIND, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc/self/fd, %s, MS_BIND): %m\n",
+                 sandboxed_dir);
+        exit(1);
+    }
+
+    /* Now we can get our /proc/self/fd directory file descriptor */
+    lo->proc_self_fd = open(sandboxed_dir, O_PATH);
+    if (lo->proc_self_fd == -1) {
+        fuse_log(FUSE_LOG_ERR, "open(%s, O_PATH): %m\n", sandboxed_dir);
+        exit(1);
+    }
+
+    if (umount2(sandboxed_dir, MNT_DETACH) < 0) {
+        fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", sandboxed_dir);
+        exit(1);
+    }
+</repair>

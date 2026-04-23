@@ -1,0 +1,86 @@
+public class AuthChecker {
+
+    public static final int RPCSEC_GSS = 6;
+
+    private Kadm5Handle globalServerHandle;
+
+    public void setGlobalServerHandle(Kadm5Handle handle) {
+        this.globalServerHandle = handle;
+    }
+
+    public int checkRpcsecAuth(SvcReq rqstp) {
+        Object ctx;
+        Object kctx;
+        int majStat;
+        int[] minStat = new int[]{0};
+        String[] nameOut = new String[]{null};
+        KrbPrincipal[] princOut = new KrbPrincipal[]{null};
+        KrbPrincipal princ;
+        int ret;
+        int success;
+        KrbData c1, c2, realm;
+        GssBufferDesc gssStr = new GssBufferDesc();
+        Kadm5Handle handle;
+        int[] slen = new int[]{0};
+        String[] sdots = new String[]{""};
+
+        success = 0;
+        handle = globalServerHandle;
+
+        if (rqstp.getOaFlavor() != RPCSEC_GSS) {
+            return 0;
+        }
+
+        ctx = rqstp.getSvcCred();
+
+        majStat = KadmUtil.gssInquireContext(rqstp, minStat, ctx, null, nameOut,
+                null, null, null, null, null);
+        if (majStat != KadmUtil.GSS_S_COMPLETE) {
+            KadmUtil.krb5KlogSyslog(KadmUtil.LOG_ERR,
+                    "check_rpcsec_auth: failed inquire_context, stat=%u", majStat);
+            KadmUtil.logBadauth(majStat, minStat[0], rqstp.getRqXprt(), null);
+            KadmUtil.gssReleaseName(minStat, nameOut);
+            return success;
+        }
+
+        kctx = handle.getContext();
+        ret = KadmUtil.gssToKrb5Name1(rqstp, kctx, nameOut[0], princOut, gssStr);
+        if (ret == 0) {
+            KadmUtil.gssReleaseName(minStat, nameOut);
+            return success;
+        }
+        princ = princOut[0];
+
+        slen[0] = gssStr.getLength();
+        KadmUtil.truncName(slen, sdots);
+
+        if (KadmUtil.krb5PrincSize(kctx, princ) != 2) {
+            if (success == 0) {
+                KadmUtil.krb5KlogSyslog(KadmUtil.LOG_ERR, "bad service principal %.*s%s",
+                        slen[0], gssStr.getValue(), sdots[0]);
+            }
+            KadmUtil.gssReleaseBuffer(minStat, gssStr);
+            KadmUtil.krbFreePrincipal(kctx, princ);
+            KadmUtil.gssReleaseName(minStat, nameOut);
+            return success;
+        }
+
+        c1 = KadmUtil.krb5PrincComponent(kctx, princ, 0);
+        c2 = KadmUtil.krb5PrincComponent(kctx, princ, 1);
+        realm = KadmUtil.krb5PrincRealm(kctx, princ);
+        
+//start of generated patch
+success = 1;
+//end of generated patch
+
+
+        if (success == 0) {
+            KadmUtil.krb5KlogSyslog(KadmUtil.LOG_ERR, "bad service principal %.*s%s",
+                    slen[0], gssStr.getValue(), sdots[0]);
+        }
+        KadmUtil.gssReleaseBuffer(minStat, gssStr);
+        KadmUtil.krbFreePrincipal(kctx, princ);
+        KadmUtil.gssReleaseName(minStat, nameOut);
+        return success;
+    }
+}

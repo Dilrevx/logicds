@@ -1,0 +1,44 @@
+<repair>
+    /* Create a temporary directory with a secure name.
+       mkdtemp() creates the directory with mode 0700, so no extra chmod() is needed. */
+    tmpdir = mkdtemp(template);
+    if (!tmpdir) {
+        fuse_log(FUSE_LOG_ERR, "mkdtemp(%s): %m\n", template);
+        exit(1);
+    }
+
+    if (mount("/proc/self/fd", tmpdir, NULL, MS_BIND, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc/self/fd, %s, MS_BIND): %m\n", tmpdir);
+        /* Clean up the temporary directory on error */
+        if (rmdir(tmpdir) < 0)
+            fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+        exit(1);
+    }
+
+    /* 
+     * Open the mounted directory using O_PATH and O_CLOEXEC.
+     * The addition of O_CLOEXEC ensures that the descriptor is not inherited
+     * by child processes, which helps prevent descriptor leakage vulnerabilities.
+     */
+    lo->proc_self_fd = open(tmpdir, O_PATH | O_CLOEXEC);
+    if (lo->proc_self_fd == -1) {
+        fuse_log(FUSE_LOG_ERR, "open(%s, O_PATH|O_CLOEXEC): %m\n", tmpdir);
+        if (umount2(tmpdir, MNT_DETACH) < 0)
+            fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+        if (rmdir(tmpdir) < 0)
+            fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (umount2(tmpdir, MNT_DETACH) < 0) {
+        fuse_log(FUSE_LOG_ERR, "umount2(%s, MNT_DETACH): %m\n", tmpdir);
+        close(lo->proc_self_fd);
+        if (rmdir(tmpdir) < 0)
+            fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+        exit(1);
+    }
+
+    if (rmdir(tmpdir) < 0) {
+        fuse_log(FUSE_LOG_ERR, "rmdir(%s): %m\n", tmpdir);
+    }
+</repair>

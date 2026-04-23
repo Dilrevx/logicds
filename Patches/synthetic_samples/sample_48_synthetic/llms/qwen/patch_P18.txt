@@ -1,0 +1,86 @@
+public class JwtMiddleware {
+
+    public static final int STATUS_UNAUTHORIZED = 401;
+    public static final int STATUS_INTERNAL_ERROR = 500;
+
+    public static final String ACCESS_TOKEN_AUDIENCE = "user.access-token";
+    public static final String REFRESH_TOKEN_AUDIENCE = "user.refresh-token";
+    public static final String REFRESH_TOKEN_COOKIE = "memos.refresh-token";
+    public static final long REFRESH_THRESHOLD_MILLIS = 7L * 24 * 60 * 60 * 1000;
+
+
+        if (!parsed.isSuccess()) {
+            return new HttpError(STATUS_UNAUTHORIZED, "Invalid access token");
+        }
+
+        long now = System.currentTimeMillis() / 1000L;
+        if (claims.getIssuedAt() > now || claims.getExpiresAt() < now) {
+            return new HttpError(STATUS_UNAUTHORIZED, "Access token expired or not yet valid");
+        }
+
+        return next.handle(c);
+    }
+
+
+    private HttpError generateTokenFunc(EchoContext c, Server server, String secret, int userId) {
+        String rc = c.getCookie(REFRESH_TOKEN_COOKIE);
+        if (EchoContext.COOKIE_MISSING.equals(rc)) {
+            return new HttpError(STATUS_UNAUTHORIZED,
+                    "Failed to generate access token. Missing refresh token.");
+        }
+
+        Claims refreshClaims = new Claims();
+        JwtParser.ParseResult parsed = JwtParser.parseWithClaims(rc, refreshClaims, new JwtParser.KeyFn() {
+            public Object apply(JwtToken t) {
+                if (!"HS256".equals(t.getMethodAlg())) {
+                    throw new RuntimeException("unexpected refresh token signing method");
+                }
+                Object kid = t.getHeader().get("kid");
+                if (kid instanceof String && "v1".equals(kid)) {
+                    return secret.getBytes();
+                }
+                throw new RuntimeException("unexpected refresh token kid");
+            }
+        });
+        if (parsed.err != null) {
+            return new HttpError(STATUS_INTERNAL_ERROR,
+                    "Server error to refresh expired token. User Id " + userId);
+        }
+
+        if (!audienceContains(refreshClaims.getAudience(), REFRESH_TOKEN_AUDIENCE)) {
+            return new HttpError(STATUS_UNAUTHORIZED,
+                    "Invalid refresh token, audience mismatch, got " + refreshClaims.getAudience()
+                            + ", expected " + REFRESH_TOKEN_AUDIENCE);
+        }
+
+        if (parsed.token != null && parsed.token.isValid()) {
+            generateTokensAndSetCookies(c, userId, secret);
+        }
+        return null;
+    }
+
+    private static void generateTokensAndSetCookies(EchoContext c, int userId, String secret) {
+        c.putCookie(REFRESH_TOKEN_COOKIE, "regenerated");
+    }
+
+    private static String findAccessToken(EchoContext c) {
+        String h = c.getAccessTokenHeader();
+        return h == null ? "" : h;
+    }
+
+    private static boolean audienceContains(java.util.List<String> audience, String expected) {
+        return audience != null && audience.contains(expected);
+    }
+
+    private static boolean hasPrefixes(String s, String[] prefixes) {
+        if (s == null) return false;
+        for (int i = 0; i < prefixes.length; i++) {
+            if (s.startsWith(prefixes[i])) return true;
+        }
+        return false;
+    }
+
+    private static String getUserIdContextKey() {
+        return "userID";
+    }
+}

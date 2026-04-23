@@ -1,0 +1,11 @@
+The added code performs a runtime check within the child process to ensure that its parent is still alive before proceeding with further initialization. Here’s how the repair works:
+
+1. After forking, the child process sets up to receive a SIGTERM if the parent dies (using prctl(PR_SET_PDEATHSIG, SIGTERM)). However, there can be a short window between fork and when prctl takes effect or when the child starts executing remount code, during which the parent might die. In such cases, the child's execution could continue in an unexpected state.
+
+2. The check "if (getppid() == 1)" is performed immediately after setting up mounts. On Unix-like systems, when the child process's parent terminates, the init process (with PID 1) adopts the orphaned process. Therefore, if getppid() returns 1, it indicates that the original parent is no longer alive.
+
+3. By detecting that the parent’s PID is 1, the child realizes that the intended parent setup (and possibly inherited capabilities or synchronization) is no longer valid. The child then logs an error message and exits immediately, preventing any further execution. This avoids a scenario where the child might continue running in an environment that no longer matches the intended security assumptions—an important step to avoid vulnerabilities related to orphan handling in namespaces.
+
+4. This repair is significant because it ensures the child does not run with partially set up or unexpected namespaces. If the parent process dies prematurely, the child might otherwise proceed and operate in a compromised context leading to unpredictable behavior or security issues. The check forces a controlled exit rather than allowing the process to continue in an orphaned state.
+
+In summary, the added code guarantees that the child process is only allowed to continue its execution if its parent is still alive. By doing so, it prevents the execution of critical initialization procedures in an unintended context, which could expose the process to vulnerabilities or unstable system states.

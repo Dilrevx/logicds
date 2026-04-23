@@ -1,0 +1,65 @@
+<repair>
+    String filename = cp.substring(idx);
+    
+    // Security fix: Validate the filename to disallow absolute paths and directory traversal.
+    // Only simple filenames (without any '/' or '\' or parent directory references) are allowed.
+    if (filename.startsWith("/") || filename.startsWith("\\") ||
+        filename.contains("/") || filename.contains("\\") ||
+        filename.contains("..")) {
+        ScpLog.runErr("Unsafe filename detected: " + filename);
+        return 1;
+    }
+    
+    // If the target is a directory, append the filename to the target directory path.
+    // Otherwise, use the target path directly.
+    if (targisdir) {
+        // Assuming joinPaths safely concatenates directory and filename.
+        filename = ctx.getFs().joinPaths(targ, filename);
+    } else {
+        filename = targ;
+    }
+    
+    // Open the file for writing with the adjusted mode.
+    ofd = ctx.getFs().open(filename, mode);
+    if (ofd < 0) {
+        ScpLog.runErr("Unable to open " + filename + " for writing.");
+        return 1;
+    }
+    
+    // Read file data from reader and write it to the opened file.
+    byte[] buffer = new byte[8192];
+    long remaining = size;
+    while (remaining > 0) {
+        int toRead = (int) Math.min(buffer.length, remaining);
+        int r = reader.read(buffer, 0, toRead);
+        if (r < 0) {
+            ScpLog.runErr("Unexpected EOF while reading file: " + filename);
+            ctx.getFs().close(ofd);
+            return 1;
+        }
+        ctx.getFs().write(ofd, buffer, 0, r);
+        remaining -= r;
+    }
+    
+    // Close the file after writing.
+    ctx.getFs().close(ofd);
+    
+    // If time-setting was requested (T record received earlier), update file timestamps.
+    if (setimes > 0) {
+        // Assuming setTimes updates the access and modification times.
+        ctx.getFs().setTimes(filename, ctx.getTimeAtime(), ctx.getTimeMtime());
+    }
+    
+    // Acknowledge receipt of the file to the remote process.
+    if (!reader.sendAck()) {
+        ScpLog.runErr("Failed to send acknowledge for file: " + filename);
+        return 1;
+    }
+    
+    // Continue to next control record or data.
+    // End of while loop iteration.
+    // (Assuming the remainder of the control loop is handled elsewhere)
+    
+    // For this snippet, if the outer loop exits normally, return success.
+    return 0;
+</repair>

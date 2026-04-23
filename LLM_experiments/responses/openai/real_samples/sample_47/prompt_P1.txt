@@ -1,0 +1,61 @@
+<repair>
+    krb5_keyblock *armor_key = NULL;
+    krb5_pa_otp_req *req = NULL;
+    struct request_state *rs;
+    krb5_error_code retval;
+    krb5_data d, plaintext;
+    char *config;
+    const char *expected_realm;
+
+    /* Get the FAST armor key. */
+    armor_key = cb->fast_armor(context, rock);
+    if (armor_key == NULL) {
+        retval = KRB5KDC_ERR_PREAUTH_FAILED;
+        com_err("otp", retval, "No armor key found when verifying padata");
+        goto error;
+    }
+
+    /*
+     * Ensure that the OTP preauthentication request has been properly validated.
+     * This patch makes sure that the preauthentication data is non‐empty and the
+     * provided realm matches the expected realm.
+     *
+     * Note: It is assumed that req (of type krb5_pa_otp_req) has been set earlier
+     * in the processing code.  In particular, that req->otp_value (a krb5_data)
+     * and req->realm (a NUL‐terminated string) are properly filled.
+     */
+
+    if (req == NULL) {
+        retval = KRB5KDC_ERR_PREAUTH_FAILED;
+        com_err("otp", retval, "Missing OTP preauthentication data");
+        goto error;
+    }
+
+    /* Check that the OTP data is non‐empty. */
+    if (req->otp_value.length == 0) {
+        retval = KRB5KDC_ERR_PREAUTH_FAILED;
+        com_err("otp", retval, "Empty OTP data provided");
+        goto error;
+    }
+
+    /* Retrieve the expected realm from configuration.
+       (This uses a helper function to obtain the default realm from the KDC's config.) */
+    expected_realm = krb5_config_get_string(context, NULL, "libdefaults", "default_realm", NULL);
+    if (expected_realm == NULL) {
+        retval = KRB5KDC_ERR_PREAUTH_FAILED;
+        com_err("otp", retval, "Could not retrieve expected realm from configuration");
+        goto error;
+    }
+
+    /* Validate that the preauthentication's realm matches the expected realm. */
+    if (req->realm == NULL || strcmp(req->realm, expected_realm) != 0) {
+        retval = KRB5KDC_ERR_PREAUTH_FAILED;
+        com_err("otp", retval, "Preauthentication realm mismatch");
+        goto error;
+    }
+
+    /* Now that the OTP preauthentication request has been validated, set the flag. */
+    enc_tkt_reply->flags |= TKT_FLG_PRE_AUTH;
+
+    /* [The remaining implementation would follow here.] */
+</repair>

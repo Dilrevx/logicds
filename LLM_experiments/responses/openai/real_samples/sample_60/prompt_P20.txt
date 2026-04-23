@@ -1,0 +1,50 @@
+<repair>
+	// Process BasicAuth credentials.
+	user, pass, auth := r.BasicAuth()
+	if !auth {
+		// No credentials provided.
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+
+	// Retrieve the configured hashed password for the user.
+	hashedPassword, validUser := c.Users[user]
+	if !validUser {
+		// The user is not found. Use a fixed bcrypt hash for "fakepassword" to avoid timing attacks.
+		hashedPassword = "$2y$10$QOauhQNbBCuQDKes6eFzPeMqBSjb7Mr5DUmpZ/VcEd00UAV/LDeSi"
+	}
+
+	if validUser {
+		// For real users, use caching to avoid repeated expensive bcrypt calls.
+		cacheKey := hex.EncodeToString(append(append([]byte(user), []byte(hashedPassword)...), []byte(pass)...))
+		if cached, found := u.cache.get(cacheKey); found {
+			if !cached {
+				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+				return
+			}
+		} else {
+			u.bcryptMtx.Lock()
+			err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(pass))
+			u.bcryptMtx.Unlock()
+
+			authOk := err == nil
+			u.cache.set(cacheKey, authOk)
+			if !authOk {
+				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+				return
+			}
+		}
+	} else {
+		// For non-existent users, always run bcrypt without caching to ensure consistent timing.
+		u.bcryptMtx.Lock()
+		err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(pass))
+		u.bcryptMtx.Unlock()
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			return
+		}
+	}
+
+	// If authentication is successful, forward the request.
+	u.handler.ServeHTTP(w, r)
+</repair>

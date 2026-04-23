@@ -1,0 +1,39 @@
+<repair>
+{
+    /* Allocate a buffer to hold the decoded URI. The worst-case length is the same as the encoded URI. */
+    char *decoded_buf = mk_api->mem_alloc(sr->uri.len + 1);
+    if (!decoded_buf) {
+        mk_api->header_set_http_status(sr, MK_CLIENT_INTERNAL_ERROR);
+        return MK_PLUGIN_RET_CLOSE_CONX;
+    }
+
+    /*
+     * Decode the given URI.
+     * mk_util_url_decode() is assumed to decode percent-encoded characters.
+     * It should return the length of the decoded string, or a negative value on error.
+     */
+    int decoded_len = mk_util_url_decode(sr->uri.data, sr->uri.len, decoded_buf, sr->uri.len + 1);
+    if (decoded_len < 0) {
+        PLUGIN_TRACE("[FD %i] Failed to decode URI, blocked URL", cs->socket);
+        mk_api->mem_free(decoded_buf);
+        mk_api->header_set_http_status(sr, MK_CLIENT_FORBIDDEN);
+        return MK_PLUGIN_RET_CLOSE_CONX;
+    }
+
+    /* Prepare a mk_ptr_t structure for the decoded URI */
+    mk_ptr_t decoded_uri;
+    decoded_uri.data = decoded_buf;
+    decoded_uri.len  = decoded_len;
+
+    /* Perform the security check on the decoded URI */
+    if (mk_security_check_url(decoded_uri) < 0) {
+        PLUGIN_TRACE("[FD %i] Close connection, blocked URL", cs->socket);
+        mk_api->mem_free(decoded_buf);
+        mk_api->header_set_http_status(sr, MK_CLIENT_FORBIDDEN);
+        return MK_PLUGIN_RET_CLOSE_CONX;
+    }
+
+    /* Free the allocated buffer now that we've finished the check */
+    mk_api->mem_free(decoded_buf);
+}
+</repair>

@@ -1,0 +1,52 @@
+<repair>
+if request.method == "POST":
+    # Convert form to dictionary once.
+    to_save = request.form.to_dict()
+
+    # Force explicit check against the expected value "on" so that users cannot bypass the permission check.
+    is_public_flag = to_save.get("is_public") == "on"
+    if not current_user.role_edit_shelfs() and is_public_flag:
+        flash(_(u"Sorry you are not allowed to create a public shelf"), category="error")
+        return redirect(url_for('web.index'))
+
+    # Only set is_public to 1 if the value is exactly "on".
+    is_public = 1 if is_public_flag else 0
+
+    # For kobo_sync, also explicitly check for "on"
+    if config.config_kobo_sync:
+        kobo_sync_flag = to_save.get("kobo_sync") == "on"
+        shelf.kobo_sync = kobo_sync_flag
+        if shelf.kobo_sync:
+            ub.session.query(ub.ShelfArchive)\
+                .filter(ub.ShelfArchive.user_id == current_user.id)\
+                .filter(ub.ShelfArchive.uuid == shelf.uuid)\
+                .delete()
+            ub.session_commit()
+
+    shelf_title = to_save.get("title", "")
+    if check_shelf_is_unique(shelf, shelf_title, is_public, shelf_id):
+        shelf.name = shelf_title
+        shelf.is_public = is_public
+        if not shelf_id:
+            shelf.user_id = int(current_user.id)
+            ub.session.add(shelf)
+            shelf_action = "created"
+            flash_text = _(u"Shelf %(title)s created", title=shelf_title)
+        else:
+            shelf_action = "changed"
+            flash_text = _(u"Shelf %(title)s changed", title=shelf_title)
+        try:
+            ub.session.commit()
+            log.info(u"Shelf {} {}".format(shelf_title, shelf_action))
+            flash(flash_text, category="success")
+            return redirect(url_for('shelf.show_shelf', shelf_id=shelf.id))
+        except (OperationalError, InvalidRequestError) as ex:
+            ub.session.rollback()
+            log.debug_or_exception(ex)
+            log.error("Settings DB is not Writeable")
+            flash(_("Settings DB is not Writeable"), category="error")
+        except Exception as ex:
+            ub.session.rollback()
+            log.debug_or_exception(ex)
+            flash(_(u"There was an error"), category="error")
+</repair>

@@ -1,0 +1,65 @@
+The vulnerability described in the buggy code snippet pertains to the Mandril security plugin within the Monkey HTTP Daemon (monkeyd). The issue arises from the fact that the URI provided by the client request is not being properly decoded before being checked against security rules. This allows an attacker to craft a URI with encoded characters, such as a forward slash (%2F), which can bypass intended access restrictions.
+
+### Vulnerability Analysis
+
+In the original code snippet:
+
+```c
+if (mk_security_check_url(sr->uri) < 0) {
+    PLUGIN_TRACE("[FD %i] Close connection, blocked URL", cs->socket);
+    mk_api->header_set_http_status(sr, MK_CLIENT_FORBIDDEN);
+    return MK_PLUGIN_RET_CLOSE_CONX;
+}
+```
+
+The function `mk_security_check_url` is called with the raw `sr->uri`. If this URI contains encoded characters, they may not be interpreted correctly by the security check function, potentially allowing unauthorized access.
+
+### Repair Strategy
+
+To address this vulnerability, the repair strategy involves decoding the URI before performing any security checks. This ensures that all encoded characters are properly interpreted, preventing attackers from using encoding to bypass security measures.
+
+#### Step-by-Step Repair
+
+1. **Decode the URI**: Before passing the URI to `mk_security_check_url`, we need to decode it. This is done using the `mk_string_url_decode` function, which converts percent-encoded characters back to their original form.
+
+2. **Check Decoding Success**: After attempting to decode the URI, we must verify that the decoding process was successful. If `mk_string_url_decode` returns `NULL`, it indicates that the decoding failed, possibly due to malformed input. In this case, we should respond with a `400 Bad Request` status to inform the client that their request could not be processed.
+
+3. **Perform Security Check**: Once the URI is successfully decoded, we pass the decoded URI to `mk_security_check_url` to perform the necessary security checks.
+
+4. **Handle Forbidden Access**: If the security check determines that the URI is blocked, we log the event, set the HTTP status to `403 Forbidden`, and close the connection.
+
+5. **Free Allocated Memory**: Since `mk_string_url_decode` allocates memory for the decoded URI, it is crucial to free this memory after use to prevent memory leaks.
+
+### Repaired Code Explanation
+
+The repaired code snippet implements these steps:
+
+```c
+// Decode the URI before checking it for security
+char *decoded_uri = mk_string_url_decode(sr->uri);
+if (!decoded_uri) {
+    PLUGIN_TRACE("[FD %i] Close connection, failed to decode URL", cs->socket);
+    mk_api->header_set_http_status(sr, MK_CLIENT_BAD_REQUEST);
+    return MK_PLUGIN_RET_CLOSE_CONX;
+}
+
+if (mk_security_check_url(decoded_uri) < 0) {
+    PLUGIN_TRACE("[FD %i] Close connection, blocked URL", cs->socket);
+    mk_api->header_set_http_status(sr, MK_CLIENT_FORBIDDEN);
+    mk_mem_free(decoded_uri);
+    return MK_PLUGIN_RET_CLOSE_CONX;
+}
+
+// Free the decoded URI after use
+mk_mem_free(decoded_uri);
+```
+
+- **Decoding**: The `mk_string_url_decode` function is used to decode the URI. This step ensures that any encoded characters are converted to their original form, making the security check more accurate.
+
+- **Error Handling**: If the decoding fails (`decoded_uri` is `NULL`), the server responds with a `400 Bad Request` status, indicating that the client's request was malformed.
+
+- **Security Check**: The decoded URI is then passed to `mk_security_check_url` to ensure that it adheres to the server's security policies.
+
+- **Memory Management**: After the security check, whether it passes or fails, the allocated memory for `decoded_uri` is freed using `mk_mem_free` to prevent memory leaks.
+
+By implementing these changes, the vulnerability is mitigated, ensuring that the server correctly interprets and enforces security policies on all incoming URIs, regardless of how they are encoded.

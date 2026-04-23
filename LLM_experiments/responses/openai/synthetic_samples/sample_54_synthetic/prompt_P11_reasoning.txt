@@ -1,0 +1,17 @@
+The repair adds two key measures to safeguard the temporary directory used for the mount operation:
+
+1. Explicitly Setting Permissions:
+   - Right after creating the temporary directory with OsApi.mkdtemp(template), the repair adds a call to OsApi.chmod(tmpdir, 0700). This restricts the directory’s permissions to be accessible only by the owner. By doing so, even if the shared directory is exposed to unprivileged or malicious users, they cannot write into or modify the directory’s contents. This helps prevent a scenario where a privileged guest user might create unauthorized device special files or other problematic entries.
+
+2. Using O_NOFOLLOW When Opening the Directory:
+   - The original code opens the directory with a call to OsApi.open(tmpdir, NamespaceFlags.O_PATH). The repair modifies this by adding the O_NOFOLLOW flag. This flag instructs the open() system call not to follow symlinks. In this context, if an attacker manages to replace the directory with a symlink (or create a symlink within it) that points to a sensitive file or device, the open() call will fail instead of unintentionally granting access to what the symlink targets.
+
+Together, these changes help mitigate the host privilege escalation vulnerability in virtio-fs. Without restricting directory permissions, attackers might have written malicious files or replaced the directory structure, enabling them to manipulate sensitive system files. The permission restriction ensures that even if a privileged guest user can access a directory shared with the host, they cannot tamper with it to create special files that grant unexpected access.
+
+Likewise, the use of O_NOFOLLOW prevents symlink attacks. In many privilege escalation attacks, attackers use symbolic links to redirect file operations (like reading/writing) to unintended files or devices on the host. By using O_NOFOLLOW, the open() call will not follow such symlinks, effectively rendering this attack vector ineffective.
+
+In summary, the repair fixes the vulnerability by:
+- Restricting access to the temporary directory through secure permissions (0700), thereby restricting any write or creation of unexpected files by unprivileged users.
+- Securing the open() operation to ensure that the file handle is only obtained for the intended directory and not through any symlink redirection, which could be exploited to access host devices.
+
+These measures collectively eliminate the pathway for a privileged guest user to create and manipulate device special files in the shared directory, thus preventing unauthorized read/write access to host devices.

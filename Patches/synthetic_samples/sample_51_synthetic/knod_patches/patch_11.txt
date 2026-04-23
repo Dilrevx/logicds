@@ -1,0 +1,127 @@
+public class AuthHandler {
+
+    public int ngxHttpAuthSpnegoHandler(NgxRequest r, AuthConfig alcf, AuthContext initialCtx) {
+        int ret = NgxConst.NGX_DECLINED;
+        AuthContext ctx;
+
+        if (alcf.getProtect() == 0) {
+            return NgxConst.NGX_DECLINED;
+        }
+
+        ctx = initialCtx;
+        if (ctx == null) {
+            ctx = new AuthContext();
+            if (ctx == null) {
+                return NgxConst.NGX_HTTP_INTERNAL_SERVER_ERROR;
+            }
+            ctx.token = new NgxStr();
+            ctx.head = 0;
+            ctx.ret = NgxConst.NGX_HTTP_UNAUTHORIZED;
+        }
+
+        SpnegoDebug.d3("SSO auth handling IN: token.len=%d, head=%d, ret=%d",
+                ctx.token.len, ctx.head, ctx.ret);
+
+        if (ctx.token.len != 0 && ctx.head != 0) {
+            SpnegoDebug.d1("Found token and head, returning %d", ctx.ret);
+            return ctx.ret;
+        }
+
+        if (r.getHeadersIn().getUser() != null && r.getHeadersIn().getUser().data != null) {
+            SpnegoDebug.d0("User header set");
+            return NgxConst.NGX_OK;
+        }
+
+        SpnegoDebug.d0("Begin auth");
+
+        if (alcf.isAllowBasic()) {
+            SpnegoDebug.d0("Detect basic auth");
+            ret = AuthSpnego.ngxHttpAuthBasicUser(r);
+            if (NgxConst.NGX_OK == ret) {
+                SpnegoDebug.d0("Basic auth credentials supplied by client");
+                if (
+//start of generated patch
+NgxConst.NGX_DECLINED == AuthSpnego.ngxHttpAuthSpnegoBasic(ctx,ret)
+//end of generated patch
+) {
+                    SpnegoDebug.d0("Basic auth failed");
+                    if (NgxConst.NGX_ERROR == AuthSpnego.ngxHttpAuthSpnegoHeadersBasicOnly(r, ctx, alcf)) {
+                        SpnegoDebug.d0("Error setting headers");
+                        ctx.ret = NgxConst.NGX_HTTP_INTERNAL_SERVER_ERROR;
+                        return ctx.ret;
+                    }
+                    ctx.ret = NgxConst.NGX_HTTP_UNAUTHORIZED;
+                    return ctx.ret;
+                }
+
+                if (!AuthSpnego.ngxSpnegoAuthorizedPrincipal(r, r.getHeadersIn().getUser(), alcf)) {
+                    SpnegoDebug.d0("User not authorized");
+                    ctx.ret = NgxConst.NGX_HTTP_FORBIDDEN;
+                    return ctx.ret;
+                }
+
+                SpnegoDebug.d0("Basic auth succeeded");
+                ctx.ret = NgxConst.NGX_OK;
+                return ctx.ret;
+            }
+        }
+
+        SpnegoDebug.d0("Detect SPNEGO token");
+        ret = AuthSpnego.ngxHttpAuthSpnegoToken(r, ctx);
+        if (NgxConst.NGX_OK == ret) {
+            SpnegoDebug.d0("Client sent a reasonable Negotiate header");
+            ret = AuthSpnego.ngxHttpAuthSpnegoAuthUserGss(r, ctx, alcf);
+            if (NgxConst.NGX_ERROR == ret) {
+                SpnegoDebug.d0("GSSAPI failed");
+                ctx.ret = NgxConst.NGX_HTTP_INTERNAL_SERVER_ERROR;
+                return ctx.ret;
+            }
+            if (NgxConst.NGX_DECLINED == ret) {
+                SpnegoDebug.d0("GSSAPI failed");
+                if (!alcf.isAllowBasic()) {
+                    ctx.ret = NgxConst.NGX_HTTP_FORBIDDEN;
+                    return ctx.ret;
+                }
+                if (NgxConst.NGX_ERROR == AuthSpnego.ngxHttpAuthSpnegoHeadersBasicOnly(r, ctx, alcf)) {
+                    SpnegoDebug.d0("Error setting headers");
+                    ctx.ret = NgxConst.NGX_HTTP_INTERNAL_SERVER_ERROR;
+                    return ctx.ret;
+                }
+                ctx.ret = NgxConst.NGX_HTTP_UNAUTHORIZED;
+                return ctx.ret;
+            }
+
+            if (!AuthSpnego.ngxSpnegoAuthorizedPrincipal(r, r.getHeadersIn().getUser(), alcf)) {
+                SpnegoDebug.d0("User not authorized");
+                ctx.ret = NgxConst.NGX_HTTP_FORBIDDEN;
+                return ctx.ret;
+            }
+
+            SpnegoDebug.d0("GSSAPI auth succeeded");
+        }
+
+        NgxStr tokenOutB64 = null;
+        switch (ret) {
+            case NgxConst.NGX_DECLINED:
+                ctx.ret = NgxConst.NGX_HTTP_UNAUTHORIZED;
+                break;
+            case NgxConst.NGX_OK:
+                ctx.ret = NgxConst.NGX_OK;
+                tokenOutB64 = ctx.tokenOutB64;
+                break;
+            case NgxConst.NGX_ERROR:
+            default:
+                ctx.ret = NgxConst.NGX_HTTP_INTERNAL_SERVER_ERROR;
+                break;
+        }
+
+        if (NgxConst.NGX_ERROR == AuthSpnego.ngxHttpAuthSpnegoHeaders(r, ctx, tokenOutB64, alcf)) {
+            SpnegoDebug.d0("Error setting headers");
+            ctx.ret = NgxConst.NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        SpnegoDebug.d3("SSO auth handling OUT: token.len=%d, head=%d, ret=%d",
+                ctx.token.len, ctx.head, ctx.ret);
+        return ctx.ret;
+    }
+}

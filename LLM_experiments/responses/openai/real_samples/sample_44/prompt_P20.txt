@@ -1,0 +1,76 @@
+<repair>
+		/* Parse the file header record: "C<mode> <size> <filename>" */
+		/* 'cp' now points to the filename string. */
+
+		/* Fix for logical vulnerability:
+		   Instead of outright rejecting filenames that contain a '/'
+		   we extract the basename if the target is a directory.
+		   If the target is not a directory, we still reject names with '/'.
+		*/
+		if (targisdir) {
+			/* Extract the basename: skip any directory qualifiers */
+			char *base = strrchr(cp, '/');
+			base = (base != NULL) ? base + 1 : cp;
+
+			/* Reject dangerous names like "." or ".." */
+			if (strcmp(base, ".") == 0 || strcmp(base, "..") == 0) {
+				run_err("error: unsafe filename: %s", base);
+				exit(1);
+			}
+
+			/* Construct new full pathname: targ + "/" + base */
+			{
+				size_t newpathlen = strlen(targ) + 1 + strlen(base) + 1;
+				np = malloc(newpathlen);
+				if (np == NULL) {
+					run_err("memory allocation error");
+					exit(1);
+				}
+				snprintf(np, newpathlen, "%s/%s", targ, base);
+				cp = np;
+			}
+		} else {
+			/* When the target is not a directory, disallow any '/' in the filename */
+			if (strchr(cp, '/') != NULL) {
+				run_err("error: unexpected filename: %s", cp);
+				exit(1);
+			}
+		}
+
+		/* Proceed to open the destination file for writing */
+		ofd = open(cp, O_WRONLY | O_CREAT | O_TRUNC, mode);
+		if (ofd < 0) {
+			run_err("cannot open %s: %s", cp, strerror(errno));
+			exit(1);
+		}
+
+		/* Read the file data from the remote connection and write it out */
+		count = size;
+		while (count > 0) {
+			/* Determine how many bytes to read this iteration */
+			j = count < sizeof(buffer.buf) ? count : sizeof(buffer.buf);
+			amt = atomicio(read, remin, buffer.buf, j);
+			if (amt <= 0) {
+				run_err("failed to read file data");
+				close(ofd);
+				exit(1);
+			}
+			if (atomicio(vwrite, ofd, buffer.buf, amt) != amt) {
+				run_err("failed to write file data");
+				close(ofd);
+				exit(1);
+			}
+			count -= amt;
+		}
+
+		(void) close(ofd);
+
+		/* Apply the file timestamps if requested */
+		if (setimes) {
+			if (utimes(cp, tv) < 0)
+				run_err("can't change times on %s", cp);
+		}
+
+		(void) atomicio(vwrite, remout, "", 1);
+	}
+</repair>

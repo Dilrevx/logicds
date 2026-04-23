@@ -1,0 +1,68 @@
+<repair>
+def _read_from_sections(user, collection_url, permission):
+    """Get regex sections securely."""
+    import os
+    import re
+    from io import StringIO
+    from configparser import ConfigParser
+    # Get configuration values and expand filename path
+    filename = os.path.expanduser(config.get("rights", "file"))
+    rights_type = config.get("rights", "type").lower()
+    # Initialize the parser using provided interpolation values.
+    regex = ConfigParser({"login": user, "path": collection_url})
+    
+    # Read rights definitions from predefined constants or from a file
+    if rights_type in DEFINED_RIGHTS:
+        log.LOGGER.debug("Rights type '%s'" % rights_type)
+        # Using read_file instead of deprecated readfp.
+        try:
+            regex.read_file(StringIO(DEFINED_RIGHTS[rights_type]))
+        except Exception as e:
+            log.LOGGER.error("Error reading rights from defined rights: %s", e)
+            return False
+    elif rights_type == "from_file":
+        log.LOGGER.debug("Reading rights from file %s" % filename)
+        read_files = regex.read(filename)
+        if not read_files:
+            log.LOGGER.error("File '%s' not found for rights" % filename)
+            return False
+    else:
+        log.LOGGER.error("Unknown rights type '%s'" % rights_type)
+        return False
+
+    # Go through each section and verify the regexes safely.
+    for section in regex.sections():
+        try:
+            # Compile the user regex pattern securely.
+            re_user_pattern = regex.get(section, "user")
+            user_regex = re.compile(re_user_pattern)
+        except re.error as e:
+            log.LOGGER.error("Invalid regex for user in section '%s': %s", section, e)
+            continue
+
+        log.LOGGER.debug(
+            "Testing if '%s' matches against user regex '%s' from section '%s'" % (user, re_user_pattern, section))
+        user_match = user_regex.match(user)
+        if user_match:
+            try:
+                # Get and format the collection regex using captured groups.
+                re_collection_pattern = regex.get(section, "collection")
+                # Use safe formatting; if format placeholders are missing groups, catch IndexError.
+                re_collection_pattern = re_collection_pattern.format(*user_match.groups())
+                collection_regex = re.compile(re_collection_pattern)
+            except (re.error, IndexError) as e:
+                log.LOGGER.error("Error processing collection regex in section '%s': %s", section, e)
+                continue
+
+            log.LOGGER.debug(
+                "Testing if '%s' matches against collection regex '%s' from section '%s'" % (collection_url, re_collection_pattern, section))
+            if collection_regex.match(collection_url):
+                log.LOGGER.debug("Section '%s' matches" % section)
+                # Check permission with an exact containment check.
+                allowed_permissions = regex.get(section, "permission")
+                if permission in allowed_permissions:
+                    return True
+            else:
+                log.LOGGER.debug("Section '%s' does not match collection URL" % section)
+    return False
+</repair>

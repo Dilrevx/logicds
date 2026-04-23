@@ -1,0 +1,77 @@
+<repair>
+		if (*cp == '\0')
+			SCREWUP("filename not present");
+		np = cp;
+		while (*cp != '\0' && *cp != '\n')
+			cp++;
+		if (*cp == '\0')
+			SCREWUP("filename not delimited");
+		*cp = '\0';
+		if (targisdir) {
+			(void)snmprintf(visbuf, sizeof(visbuf), NULL, "%s/%s", targ, np);
+			targ = visbuf;
+		} else if (first && *targ == '-' && targ[1] == '\0')
+			targ = np;
+		else {
+			(void)snmprintf(visbuf, sizeof(visbuf), NULL, "%s", targ);
+			targ = visbuf;
+		}
+		if ((ofd = open(targ, O_WRONLY|O_CREAT, mode)) == -1) {
+			wrerr = NO;
+			wrerrno = errno;
+		} else {
+			wrerr = YES;
+			if (!pflag && (omode = fstat(ofd, &stb) == 0 ? stb.st_mode : 0) &&
+			    (omode & S_IFMT) == S_IFREG && (omode & S_IRWXU) == 0) {
+				(void) fchmod(ofd, mode & 0700);
+				chmod_flag = 1;
+			}
+		}
+		(void) atomicio(vwrite, remout, "", 1);
+		bp = &buffer;
+		count = 0;
+		while (size > 0) {
+			if (count == 0) {
+				if ((amt = atomicio(read, remin, bp->data, bp->size)) <= 0) {
+					run_err("file read error: %s", strerror(errno));
+					exit(1);
+				}
+				count = amt;
+				bp = &buffer;
+			}
+			amt = bp->size - count;
+			if (amt > size)
+				amt = size;
+			if (wrerr == YES && write(ofd, bp->data, amt) != amt) {
+				wrerr = NO;
+				wrerrno = errno;
+			}
+			count -= amt;
+			size -= amt;
+			bp->data += amt;
+		}
+		if (wrerr == NO) {
+			run_err("write error: %s", strerror(wrerrno));
+			errs++;
+		}
+		if (chmod_flag)
+			(void) fchmod(ofd, omode);
+		if (ofd >= 0) {
+			if (close(ofd) == -1 && wrerr == YES) {
+				run_err("close error: %s", strerror(errno));
+				errs++;
+			}
+		}
+		if (setimes) {
+			tv[0].tv_sec = atime.tv_sec;
+			tv[0].tv_nsec = atime.tv_usec * 1000;
+			tv[1].tv_sec = mtime.tv_sec;
+			tv[1].tv_nsec = mtime.tv_usec * 1000;
+			if (utimensat(AT_FDCWD, targ, tv, 0) == -1) {
+				run_err("utimensat error: %s", strerror(errno));
+				errs++;
+			}
+		}
+	}
+}
+</repair>

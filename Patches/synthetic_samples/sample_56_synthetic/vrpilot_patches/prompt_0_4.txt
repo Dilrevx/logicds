@@ -1,0 +1,84 @@
+import java.util.Map;
+
+public class ShelfController {
+
+    private final User currentUser;
+    private final ShelfService shelfService; // used to lookup shelves
+
+    public ShelfController(User currentUser, ShelfService shelfService) {
+        this.currentUser = currentUser;
+        this.shelfService = shelfService;
+    }
+
+    public ShelfResponse createEditShelf(Shelf shelf, String pageTitle, int page, Integer shelfId, Request request) {
+        if ("POST".equals(request.getMethod())) {
+            if (shelfId != null) {
+                // Editing an existing shelf: Retrieve and check that it belongs to the current user.
+                Shelf existingShelf = shelfService.getShelfById(shelfId);
+                if (existingShelf == null || !existingShelf.getOwner().equals(currentUser)) {
+                    throw new AccessControlException("Unauthorized attempt to modify a shelf");
+                }
+            } else {
+                // Creating a new shelf: Check if the current user is allowed to create one.
+                if (!currentUser.canCreateShelf()) {
+                    throw new AccessControlException("User not permitted to create a shelf");
+                }
+                // Set the current user as the owner of the new shelf.
+                shelf.setOwner(currentUser);
+            }
+
+            // Extract the "is_public" flag from the request.
+            String isPublicRaw = request.getParameter("is_public");
+            // Assuming that a value "on" implies true.
+            int isPublic = (isPublicRaw != null && !isPublicRaw.isEmpty() && "on".equals(isPublicRaw)) ? 1 : 0;
+
+            // Retrieve the shelf title from the request parameters.
+            String shelfTitle = request.getParameter("title") != null ? request.getParameter("title") : "";
+
+            // Validate shelf uniqueness.
+            if (checkShelfIsUnique(shelf, shelfTitle, isPublic, shelfId)) {
+                shelf.setName(shelfTitle);
+                shelf.setIsPublic(isPublic);
+
+                String shelfAction;
+                String flashText;
+
+                if (shelfId == null) {
+                    // For a new shelf, assign the current user's id and add the shelf.
+                    shelf.setUserId(currentUser.getId());
+                    Session.add(shelf);
+                    shelfAction = "created";
+                    flashText = "Shelf " + shelfTitle + " created";
+                } else {
+                    shelfAction = "changed";
+                    flashText = "Shelf " + shelfTitle + " changed";
+                }
+
+                try {
+                    Session.commit();
+                    Logger.info("Shelf " + shelfTitle + " " + shelfAction);
+                    return ShelfResponse.redirect("/shelf/show_shelf?id=" + shelf.getId(), flashText, "success");
+                } catch (CalibreErrors.OperationalError ex) {
+                    Session.rollback();
+                    Logger.error("Settings DB is not Writeable");
+                } catch (CalibreErrors.InvalidRequestError ex) {
+                    Session.rollback();
+                    Logger.error("Settings DB is not Writeable");
+                } catch (Exception ex) {
+                    Session.rollback();
+                    Logger.error("There was an error");
+                }
+            }
+        }
+        return ShelfResponse.template("shelf_edit.html");
+    }
+
+    private static boolean checkShelfIsUnique(Shelf shelf, String title, int isPublic, Integer shelfId) {
+        return title != null && title.length() > 0;
+    }
+
+    static class Logger {
+        static void info(String msg) {}
+        static void error(String msg) {}
+    }
+}

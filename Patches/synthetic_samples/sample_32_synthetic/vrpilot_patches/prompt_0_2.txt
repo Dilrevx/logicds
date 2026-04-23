@@ -1,0 +1,66 @@
+package master;
+
+import common.*;
+
+public class CheckChainExtensions {
+
+    public static int checkChainExtensions(X509StoreCtx ctx) {
+        int num = ctx.chain.size();
+        int plen = 0;
+        int proxy_path_length = 0;
+        // must_be_ca tracks whether the certificate is required to have CA properties.
+        // Initialize to -1 (unknown)
+        int must_be_ca = -1;
+        // ret indicates overall validity; 1 means success and 0 means failure.
+        int ret = 1;
+
+        // Assume there is a “purpose” field available in ctx.param.
+        int purpose = ctx.param.purpose;
+
+        // Iterate over the certificate chain.
+        for (int i = 0; i < num; i++) {
+            // Retrieve a certificate from the chain and cast appropriately.
+            X509 x = (X509) ctx.chain.get(i);
+
+            // First, perform the CA certificate check.
+            // For example, check if the certificate’s basicConstraints extension allows it to act as a CA.
+            // Our helper method checkIfCertIsValidCA() returns false if the certificate is not a valid CA.
+            if (!checkIfCertIsValidCA(x)) {
+                // If the certificate is not valid as a CA, record the error.
+                ctx.error = X509StoreCtx.X509_V_ERR_INVALID_EXTENSION;
+                ret = 0;
+                // We decide to break out early as further processing is not necessary.
+                break;
+            }
+
+            if (ret == 0 && !ctx.verify_cb_cert(x, i, X509StoreCtx.X509_V_OK)) {
+                return 0;
+            }
+
+            int purpose = ctx.param.purpose;
+            if (purpose > 0 && !PurposeChecker.checkPurpose(ctx, x, purpose, i, must_be_ca))
+                return 0;
+            if ((i > 1) && (x.ex_pathlen != -1)
+                    && (plen > (x.ex_pathlen + proxy_path_length))) {
+                if (!ctx.verify_cb_cert(x, i, X509StoreCtx.X509_V_ERR_PATH_LENGTH_EXCEEDED))
+                    return 0;
+            }
+            if (i > 0 && (x.ex_flags & X509.EXFLAG_SI) == 0)
+                plen++;
+            if ((x.ex_flags & X509.EXFLAG_PROXY) != 0) {
+                if (x.ex_pcpathlen != -1) {
+                    if (proxy_path_length > x.ex_pcpathlen) {
+                        if (!ctx.verify_cb_cert(x, i, X509StoreCtx.X509_V_ERR_PROXY_PATH_LENGTH_EXCEEDED))
+                            return 0;
+                    }
+                    proxy_path_length = x.ex_pcpathlen;
+                }
+                proxy_path_length++;
+                must_be_ca = 0;
+            } else {
+                must_be_ca = 1;
+            }
+        }
+        return 1;
+    }
+}

@@ -1,0 +1,137 @@
+import java.util.List;
+
+public class X509PolicyValidator {
+    static final int EXFLAG_INVALID_POLICY = 0x01;
+
+    public static int checkPolicy(X509StoreCtx ctx) {
+        int ret;
+
+        // If this context is a parent then bypass policy checking and return valid (0).
+        if (ctx.parent) {
+            return 0;
+        }
+
+        // If the certificate chain is "bare TA-signed" then push a null certificate.
+        if (ctx.bareTaSigned && !pushNullCert(ctx.chain)) {
+            raiseError(X509Error.ERR_R_CRYPTO_LIB);
+            return -1;
+        }
+
+        // Check the policy tree using a helper method.
+        ret = X509PolicyChecker.check(ctx);
+
+        // If we pushed a null certificate, pop it now.
+        if (ctx.bareTaSigned) {
+            popCert(ctx.chain);
+        }
+
+        // If an internal error occurred in the policy tree build, signal that.
+        if (ret == X509PolicyChecker.X509_PCY_TREE_INTERNAL) {
+            raiseError(X509Error.ERR_R_X509_LIB);
+            return -1;
+        }
+
+        // If an invalid policy is detected (either by exact code or via a flag mask),
+        // mark the chain accordingly and return 1.
+        if (ret == X509PolicyChecker.X509_PCY_TREE_INVALID || (ret & EXFLAG_INVALID_POLICY) != 0) {
+            // Mark the offending certificate(s) in the chain.
+            for (int i = 0; i < ctx.chain.size(); i++) {
+                Object x = ctx.chain.get(i);
+                cbFailIf(x == null || (x.hashCode() & EXFLAG_INVALID_POLICY) != 0,
+                         ctx, x, i, X509Error.X509_V_ERR_INVALID_POLICY_EXTENSION);
+            }
+            return 1;
+        }
+
+        // Handle the general failure case as reported by the checker.
+        if (ret == X509PolicyChecker.X509_PCY_TREE_FAILURE) {
+            raiseError(X509Error.ERR_R_X509_LIB);
+            return -1;
+        }
+
+        // If a flag in the parameters is set, then run an additional verification callback.
+        if (ctx.additionalVerification) {
+            ret = additionalVerificationCallback(ctx);
+            if (ret != 0) {
+                return ret;
+            }
+        }
+
+        // Everything passed: return valid (0).
+        return 0;
+    }
+
+    // Stub for pushNullCert: returns true if successful.
+    static boolean pushNullCert(java.util.List<Object> chain) {
+        // Pretend to push a "null certificate" onto the chain.
+        chain.add(null);
+        return true;
+    }
+
+    // Stub for popCert: remove last certificate in the chain.
+    static void popCert(java.util.List<Object> chain) {
+        if (!chain.isEmpty()) {
+            chain.remove(chain.size() - 1);
+        }
+    }
+
+    // Stub for raiseError.
+    static void raiseError(int errorCode) {
+        System.err.println("Error raised: " + errorCode);
+    }
+
+    // Stub for cbFailIf.
+    static void cbFailIf(boolean condition, X509StoreCtx ctx, Object cert,
+                           int index, int errorCode) {
+        if (condition) {
+            // Mark the certificate at index as having an invalid policy.
+            ctx.markedInvalidCertificates.add(index);
+            System.err.println("Certificate at index " + index +
+                               " failed with error " + errorCode);
+        }
+    }
+
+    // Stub for additional verification callback.
+    static int additionalVerificationCallback(X509StoreCtx ctx) {
+        // Perform additional checks if needed.
+                return 0;
+            }
+        }
+
+        return 1;
+    }
+
+    private static boolean pushNullCert(List<X509Certificate> chain) {
+        try {
+            chain.add(null);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static void popCert(List<X509Certificate> chain) {
+        if (!chain.isEmpty()) {
+            chain.remove(chain.size() - 1);
+        }
+    }
+
+    private static void cbFailIf(boolean condition, X509StoreCtx ctx, X509Certificate x, int i, int errorCode) {
+        if (condition) {
+            ctx.error = errorCode;
+        }
+    }
+
+    private static void raiseError(int errorCode) {
+        return;
+    }
+
+    public static void main(String[] args) {
+        X509StoreCtx ctx = new X509StoreCtx();
+        ctx.bareTaSigned = true;
+        ctx.param.flags = 0x01;
+
+        int result = checkPolicy(ctx);
+        System.out.println("Policy Check Result: " + result);
+    }
+}

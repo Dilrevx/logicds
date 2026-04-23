@@ -1,0 +1,81 @@
+import java.util.Map;
+
+public class ShelfController {
+
+    private final User currentUser;
+
+    public ShelfController(User currentUser) {
+        this.currentUser = currentUser;
+    }
+
+
+    if ("POST".equals(request.getMethod())) {
+        Map<String, String> toSave = request.getForm();
+
+        // Determine public status only if the current user is allowed.
+        int isPublic = 0;
+        if (currentUser.roleEditShelfs()) {
+            // Accept common variants of “truthy” public values.
+            String isPublicRaw = toSave.get("is_public");
+            isPublic = (isPublicRaw != null
+                        && (isPublicRaw.equalsIgnoreCase("on") || isPublicRaw.equals("1")))
+                        ? 1 : 0;
+        } else {
+            // Log the attempt if desired, but do not let unauthorized users set a public shelf.
+            Logger.warn("User " + currentUser.getId() + " attempted to set a public shelf without sufficient permissions. Forcing shelf to be private.");
+        }
+
+        if (Config.configKoboSync) {
+            shelf.setKoboSync(toSave.get("kobo_sync") != null);
+            if (shelf.isKoboSync()) {
+                Session.archiveDelete(currentUser.getId(), shelf.getUuid());
+                try {
+                    Session.commit();
+                } catch (Exception e) {
+                    Session.rollback();
+                }
+            }
+        }
+        String shelfTitle = toSave.getOrDefault("title", "");
+        if (checkShelfIsUnique(shelf, shelfTitle, isPublic, shelfId)) {
+            shelf.setName(shelfTitle);
+            shelf.setIsPublic(isPublic);
+            String shelfAction;
+            String flashText;
+            if (shelfId == null) {
+                shelf.setUserId(currentUser.getId());
+                Session.add(shelf);
+                shelfAction = "created";
+                flashText = "Shelf " + shelfTitle + " created";
+            } else {
+                shelfAction = "changed";
+                flashText = "Shelf " + shelfTitle + " changed";
+            }
+            try {
+                Session.commit();
+                Logger.info("Shelf " + shelfTitle + " " + shelfAction);
+                return ShelfResponse.redirect("/shelf/show_shelf?id=" + shelf.getId(),
+                        flashText, "success");
+            } catch (CalibreErrors.OperationalError ex) {
+                Session.rollback();
+                Logger.error("Settings DB is not Writeable");
+            } catch (CalibreErrors.InvalidRequestError ex) {
+                Session.rollback();
+                Logger.error("Settings DB is not Writeable");
+            } catch (Exception ex) {
+                Session.rollback();
+                Logger.error("There was an error");
+            }
+        }
+    }
+
+
+    private static boolean checkShelfIsUnique(Shelf shelf, String title, int isPublic, Integer shelfId) {
+        return title != null && title.length() > 0;
+    }
+
+    static class Logger {
+        static void info(String msg) {}
+        static void error(String msg) {}
+    }
+}

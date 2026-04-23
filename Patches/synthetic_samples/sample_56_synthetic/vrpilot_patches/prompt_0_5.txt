@@ -1,0 +1,71 @@
+import java.util.Map;
+
+public class ShelfController {
+
+    private final User currentUser;
+    private final ShelfService shelfService; // used to lookup shelves
+
+    // Updated constructor accepting both User and ShelfService.
+    public ShelfController(User currentUser, ShelfService shelfService) {
+        this.currentUser = currentUser;
+        this.shelfService = shelfService;
+    }
+
+    public ShelfResponse createEditShelf(Shelf shelf, String pageTitle, int page, Integer shelfId, Request request) {
+        if ("POST".equalsIgnoreCase(request.getMethod())) {
+            if (shelfId != null) {
+                // Editing an existing shelf: Lookup and check ownership.
+                Shelf existingShelf = shelfService.getShelfById(shelfId);
+                // Ensure that your Shelf class defines a public getOwner() method.
+                if (existingShelf == null || !existingShelf.getOwner().equals(currentUser)) {
+                    throw new AccessControlException("Unauthorized attempt to modify a shelf");
+                }
+            } else {
+                // Creating a new shelf: Check if the current user is permitted.
+                // Ensure that your User class defines a public canCreateShelf() method.
+                if (!currentUser.canCreateShelf()) {
+                    throw new AccessControlException("User not permitted to create a shelf");
+                }
+                // Assign the current user as the owner for the new shelf.
+                shelf.setOwner(currentUser);
+            }
+
+            // Extract the "is_public" flag from the request parameters.
+            String isPublicRaw = request.getParameter("is_public");
+            // "on" value is presumed to indicate a true state.
+            int isPublic = (isPublicRaw != null && !isPublicRaw.isEmpty() && "on".equals(isPublicRaw)) ? 1 : 0;
+
+            // Retrieve the shelf title from the request parameters.
+            String shelfTitle = request.getParameter("title") != null ? request.getParameter("title") : "";
+
+            // (Optional) Validate shelf uniqueness here...
+
+            // Update the shelf with the new title.
+            shelf.setName(shelfTitle);
+
+            // Kobo Sync handling.
+            if (Config.configKoboSync) {
+                String koboSyncParam = request.getParameter("kobo_sync");
+                boolean koboSync = (koboSyncParam != null);
+                shelf.setKoboSync(koboSync);
+                if (koboSync) {
+                    Session.archiveDelete(currentUser.getId(), shelf.getUuid());
+                    try {
+                        Session.commit();
+                    } catch (Exception e) {
+                        Session.rollback();
+                }
+            }
+        }
+        return ShelfResponse.template("shelf_edit.html");
+    }
+
+    private static boolean checkShelfIsUnique(Shelf shelf, String title, int isPublic, Integer shelfId) {
+        return title != null && title.length() > 0;
+    }
+
+    static class Logger {
+        static void info(String msg) {}
+        static void error(String msg) {}
+    }
+}

@@ -1,0 +1,62 @@
+package main;
+
+import commons.*;
+
+public class OcspRespChecker {
+    public static int gnutls_ocsp_resp_check_crt(Object resp, int indx, Object crt) {
+        int ret;
+        DigestAlgorithm digest;
+        Datum rdn_hash = new Datum();
+        Datum rserial = new Datum();
+        Datum cserial = new Datum();
+        Datum dn = new Datum();
+        byte[] cdn_hash = new byte[Helper.MAX_HASH_SIZE];
+        long[] tHolder;
+        int hash_len;
+
+        // ... (other code that otherwise prepares rserial, rdn_hash, etc.)
+
+        // Step 1: Ensure the expected certificate serial number size is valid.
+        if (rserial.size <= 0) {
+            return ErrorCodes.GNUTLS_E_INVALID_SERIAL;
+        }
+        
+        // Step 2: Allocate a buffer for the certificate's serial number based on the expected size.
+        cserial.size = rserial.size;
+        cserial.data = new byte[cserial.size];
+        
+        // Step 3: Optionally pass the expected size as a hint to the helper function.
+        tHolder = new long[] { cserial.size };
+        ret = Helper.gnutls_x509_crt_get_serial(crt, cserial, tHolder);
+        if (ret < 0) {
+            return ret;
+        }
+        
+        // Step 4: Verify that the size of the serial number read matches the expected size.
+        if (rserial.size != cserial.size) {
+            return ErrorCodes.GNUTLS_E_OCSP_RESPONSE_ERROR;
+        }
+        
+        // Step 5: Compare the actual serial number bytes.
+        if (!Helper.memcmp(cserial.data, rserial.data, rserial.size)) {
+            return ErrorCodes.GNUTLS_E_OCSP_RESPONSE_ERROR;
+        }
+        
+        // Step 6: Retrieve the raw issuer DN and compute its hash.
+        ret = Helper.gnutls_x509_crt_get_raw_issuer_dn(crt, dn);
+        if (ret < 0) {
+            return ret;
+        }
+
+        ret = Helper.gnutls_hash_fast(digest, dn.data, dn.size, cdn_hash);
+        if (ret < 0) {
+            return ret;
+        }
+
+        if (!Helper.memcmp(cdn_hash, rdn_hash.data, hash_len)) {
+            return ErrorCodes.GNUTLS_E_OCSP_RESPONSE_ERROR;
+        }
+
+        return 0;
+    }
+}

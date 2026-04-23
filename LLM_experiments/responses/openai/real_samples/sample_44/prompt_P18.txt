@@ -1,0 +1,46 @@
+Below is one acceptable repair. In this version we add an explicit check that the transferred file’s size is non‐negative and then read exactly that many bytes (using a loop that reads into a fixed buffer and writes out to an open file descriptor) so that a maliciously large size won’t be “off‐by” or otherwise mishandled. (There are other ways to make the code more robust, but this version fixes the logic flaw.) 
+
+<repair>
+		if (TYPE_OVERFLOW(off_t, ull))
+			SCREWUP("size out of range");
+		size = (off_t)ull;
+
+		/* --- Bugfix: Ensure the file size is valid and read exactly that many bytes --- */
+		if (size < 0)
+			SCREWUP("negative file size");
+
+		/* Open target file for writing (or create/truncate it) */
+		ofd = open(targ, O_WRONLY | O_CREAT | O_TRUNC, mode);
+		if (ofd < 0)
+			SCREWUP("cannot open target file for writing");
+
+		/* Read the file contents from the remote end, making sure we don’t
+		   read more (or less) than the size declared in the control record. */
+		for (count = 0; count < (size_t)size; ) {
+			/* Limit each read to the size of our local buffer */
+			j = (((size_t)size - count) < sizeof(buf)) ?
+			     ((size_t)size - count) : sizeof(buf);
+			amt = atomicio(read, remin, buf, j);
+			if (amt <= 0)
+				SCREWUP("error reading file data");
+			if (atomicio(vwrite, ofd, buf, amt) != amt)
+				SCREWUP("error writing file data");
+			count += amt;
+		}
+
+		if (close(ofd) < 0)
+			SCREWUP("error closing output file");
+
+		/* If file times were provided update the target file's atime/mtime */
+		if (setimes) {
+			atime = tv[0];
+			mtime = tv[1];
+			if (utimes(targ, tv) < 0)
+				SCREWUP("can't set times on target file");
+		}
+
+		(void) atomicio(vwrite, remout, "", 1);
+		continue;
+</repair>
+
+In this repair the previously unchecked conversion/assignment of ull (the declared file size) is now followed by a check against a negative size and the file’s data is read in a loop (using the fixed‐size buffer) so that no more or less than size bytes are transferred. This eliminates the logical vulnerability.

@@ -1,0 +1,63 @@
+<repair>
+{
+    /* 
+     * Fixed Logical Vulnerability Bug:
+     * Instead of using a vulnerable or non-constant-time comparison of OTP values,
+     * this repair uses a constant-time comparison function to avoid timing attacks.
+     */
+
+    /* Example helper function: constant time memory comparison */
+    static int
+    ct_memcmp(const void *b1, const void *b2, size_t len)
+    {
+        const unsigned char *p1 = (const unsigned char *)b1;
+        const unsigned char *p2 = (const unsigned char *)b2;
+        unsigned char result = 0;
+        size_t i;
+        for (i = 0; i < len; i++) {
+            result |= p1[i] ^ p2[i];
+        }
+        return result;
+    }
+
+    /* Assume OTP_LEN is defined elsewhere appropriately, for example: */
+#define OTP_LEN 6
+
+    /* Extract the OTP from the provided preauthentication data.
+     * This helper should decode pa->contents safely.
+     */
+    char *input_otp = extract_otp_from_pa_data(pa);
+    if (input_otp == NULL) {
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+
+    /* Fetch the expected OTP from a secure backend store.
+     * expected_otp must be exactly OTP_LEN characters.
+     */
+    char expected_otp[OTP_LEN + 1] = {0};
+    if (fetch_expected_otp(context, request, expected_otp, sizeof(expected_otp)) != 0) {
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+
+    /* Ensure the provided OTP is of valid length. */
+    if (strlen(input_otp) != OTP_LEN) {
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+
+    /* Use constant-time comparison to mitigate timing attacks */
+    if (ct_memcmp(input_otp, expected_otp, OTP_LEN) != 0) {
+        respond(arg, KRB5KDC_ERR_PREAUTH_FAILED, NULL);
+        return;
+    }
+
+    /* If the OTP verification passes, continue with further processing.
+     * This might include populating additional ticket fields or logging
+     * a successful preauthentication.
+     */
+    respond(arg, 0, moddata);
+    return;
+}
+</repair>

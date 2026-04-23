@@ -1,0 +1,145 @@
+# -*- coding: utf-8 -*-
+#
+# This file is part of Radicale Server - Calendar Server
+# Copyright © 2008 Nicolas Kandel
+# Copyright © 2008 Pascal Halter
+# Copyright © 2008-2013 Guillaume Ayoub
+#
+# This library is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This library is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Radicale.  If not, see <http://www.gnu.org/licenses/>.
+
+"""
+Rights management.
+
+Rights are based on a regex-based file whose name is specified in the config
+(section "right", key "file").
+
+Authentication login is matched against the "user" key, and collection's path
+is matched against the "collection" key. You can use Python's ConfigParser
+interpolation values %(login)s and %(path)s. You can also get groups from the
+user regex in the collection with {0}, {1}, etc.
+
+For example, for the "user" key, ".+" means "authenticated user" and ".*"
+means "anybody" (including anonymous users).
+
+Section names are only used for naming the rule.
+
+Leading or ending slashes are trimmed from collection's path.
+
+"""
+
+import re
+import sys
+import os.path
+
+from .. import config, log
+
+# Manage Python2/3 different modules
+if sys.version_info[0] == 2:
+    from ConfigParser import ConfigParser
+    from StringIO import StringIO
+else:
+    from configparser import ConfigParser
+    from io import StringIO
+
+
+DEFINED_RIGHTS = {
+    "authenticated": "[rw]\nuser:.+\ncollection:.*\npermission:rw",
+    "owner_write": "[r]\nuser:.+\ncollection:.*\npermission:r\n"
+                   "[w]\nuser:.+\ncollection:^%(login)s(/.*)?$\npermission:w",
+    "owner_only": "[rw]\nuser:.+\ncollection:^%(login)s(/.*)?$\npermission:rw",
+}
+
+
+
+def _read_from_sections(user, collection_url, permission):
+    """Get regex sections securely."""
+    import os
+    import re
+    from io import StringIO
+    from configparser import ConfigParser
+    # Get configuration values and expand filename path
+    filename = os.path.expanduser(config.get("rights", "file"))
+    rights_type = config.get("rights", "type").lower()
+    # Initialize the parser using provided interpolation values.
+    regex = ConfigParser({"login": user, "path": collection_url})
+    
+    # Read rights definitions from predefined constants or from a file
+    if rights_type in DEFINED_RIGHTS:
+        log.LOGGER.debug("Rights type '%s'" % rights_type)
+        # Using read_file instead of deprecated readfp.
+        try:
+            regex.read_file(StringIO(DEFINED_RIGHTS[rights_type]))
+        except Exception as e:
+            log.LOGGER.error("Error reading rights from defined rights: %s", e)
+            return False
+    elif rights_type == "from_file":
+        log.LOGGER.debug("Reading rights from file %s" % filename)
+        read_files = regex.read(filename)
+        if not read_files:
+            log.LOGGER.error("File '%s' not found for rights" % filename)
+            return False
+    else:
+        log.LOGGER.error("Unknown rights type '%s'" % rights_type)
+        return False
+
+    # Go through each section and verify the regexes safely.
+    for section in regex.sections():
+        try:
+            # Compile the user regex pattern securely.
+            re_user_pattern = regex.get(section, "user")
+            user_regex = re.compile(re_user_pattern)
+        except re.error as e:
+            log.LOGGER.error("Invalid regex for user in section '%s': %s", section, e)
+            continue
+
+        log.LOGGER.debug(
+            "Testing if '%s' matches against user regex '%s' from section '%s'" % (user, re_user_pattern, section))
+        user_match = user_regex.match(user)
+        if user_match:
+            try:
+                # Get and format the collection regex using captured groups.
+                re_collection_pattern = regex.get(section, "collection")
+                # Use safe formatting; if format placeholders are missing groups, catch IndexError.
+                re_collection_pattern = re_collection_pattern.format(*user_match.groups())
+                collection_regex = re.compile(re_collection_pattern)
+            except (re.error, IndexError) as e:
+                log.LOGGER.error("Error processing collection regex in section '%s': %s", section, e)
+                continue
+
+            log.LOGGER.debug(
+                "Testing if '%s' matches against collection regex '%s' from section '%s'" % (collection_url, re_collection_pattern, section))
+            if collection_regex.match(collection_url):
+                log.LOGGER.debug("Section '%s' matches" % section)
+                # Check permission with an exact containment check.
+                allowed_permissions = regex.get(section, "permission")
+                if permission in allowed_permissions:
+                    return True
+            else:
+                log.LOGGER.debug("Section '%s' does not match collection URL" % section)
+    return False
+
+
+
+def authorized(user, collection, permission):
+    """Check if the user is allowed to read or write the collection.
+
+       If the user is empty it checks for anonymous rights
+    """
+    collection_url = collection.url.rstrip("/") or "/"
+    if collection_url in (".well-known/carddav", ".well-known/caldav"):
+        return permission == "r"
+    rights_type = config.get("rights", "type").lower()
+    return (
+        rights_type == "none" or
+        _read_from_sections(user or "", collection_url, permission))

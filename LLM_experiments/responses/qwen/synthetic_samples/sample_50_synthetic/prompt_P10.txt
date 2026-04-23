@@ -1,0 +1,68 @@
+<repair>
+    public void handle(AutheliaCtx ctx) {
+        ctx.getLogger().tracef("Headers=%s", "");
+        AutheliaCtx.UrlResult urlResult = ctx.getOriginalURL();
+        TargetURL targetURL = urlResult.url;
+        Exception err = urlResult.err;
+
+        if (err != null || targetURL == null) {
+            ctx.error(new RuntimeException("Unable to parse target URL: " + (err != null ? err.getMessage() : "targetURL is null")),
+                    OPERATION_FAILED_MESSAGE);
+            return;
+        }
+
+        if (!isSchemeHttps(targetURL) && !isSchemeWss(targetURL)) {
+            ctx.getLogger().error("Scheme of target URL " + targetURL.stringValue()
+                    + " must be secure since cookies are only transported over a secure connection");
+            ctx.replyUnauthorized();
+            return;
+        }
+
+        if (!isURLUnderProtectedDomain(targetURL, ctx.getConfiguration().getSessionDomain())) {
+            ctx.getLogger().error("The target URL " + targetURL.stringValue()
+                    + " is not under the protected domain " + ctx.getConfiguration().getSessionDomain());
+            ctx.replyUnauthorized();
+            return;
+        }
+
+        VerifyAuthResult va = verifyAuth(ctx, targetURL, refreshProfile, refreshProfileIntervalMillis);
+        String method = ctx.getXForwardedMethod();
+
+        if (va.err != null) {
+            ctx.getLogger().error("Error caught when verifying user authorization: " + va.err.getMessage());
+            Exception updateErr = updateActivityTimestamp(ctx, va.isBasicAuth, va.username);
+            if (updateErr != null) {
+                ctx.error(new RuntimeException("Unable to update last activity: " + updateErr.getMessage()),
+                        OPERATION_FAILED_MESSAGE);
+                return;
+            }
+            handleUnauthorized(ctx, targetURL, va.isBasicAuth, va.username, method);
+            return;
+        }
+
+        AuthorizedResult authorized = ctx.getAuthorizer().isTargetURLAuthorized(targetURL,
+                va.username, va.groups, ctx.remoteIp(), method, va.authLevel);
+
+        switch (authorized) {
+            case FORBIDDEN:
+                ctx.getLogger().infof("Access to %s is forbidden to user %s",
+                        targetURL.stringValue(), va.username);
+                ctx.replyForbidden();
+                break;
+            case NOT_AUTHORIZED:
+                handleUnauthorized(ctx, targetURL, va.isBasicAuth, va.username, method);
+                break;
+            case AUTHORIZED:
+                setForwardedHeaders(ctx, va.username, va.name, va.groups, va.emails);
+                break;
+            default:
+                break;
+        }
+
+        Exception activityErr = updateActivityTimestamp(ctx, va.isBasicAuth, va.username);
+        if (activityErr != null) {
+            ctx.error(new RuntimeException("Unable to update last activity: " + activityErr.getMessage()),
+                    OPERATION_FAILED_MESSAGE);
+        }
+    }
+</repair>

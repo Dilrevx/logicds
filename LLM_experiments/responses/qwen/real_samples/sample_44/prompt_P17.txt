@@ -1,0 +1,70 @@
+<repair>
+		if (*cp == '\0')
+			SCREWUP("filename not present");
+		np = cp;
+		while (*cp != '\0' && *cp != '\n')
+			cp++;
+		if (*cp == '\0')
+			SCREWUP("filename not delimited");
+		*cp = '\0';
+		if (targisdir) {
+			(void)snmprintf(visbuf, sizeof(visbuf), NULL, "%s/%s", targ, np);
+			np = visbuf;
+		}
+		exists = stat(np, &stb) == 0;
+		if ((bp = allocbuf(bp, &stb, exists)) == NULL) {
+			wrerr = NO;
+			goto cleanup;
+		}
+		if (exists && !S_ISREG(stb.st_mode)) {
+			errno = EISDIR;
+			wrerr = YES;
+			goto cleanup;
+		}
+		if ((ofd = open(np, O_WRONLY|O_CREAT, mode)) < 0) {
+			wrerr = YES;
+			goto cleanup;
+		}
+		if (ftruncate(ofd, (off_t)0) < 0) {
+			wrerr = YES;
+			goto cleanup;
+		}
+		count = size;
+		for (i = 0; i < count; i += j) {
+			j = bp->cnt < count - i ? bp->cnt : count - i;
+			if (atomicio(read, remin, bp->buf, j) != j) {
+				run_err("file read failed");
+				wrerr = YES;
+				goto cleanup;
+			}
+			if (atomicio(write, ofd, bp->buf, j) != j) {
+				wrerr = YES;
+				goto cleanup;
+			}
+		}
+		if (setimes) {
+			tv[0].tv_sec = atime.tv_sec;
+			tv[0].tv_nsec = atime.tv_usec * 1000;
+			tv[1].tv_sec = mtime.tv_sec;
+			tv[1].tv_nsec = mtime.tv_usec * 1000;
+			if (utimensat(AT_FDCWD, np, tv, 0) < 0) {
+				wrerr = YES;
+				goto cleanup;
+			}
+		}
+		if (close(ofd) < 0) {
+			wrerr = YES;
+			goto cleanup;
+		}
+		wrerr = NO;
+cleanup:
+		if (wrerr == YES) {
+			if (wrerrno == 0)
+				wrerrno = errno;
+			run_err("receive error: %s", strerror(wrerrno));
+			errs++;
+		}
+		(void) atomicio(vwrite, remout, "", 1);
+	}
+}
+</repair>

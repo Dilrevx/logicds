@@ -1,0 +1,58 @@
+<repair>
+static void setup_namespaces(struct lo_data *lo, struct fuse_session *se)
+{
+    pid_t child;
+    char template[] = "virtiofsd-XXXXXX";
+    char *tmpdir;
+
+    if (unshare(CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWNET)!= 0) {
+        fuse_log(FUSE_LOG_ERR, "unshare(CLONE_NEWPID | CLONE_NEWNS): %m\n");
+        exit(1);
+    }
+
+    child = fork();
+    if (child < 0) {
+        fuse_log(FUSE_LOG_ERR, "fork() failed: %m\n");
+        exit(1);
+    }
+    if (child > 0) {
+        pid_t waited;
+        int wstatus;
+
+        setup_wait_parent_capabilities();
+
+        /* The parent waits for the child */
+        do {
+            waited = waitpid(child, &wstatus, 0);
+        } while (waited < 0 && errno == EINTR &&!se->exited);
+
+        /* We were terminated by a signal, see fuse_signals.c */
+        if (se->exited) {
+            exit(0);
+        }
+
+        if (WIFEXITED(wstatus)) {
+            exit(WEXITSTATUS(wstatus));
+        }
+
+        exit(1);
+    }
+
+    /* Send us SIGTERM when the parent thread terminates, see prctl(2) */
+    if (prctl(PR_SET_PDEATHSIG, SIGTERM)!= 0) {
+        fuse_log(FUSE_LOG_ERR, "prctl(PR_SET_PDEATHSIG, SIGTERM): %m\n");
+        exit(1);
+    }
+
+    if (mount(NULL, "/", NULL, MS_REC | MS_SLAVE, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/, MS_REC|MS_SLAVE): %m\n");
+        exit(1);
+    }
+
+    if (mount("proc", "/proc", "proc",
+              MS_NODEV | MS_NOEXEC | MS_NOSUID | MS_RELATIME, NULL) < 0) {
+        fuse_log(FUSE_LOG_ERR, "mount(/proc): %m\n");
+        exit(1);
+    }
+}
+</repair>

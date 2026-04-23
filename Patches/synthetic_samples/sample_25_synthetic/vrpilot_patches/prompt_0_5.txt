@@ -1,0 +1,68 @@
+package main;
+
+import commons.*;
+
+public class Tls13CertificateVerifier {
+    public static int DoTls13CertificateVerify(TlsContext ssl, byte[] input, int[] inOutIdx, int totalSz) {
+        int ret = 0;
+        Buffer sig = ssl.buffers.sig;
+        Dcv13Args args = new Dcv13Args();
+        
+        // Start the state machine.
+        ssl.options.asyncState = Commons.TLS_ASYNC_BEGIN;
+        args.hashAlgo = Commons.sha_mac;
+        args.sigAlgo  = Commons.anonymous_sa_algo;  // (The actual algorithm must be set appropriately)
+        args.idx      = inOutIdx[0];
+        args.begin    = inOutIdx[0];
+
+        // Simulate extraction of the signature length from the input stream.
+        // In a real-world implementation, you would extract args.sz from the protocol.
+        args.sz = totalSz - args.idx;  
+
+        // Validate input bounds: ((currentIdx - begin) + length) must not exceed totalSz 
+        // and the signature length must be within allowed limits.
+        if (((args.idx - args.begin) + args.sz > totalSz) || (args.sz > Commons.ENCRYPT_LEN)) {
+            return Commons.SIG_VERIFY_E;
+        }
+
+        // Validate that the key required for the chosen signature algorithm is present.
+        if (args.sigAlgo == Commons.ed25519_sa_algo) {
+            if (!ssl.peerEd25519KeyPresent) {
+                return Commons.SIG_VERIFY_E;  // Error: missing ED25519 key.
+            }
+        } else if (args.sigAlgo == Commons.ed448_sa_algo) {
+            if (!ssl.peerEd448KeyPresent) {
+                return Commons.SIG_VERIFY_E;  // Error: missing ED448 key.
+            }
+        } else if (args.sigAlgo == Commons.ecc_sa_algo) {
+            if (!ssl.peerEccKeyPresent) {
+                return Commons.SIG_VERIFY_E;  // Error: missing ECC key.
+            }
+        } else if (args.sigAlgo == Commons.rsa_pkcs1_5_sa_algo) {
+            Wslib.WOLFSSL_MSG("Oops, peer sent PKCS-1.5 signature");
+            return Commons.SIG_VERIFY_E;  // Error: missing RSA key (PKCS#1.5 not allowed).
+        }
+
+        // Now proceed with the async state machine.
+        switch (ssl.options.asyncState) {
+            case Commons.TLS_ASYNC_BEGIN:
+                // Instead of copying the signature bytes as in TLS_ASYNC_DO,
+                // conclude the build phase. In a real implementation, you would
+                // likely copy or parse the signature here.
+                break;
+
+            case Commons.TLS_ASYNC_VERIFY:
+                // Call the helper to perform cryptographic verification.
+                ret = Helpers.doVerify(sig, args);
+                // Once finished, reset the async state.
+                ssl.options.asyncState = Commons.TLS_ASYNC_NONE;
+                break;
+
+            default:
+                ret = Commons.INVALID_STATE;
+                break;
+        }
+
+        return ret;
+    }
+}
