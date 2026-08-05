@@ -1,7 +1,7 @@
 # LogicEval
 
 Dataset, Patches, and Code for the paper
-*LogicEval: A Systematic Framework for Evaluating Automated Repair Techniques for Logical Vulnerabilities in Real-World Software.*
+*LogicEval: A Systematic Framework for Evaluating Automated Repair Techniques for Logical Vulnerabilities in Real-World Software.* (ACL 2026)
 
 This Repository Contains The Following Contents.
 
@@ -48,3 +48,29 @@ python3 Codes/06_evaluate_compile_test.py --sample-filter sample_1   # requires 
 ```
 
 See `Codes/README.md` for every script's inputs, outputs, and CLI flags.
+
+## Citation
+
+If you find **LogicEval** or **LogicDS** useful in your research, please consider citing our paper:
+
+```bibtex
+@inproceedings{rashid-etal-2026-logiceval,
+    title = {LogicEval: A Systematic Framework for Evaluating Automated Repair Techniques for Logical Vulnerabilities in Real-World Software},
+    author = {Rashid, Syed Md Mukit and
+              Ishtiaq, Abdullah Al and
+              Tu, Kai and
+              Dong, Yilu and
+              Wu, Tianwei and
+              Ranjbar, Ali and
+              Yang, Tianchang and
+              Sultana, Najrin and
+              Mehnaz, Shagufta and
+              Hussain, Syed Rafiul},
+    booktitle = {Proceedings of the 64th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+    year = {2026},
+    pages = {46025--46049},
+    publisher = {Association for Computational Linguistics},
+    doi = {10.18653/v1/2026.acl-long.2136},
+    url = {https://aclanthology.org/2026.acl-long.2136/}
+}
+```
