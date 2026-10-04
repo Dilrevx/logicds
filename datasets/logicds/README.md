@@ -11,10 +11,15 @@ annotations, buggy/fixed samples, scripts and documentation.
 | `summary.json` | Inventory counts and data preparation status, not experimental results |
 
 There are **61 real cases** (53 CVE records and 8 srsRAN research cases, 28
-projects) and **61 paired synthetic Java cases**. Each real/synthetic pair belongs
+author-provided project names) and **61 paired synthetic Java cases**. Each real/synthetic pair belongs
 to one case group. Report the two partitions separately. The original task is
 automated repair; retrieval relevance and static audit findings are different
 evaluation tasks.
+
+`real_projects` counts the author's `project_name` labels, not an independently
+deduplicated repository inventory. Repository aliases may refer to one project;
+sample 30's author label says `dnsmasq` although its download script and source path
+refer to ProFTPD. The original metadata is preserved rather than silently corrected.
 
 The real source requests preserve literal commits from the author's download
 scripts. A short commit must be resolved to a full SHA with an acquisition receipt
