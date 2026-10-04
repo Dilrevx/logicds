@@ -11,7 +11,23 @@ This Repository Contains The Following Contents.
 
 [`Codes/`](Codes/) holds the **framework code** — Python scripts that implement the LogicEval repair framework end-to-end: generate per-sample metadata from manual annotation inputs, generate the prompt templates described in the paper, call LLMs to obtain responses, graft responses into patches, and evaluate patches. Detailed step-by-step instructions are in [`Codes/README.md`](Codes/README.md).
 
-## Workflow
+## GCA / embed benchmark adaptation
+
+This fork retains the original LogicEval dataset, framework, attribution and
+licenses. Our separate [normalized inventory](datasets/logicds/README.md) is for
+repository-wide retrieval and conditional static auditing, not a reproduction of
+the author's automated repair results.
+
+The inventory contains **61 real cases and their 61 paired synthetic Java cases**.
+They are evaluated separately; this is not 122 independent real vulnerabilities.
+Source acquisition metadata and evaluator-only author annotations are kept apart.
+The integration and experiment code live in [Dilrevx/embed](https://github.com/Dilrevx/embed).
+No original download, build, test or exploit scripts are executed by normalization.
+
+Upstream source: `SyNSec-den/LogicEval` at
+`349b8ea75b7841bfe6bd82c50b34d6210d027442`.
+
+## Original workflow
 
 The LogicEval workflow is summarised below — from authoring a new sample in LogicDS, through prompt generation and LLM patching, to NLP and compile-test evaluation:
 
