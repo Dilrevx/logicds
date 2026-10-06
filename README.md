@@ -24,6 +24,13 @@ Source acquisition metadata and evaluator-only author annotations are kept apart
 The integration and experiment code live in [Dilrevx/embed](https://github.com/Dilrevx/embed).
 No original download, build, test or exploit scripts are executed by normalization.
 
+The completed repository-wide retrieval run, including all five methods and
+separate real/synthetic metrics, is archived in
+[embed's final results](https://github.com/Dilrevx/embed/blob/codex/initial-experiments/results/logicds-recall-v1/20261005-final/README.md).
+[The rank-change analysis](https://github.com/Dilrevx/embed/blob/codex/initial-experiments/results/logicds-recall-v1/20261005-final/ANALYSIS.md)
+distinguishes individual-guideline retrieval from the shared TopK aggregation.
+This README link does not change the normalized benchmark version locked by embed.
+
 Upstream source: `SyNSec-den/LogicEval` at
 `349b8ea75b7841bfe6bd82c50b34d6210d027442`.
 
